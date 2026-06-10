@@ -209,48 +209,48 @@ async function loadData() {
     if (!token) return logout();
 
     try {
-        // 1. FETCH SPECIFIC ENDPOINTS (As per your snippet request)
-        const [studentsRes, staffRes, settingsRes, examsRes, learningAreasRes] = await Promise.all([
-            fetch(`${API_URL}/students`),
-            fetch(`${API_URL}/staff`),
-            fetch(`${API_URL}/settings`),
-            fetch(`${API_URL}/exams`),
-            fetch(`${API_URL}/learningAreas`)
-        ]);
+        // 1. FETCH THE WHOLE DATABASE from the specific endpoint
+        const res = await fetch(`${API_URL}/api/db`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
 
-        // 2. PARSE DATA
-        const students = await studentsRes.json();
-        const staff = await staffRes.json();
-        const settings = await settingsRes.json();
-        const exams = await examsRes.json();
-        const learningAreas = await learningAreasRes.json();
+        if (!res.ok) throw new Error('Failed to load database');
 
-        // 3. POPULATE THE STORE
-        store.students = students || [];
-        store.staff = staff || [];
-        store.exams = exams || [];
-        store.clearedStudents = []; // Assuming this is local-only or needs another endpoint
-        store.notes = [];
-        store.messages = [];
+        const db = await res.json();
+
+        // 2. POPULATE THE STORE from the single response
+        store.students = db.students || [];
+        store.staff = db.staff || [];
+        store.exams = db.exams || [];
+        store.clearedStudents = []; 
         
-        // Merge Settings (Default + Server)
-        store.settings = { ...store.settings, ...settings };
+        // Merge Settings
+        store.settings = { ...store.settings, ...db.settings };
 
-        // Intelligent Subject Merging (Keep your defaults, add new ones from server)
-        let existingAreas = learningAreas || [];
+        // Intelligent Subject Merging (Keep defaults, add new ones from server)
+        let existingAreas = db.learningAreas || [];
         DEFAULT_LEARNING_AREAS.forEach(def => {
             const exists = existingAreas.some(area => area.code === def.code);
             if (!exists) existingAreas.push(def);
         });
         store.learningAreas = existingAreas;
 
-        // Refresh UI
+        // 3. Refresh UI
         renderDashboard(); 
         renderStaff();
 
     } catch (err) {
         console.error("Failed to load data from server.", err);
         showToast('Error connecting to server. Check internet.', 'error');
+        
+        // Fallback: Load from LocalStorage if server fails (Optional but recommended)
+        const localData = localStorage.getItem('elimutrack_data_backup');
+        if (localData) {
+            Object.assign(store, JSON.parse(localData));
+            renderDashboard();
+            renderStaff();
+        }
     }
 }
 async function saveData() {
@@ -258,13 +258,9 @@ async function saveData() {
     if (!token) return;
 
     try {
-        // Optional: Remove heavy image data if the API has payload size limits
-        // const dataToSend = { ...store }; 
-        // dataToSend.settings.logo = null; // If you want to skip logo to save space
-
-        const res = await fetch(API_URL, {
-            method: 'POST', // Change to 'PUT' if your backend expects a full replacement
-            mode: 'cors',
+        // 1. POST to the correct endpoint
+        const res = await fetch(`${API_URL}/api/db`, {
+            method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}` 
@@ -273,17 +269,24 @@ async function saveData() {
         });
 
         if (!res.ok) {
-            throw new Error(`Failed to save: ${res.status}`);
+            // If saving fails due to permissions (403), alert the user
+            if (res.status === 403) {
+                throw new Error("Permission Denied: Only Admins can save data.");
+            }
+            throw new Error(`Server Error: ${res.status}`);
         }
         
-        // Optional: Visual feedback that save happened
-        // console.log('Data saved successfully');
+        // Optional: Visual feedback
+        // showToast('Data saved successfully to server!');
+
+        // 2. Fallback: Save to LocalStorage for backup
+        localStorage.setItem('elimutrack_data_backup', JSON.stringify(store));
+
     } catch (err) {
         console.error("Failed to save data to server", err);
-        showToast('Failed to save changes to server.', 'error');
+        showToast(err.message || 'Failed to save changes to server.', 'error');
     }
 }
-
 function applyRoleRestrictions(role) {
     if (role === 'teacher') {
         document.body.classList.add('role-teacher');
