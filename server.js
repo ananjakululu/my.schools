@@ -37,7 +37,8 @@ app.use(helmet({
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com"],
             imgSrc: ["'self'", "data:", "https://*", "http://*"],
-            connectSrc: ["'self'", "https://api.openai.com"] 
+            // UPDATED: Added cdnjs for source maps and Render URL for local syncing
+            connectSrc: ["'self'", "https://api.openai.com", "https://cdnjs.cloudflare.com", "https://tvet-json-db.onrender.com"] 
         },
     },
 }));
@@ -323,4 +324,4 @@ app.listen(PORT, () => {
     console.log(`[OK] Server running at http://localhost:${PORT}`);
     console.log(`[INFO] Default Admin: admin@school.com / admin123`);
     console.log(`[INFO] Default Teacher: teacher@school.com / teacher123`);
-});                                
+});
