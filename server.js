@@ -29,7 +29,6 @@ const loginLimiter = rateLimit({
 });
 
 // --- Middleware Setup ---
-// FIXED: Corrected CSP Syntax and added explicit localhost for API calls
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -38,11 +37,12 @@ app.use(helmet({
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com"],
             imgSrc: ["'self'", "data:", "https://*", "http://*"],
-            // THE FIX: Added 'http://localhost:3001' and fixed quotes on 'self'
-            connectSrc: ["'self'", "http://localhost:3001", "https://api.openai.com", "https://cdnjs.cloudflare.com"] 
+            // Adjusted connectSrc for local API usage
+            connectSrc: ["'self'", "https://api.openai.com"] 
         },
     },
 }));
+
 app.use(morgan('dev'));
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -102,7 +102,6 @@ async function initializeDefaultDB() {
         users: [
             { id: 'u1', email: 'admin@school.com', passwordHash: hashedAdminPass, role: 'admin', name: 'Admin User' },
             { id: 'u2', email: 'teacher@school.com', passwordHash: hashedTeacherPass, role: 'teacher', name: 'Mr. Teacher' }
-            { id: 'u3', email: 'student@school.com', passwordHash: hashedStudentPass, role: 'student', name: 'Test Student' }
         ]
     };
     await saveDB(initialData);
@@ -229,6 +228,7 @@ app.post('/api/signup', async (req, res) => {
 app.get('/api/db', authenticateToken, async (req, res) => {
     try {
         const db = await loadDB();
+        // Strip sensitive data before sending
         const safeDb = { ...db, users: db.users.map(u => ({ id: u.id, email: u.email, role: u.role, name: u.name })) };
         res.json(safeDb);
     } catch (err) {
@@ -240,7 +240,8 @@ app.get('/api/db', authenticateToken, async (req, res) => {
 app.post('/api/db', authenticateToken, requireRole('admin'), async (req, res) => {
     try {
         const currentDb = await loadDB();
-        const dataToSave = { ...req.body, users: currentDb.users }; // Preserve users
+        // Prevent overwriting user passwords with potentially unsafe data from frontend
+        const dataToSave = { ...req.body, users: currentDb.users }; 
         await saveDB(dataToSave);
         res.json({ success: true, message: 'Database saved' });
     } catch (err) {
@@ -251,7 +252,7 @@ app.post('/api/db', authenticateToken, requireRole('admin'), async (req, res) =>
 // API: AI Chat
 app.post('/api/ai/chat', authenticateToken, async (req, res) => {
     const { query, context } = req.body;
-    if (!OPENAI_API_KEY) return res.status(500).json({ error: 'AI Key Missing' });
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: 'AI Service Unconfigured' });
 
     try {
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -265,10 +266,14 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
                 ] 
             })
         });
+        
+        if (!response.ok) throw new Error('AI API Error');
+        
         const data = await response.json();
         res.json({ reply: data.choices[0].message.content });
     } catch (error) {
-        res.status(500).json({ error: 'AI Error' });
+        console.error(error);
+        res.status(500).json({ error: 'Failed to process AI request' });
     }
 });
 
@@ -276,5 +281,6 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
 // --- Start Server ---
 app.listen(PORT, () => {
     console.log(`[OK] Server running at http://localhost:${PORT}`);
-    console.log(`[INFO] Admin Login: admin@school.com / admin123`);
-}); 
+    console.log(`[INFO] Default Admin: admin@school.com / admin123`);
+    console.log(`[INFO] Default Teacher: teacher@school.com / teacher123`);
+});
