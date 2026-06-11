@@ -253,51 +253,75 @@ async function loadData() {
 }
 async function saveData() {
     const token = localStorage.getItem('authToken');
-    if (!token) return;
+    if (!token) {
+        showToast('Session expired. Please login again.', 'error');
+        return window.location.href = 'login.html';
+    }
 
-    // 1. LocalStorage Backup (Safety Net)
+    // 1. LocalStorage Backup (Stripped of images to prevent crash)
     try {
-        localStorage.setItem('elimutrack_backup', JSON.stringify(store));
-    } catch (e) { console.warn("Local Storage full"); }
+        const lightweightStore = {
+            ...store,
+            // Remove heavy photos from backup
+            students: store.students.map(s => ({ ...s, photo: null })),
+            staff: store.staff.map(s => ({ ...s, photo: null })),
+            settings: {
+                ...store.settings,
+                logo: null,
+                stamp: null,
+                hoiSignature: null,
+                ctSignature: null
+            }
+        };
+        localStorage.setItem('elimutrack_backup', JSON.stringify(lightweightStore));
+    } catch (e) {
+        console.warn("Local Storage full. Backup skipped.");
+    }
 
     try {
-        // 2. Send data to specific json-server endpoints
-        // We use Promise.all to send everything at once for speed
+        // 2. Send to Server (With Auth Headers)
         const [studentsRes, staffRes, settingsRes, examsRes, areasRes] = await Promise.all([
             fetch(`${API_URL}/students`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
+                },
                 body: JSON.stringify(store.students)
             }),
             fetch(`${API_URL}/staff`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
+                },
                 body: JSON.stringify(store.staff)
             }),
             fetch(`${API_URL}/settings`, {
-                method: 'POST', // json-server usually handles single object settings by replacing them
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
+                },
                 body: JSON.stringify(store.settings)
             }),
             fetch(`${API_URL}/exams`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify(store.exams)
             }),
             fetch(`${API_URL}/learningAreas`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify(store.learningAreas)
             })
         ]);
 
-        // Check if any failed
-        if (!studentsRes.ok || !staffRes.ok || !settingsRes.ok || !examsRes.ok || !areasRes.ok) {
-            throw new Error('One or more resources failed to sync');
+        if (studentsRes.ok && staffRes.ok && settingsRes.ok) {
+            showToast('All changes saved successfully!');
+        } else {
+            throw new Error('Server rejected one or more saves');
         }
-
-        console.log('All data synced with json-server');
-        showToast('All changes saved successfully!');
 
     } catch (err) {
         console.error("Sync failed", err);
