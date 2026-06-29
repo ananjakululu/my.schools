@@ -299,13 +299,18 @@ async function loadData() {
             if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
         });
         
-        // FIX: Force applicableLevels to be real arrays, not strings (prevents mobile crash)
-        store.learningAreas = existingAreas.map(area => ({
-            ...area,
-            applicableLevels: Array.isArray(area.applicableLevels) 
-                ? area.applicableLevels 
-                : (typeof area.applicableLevels === 'string' ? JSON.parse(area.applicableLevels || '[]') : [])
-        }));
+                // FIX: Safe parse for applicableLevels (prevents fatal crash on mobile)
+        store.learningAreas = existingAreas.map(area => {
+            let levels = area.applicableLevels;
+            if (!Array.isArray(levels)) {
+                try {
+                    levels = JSON.parse(levels || '[]');
+                } catch (e) {
+                    levels = [];
+                }
+            }
+            return { ...area, applicableLevels: levels };
+        });
         seedStaffData();
 
         const needsSync = (
