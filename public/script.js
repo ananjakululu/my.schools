@@ -297,8 +297,13 @@ async function loadData() {
         DEFAULT_LEARNING_AREAS.forEach(def => {
             if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
         });
-        store.learningAreas = existingAreas;
-
+                // FIX: Force applicableLevels to be real arrays, not strings
+        store.learningAreas = existingAreas.map(area => ({
+            ...area,
+            applicableLevels: Array.isArray(area.applicableLevels) 
+                ? area.applicableLevels 
+                : (typeof area.applicableLevels === 'string' ? JSON.parse(area.applicableLevels || '[]') : [])
+        }));
         seedStaffData();
 
         const needsSync = (
