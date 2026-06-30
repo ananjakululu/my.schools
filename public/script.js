@@ -303,6 +303,13 @@ async function loadData() {
         store.students = mergeArray(serverData.students, localData?.students);
         store.staff = mergeArray(serverData.staff, localData?.staff);
         store.exams = mergeArray(serverData.exams, localData?.exams);
+        // FIX: Convert string arrays back to real arrays (prevents .map crash)
+        store.exams = store.exams.map(exam => {
+            if (exam.subjects && typeof exam.subjects === 'string') {
+                try { exam.subjects = JSON.parse(exam.subjects); } catch(e) { exam.subjects = []; }
+            }
+            return exam;
+        });
         store.notes = mergeArray(serverData.notes, localData?.notes);
         store.timetable = mergeArray(serverData.timetable, localData?.timetable);
         store.examSchedules = mergeArray(serverData.examSchedules, localData?.examSchedules);
