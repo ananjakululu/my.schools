@@ -2154,7 +2154,32 @@ function getCompetenceStatus(score) {
 
 function resetExamView() { currentExamContext = { studentId: null, subjectId: null }; if ($('examStudentSelect')) { $('examStudentSelect').innerHTML = "<option value=''>Select Learner...</option>"; $('examStudentSelect').disabled = true; } if ($('examTradeSelect')) $('examTradeSelect').value = ""; if ($('examInterface')) $('examInterface').style.display = 'none'; if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; }
 
-function loadExamStudents() { const grade = currentExamContext.tradeId; const studentSelect = $('examStudentSelect'); if (!studentSelect) return; studentSelect.innerHTML = "<option value=''>Select Learner...</option>"; currentExamContext.studentId = null; if (!grade) { studentSelect.disabled = true; return; } studentSelect.disabled = false; const filtered = StudentRepo.findBy('grade', grade); if (filtered.length === 0) { studentSelect.innerHTML = "<option value=''>No learners in this grade</option>"; studentSelect.disabled = true; return; } filtered.forEach(s => { studentSelect.innerHTML += `<option value="${s.id}">${s.name} (${s.reg})</option>`; }); if ($('examInterface')) $('examInterface').style.display = 'none'; if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; }
+function loadExamStudents() { 
+    let grade = currentExamContext.tradeId; 
+    // FIX: Strip " (JSS)" so "Grade 7 (JSS)" matches "Grade 7"
+    if (grade) grade = grade.replace(/\s*\(JSS\)/, '').trim();
+    
+    const studentSelect = $('examStudentSelect'); 
+    if (!studentSelect) return; 
+    studentSelect.innerHTML = "<option value=''>Select Learner...</option>"; 
+    currentExamContext.studentId = null; 
+    if (!grade) { studentSelect.disabled = true; return; } 
+    studentSelect.disabled = false; 
+    
+    // Try normalized grade, fallback to original
+    let filtered = StudentRepo.findBy('grade', grade);
+    if (filtered.length === 0) filtered = StudentRepo.findBy('grade', currentExamContext.tradeId);
+    
+    if (filtered.length === 0) { 
+        studentSelect.innerHTML = "<option value=''>No learners in this grade</option>"; 
+        studentSelect.disabled = true; return; 
+    } 
+    filtered.forEach(s => { 
+        studentSelect.innerHTML += `<option value="${s.id}">${s.name} (${s.reg})</option>`; 
+    }); 
+    if ($('examInterface')) $('examInterface').style.display = 'none'; 
+    if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; 
+}
 function loadCBETUnits() { const studentId = currentExamContext.studentId; if (!studentId) return; const student = StudentRepo.getById(studentId); if (!student) return; if ($('examInterface')) $('examInterface').style.display = 'flex'; if ($('examEmptyState')) $('examEmptyState').style.display = 'none'; if ($('sidebarStudentName')) $('sidebarStudentName').innerText = student.name; if ($('sidebarStudentReg')) $('sidebarStudentReg').innerText = student.reg; if ($('sidebarStudentTrade')) $('sidebarStudentTrade').innerText = student.grade; renderCBETUnits(student); }
 function renderCBETUnits(student) { 
     const container = $('cbetUnitsList'); if (!container) return; container.innerHTML = ''; 
@@ -2196,12 +2221,27 @@ function updateExamProgress(studentId) {
     if (circle) { const radius = 70; const circumference = 2 * Math.PI * radius; const offset = circumference - (percent / 100) * circumference; circle.style.strokeDasharray = circumference; circle.style.strokeDashoffset = offset; } 
 }
 function loadExamSubjects(grade) {
-    const subjectSelect = $('examSubjectSelect'); if (!subjectSelect) return;
-    subjectSelect.innerHTML = "<option value=''>Select Subject...</option>"; subjectSelect.disabled = true; if (!grade) return;
-    const applicableSubjects = store.learningAreas.filter(sub => !sub.applicableLevels || sub.applicableLevels.includes(grade));
-    if (applicableSubjects.length === 0) { subjectSelect.innerHTML = "<option value=''>No Subjects Found</option>"; return; }
+    // FIX: Strip " (JSS)" so it matches applicableLevels
+    if (grade) grade = grade.replace(/\s*\(JSS\)/, '').trim();
+    
+    const subjectSelect = $('examSubjectSelect'); 
+    if (!subjectSelect) return;
+    subjectSelect.innerHTML = "<option value=''>Select Subject...</option>"; 
+    subjectSelect.disabled = true; 
+    if (!grade) return;
+    
+    const applicableSubjects = store.learningAreas.filter(sub => 
+        !sub.applicableLevels || sub.applicableLevels.includes(grade)
+    );
+    
+    if (applicableSubjects.length === 0) { 
+        subjectSelect.innerHTML = "<option value=''>No Subjects Found</option>"; 
+        return; 
+    } 
     subjectSelect.disabled = false;
-    applicableSubjects.forEach(sub => { subjectSelect.innerHTML += `<option value='${sub.id}'>${sub.name}</option>`; });
+    applicableSubjects.forEach(sub => { 
+        subjectSelect.innerHTML += `<option value='${sub.id}'>${sub.name}</option>`; 
+    }); 
 }
 
 function openAssessmentModal(code, name, studentId) { 
