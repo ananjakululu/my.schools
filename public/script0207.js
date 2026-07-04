@@ -1,13 +1,14 @@
 'use strict';
-// Define your backend API URL
-// SMART URL: Automatically uses localhost if testing, or the live site if deployed
-// Force both Localhost and Render to use the Cloud Database
-const API_URL = "https://tvet-json-db.onrender.com";
+
+// ──── SMART API URL: Auto-detects local vs production ────
+const API_URL = (window.location.hostname === 'localhost' || 
+                 window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'                    // Local development
+    : 'https://tvet-json-db.onrender.com';       // Production (deployed)
     
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
 // ==========================================================================
-// CBC Grade Configuration
 const CBC_LEVELS = {
     'PP1': { name: 'Pre-Primary 1', type: 'Pre-Primary' },
     'PP2': { name: 'Pre-Primary 2', type: 'Pre-Primary' },
@@ -22,7 +23,6 @@ const CBC_LEVELS = {
     'Grade 9': { name: 'Grade 9 (JSS)', type: 'JSS' }
 };
 
-// Helper to map bands to grades for filtering
 const BAND_GRADE_MAP = {
     'pp': ['PP1', 'PP2'],
     'lower': ['Grade 1', 'Grade 2', 'Grade 3'],
@@ -34,15 +34,12 @@ const BAND_GRADE_MAP = {
 //   EXPANDED LEARNING AREAS (SUBJECTS)
 // ==========================================================================
 const DEFAULT_LEARNING_AREAS = [
-    // --- PRE-PRIMARY (PP1, PP2) ---
     { id: 'pp_lang', name: 'Language Activities', code: 'PP-LA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_math', name: 'Mathematical Activities', code: 'PP-MA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_env', name: 'Environmental Activities', code: 'PP-EA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_creative', name: 'Creative Activities', code: 'PP-CA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_psycho', name: 'Psychomotor Activities', code: 'PP-PA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_re', name: 'Religious Education Activities', code: 'PP-RE', applicableLevels: ['PP1', 'PP2'] },
-
-    // --- LOWER PRIMARY (Grade 1, 2, 3) ---
     { id: 'lp_lit_eng', name: 'Literacy Activities (English)', code: 'LP-LEN', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_lit_kis', name: 'Literacy Activities (Kiswahili)', code: 'LP-LKIS', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_math', name: 'Mathematical Activities', code: 'LP-MATH', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
@@ -50,8 +47,6 @@ const DEFAULT_LEARNING_AREAS = [
     { id: 'lp_creative', name: 'Creative Activities (Art/Craft)', code: 'LP-CA', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_pe', name: 'Movement & Creative Activities (PE)', code: 'LP-PE', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_re', name: 'Religious Education (CRE/IRE)', code: 'LP-RE', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
-
-    // --- MIDDLE SCHOOL (Grade 4, 5, 6) ---
     { id: 'ms_eng', name: 'English', code: 'MS-ENG', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_kis', name: 'Kiswahili', code: 'MS-KIS', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_math', name: 'Mathematics', code: 'MS-MATH', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
@@ -63,8 +58,6 @@ const DEFAULT_LEARNING_AREAS = [
     { id: 'ms_agri', name: 'Agriculture', code: 'MS-AGR', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_hs', name: 'Home Science', code: 'MS-HS', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_lang', name: 'Foreign Language (French/German)', code: 'MS-FL', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
-
-    // --- JUNIOR SECONDARY (Grade 7, 8, 9) - CORRECTED & EXPANDED ---
     { id: 'js_eng', name: 'English', code: 'JS-ENG', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
     { id: 'js_kis', name: 'Kiswahili', code: 'JS-KIS', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
     { id: 'js_math', name: 'Mathematics', code: 'JS-MATH', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
@@ -81,6 +74,7 @@ const DEFAULT_LEARNING_AREAS = [
     { id: 'js_bus', name: 'Business Studies', code: 'JS-BS', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
     { id: 'js_sports', name: 'Sports', code: 'JS-PE', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] }
 ];
+
 const store = {
     students: [],
     staff: [],
@@ -123,7 +117,6 @@ const store = {
 const ADMIN_PASSWORD = 'admin123';
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23e2e8f0' width='150' height='150'/%3E%3Ctext fill='%2394a3b8' font-family='sans-serif' font-size='14' x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle'%3ENo Photo%3C/text%3E%3C/svg%3E";
 
-// State variables
 let CURRENT_USER = null;
 let currentView = { students: 'grid', staff: 'grid' };
 let currentPage = 1;
@@ -139,7 +132,6 @@ let currentReportContext = { type: null };
 // ==========================================================================
 //   UTILITY FUNCTIONS
 // ==========================================================================
-
 const $ = id => document.getElementById(id);
 const getVal = id => $(id) ? $(id).value.trim() : '';
 const setVal = (id, val) => { if ($(id)) $(id).value = val; };
@@ -157,7 +149,6 @@ function escapeHtml(text) {
     if (!text) return ''; 
     return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); 
 }
-
 function formatCurrency(num) { return 'KES ' + (num || 0).toLocaleString(); }
 function generateId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
 
@@ -186,207 +177,295 @@ function openModal(id) {
             if(btnTrans) btnTrans.style.display = isTranscript ? 'block' : 'none';
             if(btnLeave) btnLeave.style.display = isTranscript ? 'none' : 'block';
         }
-        if (id === 'subjectReportModal' || id === 'classReportModal') {
-            populateDropdownsForReports();
-        }
-        if (id === 'bulkProgressModal') {
-            if (typeof initBulkProgressModal === 'function') initBulkProgressModal();
-        }
+        if (id === 'subjectReportModal' || id === 'classReportModal') populateDropdownsForReports();
+        if (id === 'bulkProgressModal' && typeof initBulkProgressModal === 'function') initBulkProgressModal();
     }
 }
 
-function closeModal(id) { if ($(id)) { $(id).classList.remove('active'); document.body.style.overflow = ''; } }
+function closeModal(id) {
+    if ($(id)) { $(id).classList.remove('active'); document.body.style.overflow = ''; }
+    if (id === 'examGradingModal' && typeof flushExamSaves === 'function') flushExamSaves();
+}
 
 // ==========================================================================
-//   API & AUTHENTICATION LAYER
+//   API & AUTHENTICATION LAYER (ROBUST VERSION)
 // ==========================================================================
-
 function logout() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('user');
     window.location.href = 'login.html'; 
 }
 
+const API_TIMEOUT_MS = 60000;
+const API_RETRIES = 3;
+
+async function robustFetch(url, options = {}, retries = API_RETRIES) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        return { ok: res.ok, status: res.status, data, fromCache: false };
+    } catch (err) {
+        clearTimeout(timeoutId);
+        if (retries > 0 && (err.name === 'AbortError' || err.name === 'TypeError')) {
+            console.warn(`[API] Request failed (${err.name}), retrying... (${retries} left)`);
+            await new Promise(r => setTimeout(r, 5000));
+            return robustFetch(url, options, retries - 1);
+        }
+        return { ok: false, status: 0, data: null, fromCache: false, error: err.name };
+    }
+}
+
+// Cleans duplicate IDs from arrays before sending to server
+const dedupById = (arr) => {
+    if (!arr || !Array.isArray(arr)) return arr || [];
+    const seen = new Set();
+    return arr.filter(item => {
+        if (!item.id) return true;
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+    });
+};
+
 async function loadData() {
     const token = localStorage.getItem('authToken');
     if (!token) return logout();
 
-    try {
-        // 1. Try to fetch from Server
-        const res = await fetch(`${API_URL}/api/db`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+    const loaderText = document.querySelector('#appLoader p');
+    if (loaderText) loaderText.textContent = 'Connecting to server...';
 
-        if (res.ok) {
-            const db = await res.json();
-            // Populate Store from Server
-            store.students = db.students || [];
-            store.staff = db.staff || [];
-            store.exams = db.exams || [];
-            store.notes = db.notes || [];
-            store.timetable = db.timetable || [];
-            store.examSchedules = db.examSchedules || [];
-            store.settings = { ...store.settings, ...db.settings };
-            
-            let existingAreas = db.learningAreas || [];
-            DEFAULT_LEARNING_AREAS.forEach(def => {
-                if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
-            });
-            store.learningAreas = existingAreas;
+    const result = await robustFetch(`${API_URL}/api/db`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
 
-            // Seed demo staff on first run so the Staff section isn't empty.
-            // seedStaffData() is a no-op once any staff exist (server or local).
-            seedStaffData();
-        } else {
-            throw new Error("Server response not OK");
+    if (result.ok && result.data) {
+                        const serverData = result.data;
+        
+        // ⚠️ PHONE SURVIVAL FIX: Strip huge Base64 photos immediately!
+        // Phones crash (Out of Memory) when parsing 20MB+ of image data.
+        if (serverData.students) serverData.students.forEach(s => s.photo = null);
+        if (serverData.staff) serverData.staff.forEach(s => s.photo = null);
+        if (serverData.settings) {
+            serverData.settings.logo = null;
+            serverData.settings.stamp = null;
+            serverData.settings.hoiSignature = null;
+            serverData.settings.ctSignature = null;
+        }
+        
+        // Grab local data BEFORE overwriting anything
+        // ⚠️ PHONE SURVIVAL FIX: Don't parse local data if it's huge
+        const localRaw = localStorage.getItem('elimutrack_backup');
+        let localData = null;
+        if (localRaw && localRaw.length < 5000000) {
+            try { localData = JSON.parse(localRaw); } catch (e) { localData = null; }
+        } else if (localRaw) {
+            console.warn('[DATA] Local backup too large, clearing it.');
+            localStorage.removeItem('elimutrack_backup');
         }
 
-        renderDashboard(); 
-        renderStaff();
+        // ──── FIX: UNION MERGE BY ID (No more empty reports on new devices!) ────
+        const mergeArray = (serverArr, localArr) => {
+            if (!serverArr?.length && !localArr?.length) return [];
+            if (!serverArr?.length) return localArr || [];
+            if (!localArr?.length) return serverArr || [];
+            
+            const mergedMap = new Map();
+            serverArr.forEach(item => { if (item.id) mergedMap.set(item.id, item); });
+            
+            localArr.forEach(item => {
+                if (!item.id) return;
+                const existing = mergedMap.get(item.id);
+                if (!existing) {
+                    mergedMap.set(item.id, item);
+                } else if (item.updatedAt && existing.updatedAt) {
+                    if (item.updatedAt > existing.updatedAt) mergedMap.set(item.id, item);
+                } else {
+                    mergedMap.set(item.id, item);
+                }
+            });
+            return Array.from(mergedMap.values());
+        };
 
-    } catch (err) {
-        console.error("Failed to load data from server.", err);
+        const serverCounts = {
+            students: serverData.students?.length || 0,
+            staff: serverData.staff?.length || 0,
+            exams: serverData.exams?.length || 0,
+            notes: serverData.notes?.length || 0,
+            timetable: serverData.timetable?.length || 0,
+            examSchedules: serverData.examSchedules?.length || 0
+        };
+
+        store.students = mergeArray(serverData.students, localData?.students);
+        store.staff = mergeArray(serverData.staff, localData?.staff);
+        store.exams = mergeArray(serverData.exams, localData?.exams);
+        // FIX: Convert string arrays back to real arrays (prevents .map crash)
+        store.exams = store.exams.map(exam => {
+            if (exam.subjects && typeof exam.subjects === 'string') {
+                try { exam.subjects = JSON.parse(exam.subjects); } catch(e) { exam.subjects = []; }
+            }
+            return exam;
+        });
+        store.notes = mergeArray(serverData.notes, localData?.notes);
+        store.timetable = mergeArray(serverData.timetable, localData?.timetable);
+        store.examSchedules = mergeArray(serverData.examSchedules, localData?.examSchedules);
         
-        // 2. FALLBACK: Load from LocalStorage (The Safety Net)
+        store.settings = { ...store.settings, ...(serverData.settings || {}), ...(localData?.settings || {}) };
+
+                // Learning Areas: merge
+        let existingAreas = serverData.learningAreas || [];
+        DEFAULT_LEARNING_AREAS.forEach(def => {
+            if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
+        });
+        
+                // FIX: Safe parse for applicableLevels (prevents fatal crash on mobile)
+        store.learningAreas = existingAreas.map(area => {
+            let levels = area.applicableLevels;
+            if (!Array.isArray(levels)) {
+                try {
+                    levels = JSON.parse(levels || '[]');
+                } catch (e) {
+                    levels = [];
+                }
+            }
+            return { ...area, applicableLevels: levels };
+        });
+        seedStaffData();
+
+        const needsSync = (
+            store.students.length > serverCounts.students ||
+            store.staff.length > serverCounts.staff ||
+            store.exams.length > serverCounts.exams ||
+            store.notes.length > serverCounts.notes ||
+            store.timetable.length > serverCounts.timetable ||
+            store.examSchedules.length > serverCounts.examSchedules
+        );
+
+        if (needsSync) {
+            console.log('[SYNC] Merged data has new items — pushing to server...');
+            if (loaderText) loaderText.textContent = 'Syncing data to server...';
+            
+            const syncResult = await robustFetch(`${API_URL}/api/restore`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    students: dedupById(store.students),
+                    staff: dedupById(store.staff),
+                    settings: store.settings,
+                    exams: dedupById(store.exams),
+                    learningAreas: dedupById(store.learningAreas),
+                    notes: dedupById(store.notes),
+                    timetable: dedupById(store.timetable),
+                    examSchedules: dedupById(store.examSchedules)
+                })
+            });
+
+            if (syncResult.ok) {
+                console.log('[SYNC] Data synced to server successfully.');
+                showToast('Data synced to cloud!', 'success');
+                localStorage.setItem('elimutrack_sync_source', 'server');
+            } else {
+                console.warn('[SYNC] Push failed:', syncResult.status, syncResult.data);
+                showToast('Cloud sync failed. Data saved locally.', 'warning');
+                localStorage.setItem('elimutrack_sync_source', 'local');
+            }
+        } else {
+            localStorage.setItem('elimutrack_sync_source', 'server');
+            console.log('[DATA] Loaded from server successfully.');
+        }
+
+    } else {
         const localData = localStorage.getItem('elimutrack_backup');
         if (localData) {
-            const parsed = JSON.parse(localData);
-            Object.assign(store, parsed);
-            // Same first-run safety net for the offline path.
-            seedStaffData();
-            renderDashboard();
-            renderStaff();
-            alert("Warning: Could not connect to server. Loaded previously saved data from browser.");
+            try {
+                const parsed = JSON.parse(localData);
+                Object.assign(store, parsed);
+                seedStaffData();
+                let reason = result.error === 'AbortError' ? 'Server timed out.' : 
+                             result.status === 403 ? 'Session expired.' : 
+                             result.status === 0 ? 'Network error or CORS blocked.' : 
+                             `Server error ${result.status}.`;
+                console.warn('[DATA] Server unavailable —', reason);
+                setTimeout(() => showToast(`Offline mode — ${reason}`, 'warning'), 1000);
+                if (result.status === 403) {
+                    setTimeout(() => { showToast('Session expired. Please log in again.', 'error'); setTimeout(() => logout(), 2000); }, 2500);
+                    return;
+                }
+            } catch (parseErr) { console.error('[DATA] Local backup corrupted:', parseErr); }
         } else {
-            // Last-resort: nothing on server or in localStorage. Seed demo
-            // staff so the user can still see how the section works.
             seedStaffData();
-            renderDashboard();
-            renderStaff();
-            alert("Critical Error: No data found on Server or Browser.");
+            setTimeout(() => showToast('First launch — server waking up.', 'warning'), 1000);
         }
+        localStorage.setItem('elimutrack_sync_source', 'local');
     }
+
+    renderDashboard();
+    renderStaff();
 }
+
 async function saveData() {
     const token = localStorage.getItem('authToken');
     if (!token) {
         showToast('Session expired. Please login again.', 'error');
-        return window.location.href = 'login.html';
+        return setTimeout(() => { window.location.href = 'login.html'; }, 1500);
     }
 
-    // 1. LocalStorage Backup (Stripped of images to prevent crash)
     try {
         const lightweightStore = {
-            ...store,
-            // Remove heavy photos from backup
             students: store.students.map(s => ({ ...s, photo: null })),
             staff: store.staff.map(s => ({ ...s, photo: null })),
-            settings: {
-                ...store.settings,
-                logo: null,
-                stamp: null,
-                hoiSignature: null,
-                ctSignature: null
-            }
+            exams: store.exams,
+            notes: store.notes,
+            timetable: store.timetable,
+            examSchedules: store.examSchedules,
+            settings: { ...store.settings, logo: null, stamp: null, hoiSignature: null, ctSignature: null },
+            learningAreas: store.learningAreas
         };
         localStorage.setItem('elimutrack_backup', JSON.stringify(lightweightStore));
-    } catch (e) {
-        console.warn("Local Storage full. Backup skipped.");
-    }
+    } catch (e) { console.warn("[SAVE] localStorage full."); }
 
-    let _authFailed = false;
     try {
-        // 2. Send to Server (With Auth Headers)
-        // Helper: tolerant POST — returns {ok:true} for missing endpoints or auth failures
-        // so that optional new collections (notes/timetable/examSchedules) don't break the save flow.
-        const tolerantPost = async (path, body) => {
-            try {
-                const res = await fetch(`${API_URL}/${path}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                    body: JSON.stringify(body || [])
-                });
-                return res; // may have ok=false (404/403) — caller decides
-            } catch (e) {
-                return { ok: true, tolerant: true }; // network error → treat as success
-            }
-        };
+        const result = await robustFetch(`${API_URL}/api/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+                students: dedupById(store.students),
+                staff: dedupById(store.staff),
+                settings: store.settings,
+                exams: dedupById(store.exams),
+                learningAreas: dedupById(store.learningAreas),
+                notes: dedupById(store.notes),
+                timetable: dedupById(store.timetable),
+                examSchedules: dedupById(store.examSchedules)
+            })
+        });
 
-        const [studentsRes, staffRes, settingsRes, examsRes, areasRes, notesRes, timetableRes, examSchedulesRes] = await Promise.all([
-            fetch(`${API_URL}/students`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.students)
-            }),
-            fetch(`${API_URL}/staff`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.staff)
-            }),
-            fetch(`${API_URL}/settings`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.settings)
-            }),
-            fetch(`${API_URL}/exams`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(store.exams)
-            }),
-            fetch(`${API_URL}/learningAreas`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(store.learningAreas)
-            }),
-            // Optional endpoints — tolerate 404 (endpoint not deployed yet) silently
-            tolerantPost('notes', store.notes || []),
-            tolerantPost('timetable', store.timetable || []),
-            tolerantPost('examSchedules', store.examSchedules || [])
-        ]);
-
-        // Detect auth failure (403) on core endpoints
-        if (studentsRes.status === 403 || staffRes.status === 403 || settingsRes.status === 403) {
-            _authFailed = true;
+        if (result.status === 403) {
+            showToast('Session expired. Data saved locally.', 'error');
+            localStorage.setItem('elimutrack_sync_source', 'local');
+            return;
         }
 
-        // Core collections must succeed for us to claim "saved". The optional
-        // collections (notes/timetable/examSchedules) are best-effort — if the
-        // server doesn't have those endpoints yet, data still lives in localStorage.
-        const coreOk = studentsRes.ok && staffRes.ok && settingsRes.ok;
-        if (coreOk) {
+        if (result.ok) {
             showToast('All changes saved successfully!');
+            localStorage.setItem('elimutrack_sync_source', 'server');
+            window._syncFailedToastShown = false;
         } else {
-            // Log only core failures. Optional-endpoint 404s are silent.
-            console.warn('Core save failed:', {
-                students: studentsRes.status,
-                staff: staffRes.status,
-                settings: settingsRes.status
-            });
-            throw new Error('Server rejected one or more core saves');
+            throw new Error(`Server returned ${result.status}`);
         }
-
     } catch (err) {
-        // Data is already saved to localStorage (step 1 above), so this is
-        // only a server-sync failure. Don't alarm the user — just log it.
-        console.warn("Server sync skipped (data saved locally):", err.message || err);
-        // Only show the error toast once per session to avoid spam
+        console.warn('[SAVE] Server sync failed:', err.message || err);
+        localStorage.setItem('elimutrack_sync_source', 'local');
         if (!window._syncFailedToastShown) {
             window._syncFailedToastShown = true;
-            if (_authFailed) {
-                showToast('Session expired. Data saved locally — please re-login to sync.', 'error');
-            } else {
-                showToast('Saved locally. Server sync will retry.', 'success');
-            }
+            showToast('Saved locally. Server sync will retry.', 'warning');
         }
     }
 }
@@ -396,17 +475,19 @@ function applyRoleRestrictions(role) {
         const adminPages = ['intake', 'staff', 'settings', 'reports'];
         adminPages.forEach(page => {
             const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
-            if(navItem) navItem.style.display = 'none';
+            if (navItem) navItem.style.display = 'none';
         });
     }
-    
+
     const profileName = document.querySelector('.user-profile .user-info span');
     const profileRole = document.querySelector('.user-profile .user-info small');
-    if(CURRENT_USER) {
-        if(profileName) profileName.innerText = CURRENT_USER.name;
-        if(profileRole) profileRole.innerText = CURRENT_USER.role === 'admin' ? 'School Admin' : 'Teacher';
+    if (CURRENT_USER) {
+        if (profileName) profileName.innerText = CURRENT_USER.name;
+        if (profileRole) profileRole.innerText = CURRENT_USER.role === 'admin' ? 'School Admin' : 'Teacher';
     }
 }
+
+
 
 // ==========================================================================
 //   GENERIC REPOSITORY
@@ -426,6 +507,7 @@ function createRepository(entityKey) {
 
 const StudentRepo = createRepository('students');
 const StaffRepo = createRepository('staff');
+const ExamRepo = createRepository('exams');  // ← ADD THIS
 
 // ==========================================================================
 //   INITIALIZATION
@@ -522,6 +604,8 @@ function initGlobalListeners() {
             if (item) item.classList.toggle('open');
             return;
         }
+
+        
         // ----------------------------------------------
 
         const viewBtn = target.closest('[data-view]'); 
@@ -592,7 +676,10 @@ function initGlobalListeners() {
         if (target.closest('#btnStaffReport')) generateStaffListPDF();
         if (target.closest('#btnProfileReport')) generateSchoolProfile();
         if (target.closest('#btnPrintStaffList')) generateStaffListPDF();
-
+        if (target.closest('#btnForceSync')) {
+             forceSyncToServer();
+            return;
+            }
         const unitCard = target.closest('.cbet-unit-card');
         if (unitCard) { 
             const code = unitCard.dataset.unitCode; 
@@ -857,77 +944,92 @@ function resetIntakeForm() { $('newStudentForm')?.reset(); if ($('editModeId')) 
 // 3. ENHANCED SUBMISSION
 function submitRegistration(e) {
     e.preventDefault();
-    
-    // Final validation (Double Check)
+
     const requiredIds = ['surname', 'firstName', 'gender', 'dob', 'idNumber', 'regTrade', 'level', 'guardianName', 'guardianPhone'];
-    for(let id of requiredIds) {
-        if(!$(id).value.trim()) {
+    for (let id of requiredIds) {
+        const el = $(id);
+        if (!el || !el.value.trim()) {
             showToast('Please fill all required fields.', 'error');
-            // Find step and go there
-            // (Simple logic: just alert and return for now)
+            const stepDiv = el?.closest('.form-step');
+            if (stepDiv) {
+                const stepNum = parseInt(stepDiv.id.replace('form-step-', ''));
+                if (!isNaN(stepNum) && stepNum > 1) prevStep(stepNum, stepNum - 1);
+            }
+            el?.focus();
             return;
         }
     }
 
-    // Check ID one last time
-    const idVal = $('idNumber').value;
+    const idVal = $('idNumber').value.trim();
     const editId = $('editModeId')?.value;
-    if (StudentRepo.getAll().some(s => s.idNumber === idVal && s.id !== editId)) {
+    if (store.students.some(s => s.idNumber === idVal && s.id !== editId)) {
         showToast('Duplicate ID Number detected!', 'error');
+        $('idNumber')?.focus();
         return;
     }
 
-    // ... [Rest of original logic for data gathering] ...
     const grade = getVal('regTrade');
     const names = [getVal('surname'), getVal('firstName'), getVal('otherNames')].filter(Boolean).join(' ');
-    
-    // (Keep existing logic for Photo, Data Object, etc.)
-    
-    const studentData = { 
-        name: names, 
-        gender: getVal('gender'), 
-        dob: getVal('dob'), 
-        idNumber: idVal, 
-        phone: getVal('phone'), 
+    const photoPreview = $('studentPhotoPreview');
+    const photo = (photoPreview && photoPreview.src && !photoPreview.src.includes('No Photo')) ? photoPreview.src : null;
+
+    const studentData = {
+        name: names,
+        surname: getVal('surname'),
+        firstName: getVal('firstName'),
+        otherNames: getVal('otherNames'),
+        gender: getVal('gender'),
+        dob: getVal('dob'),
+        idNumber: idVal,
+        phone: getVal('phone'),
+        email: getVal('email'),
         grade: grade,
-        stream: getVal('level'), 
-        photo: $('studentPhotoPreview').src,
-        upiNumber: getVal('upiNumber'),
-        prevSchool: getVal('prevSchool'),
+        stream: getVal('level'),
+        reg: getVal('assessmentNo') || generateRegNumber(grade),
         entryLevel: getVal('entryLevel'),
-        yearCompleted: getVal('yearCompleted'),
-        nemisNumber: getVal('assessmentNo'),
-        disability: getVal('disability'),
         guardianName: getVal('guardianName'),
         guardianPhone: getVal('guardianPhone'),
-        guardianRel: getVal('guardianRel')
+        guardianId: getVal('guardianId'),
+        guardianRelation: getVal('guardianRelation'),
+        address: getVal('address'),
+        county: getVal('county'),
+        subCounty: getVal('subCounty'),
+        disability: getVal('disability'),
+        medicalNotes: getVal('medicalNotes'),
+        photo: photo,
+        status: 'active',
+        updatedAt: new Date().toISOString()
     };
 
-    if (editId) { 
-        StudentRepo.update(editId, studentData); 
-        showToast('Learner details updated successfully!'); 
-    } else { 
-        // Generate ADM No (Existing logic is good)
-        const year = new Date().getFullYear().toString().slice(-2);
-        const count = StudentRepo.findBy('grade', grade).length + 1;
-        const seq = String(count).padStart(3, '0');
-        const gCode = grade.replace(' ', '');
-        studentData.reg = `${gCode}/${year}/${seq}`;
-        
-        StudentRepo.create(studentData); 
-        showToast('Learner Registered Successfully!', 'success');
-        
-        // Add Activity
-        // store.activities.push({ ... });
+    if (editId) {
+        const idx = store.students.findIndex(s => s.id === editId);
+        if (idx !== -1) {
+            studentData.id = editId;
+            studentData.createdAt = store.students[idx].createdAt;
+            store.students[idx] = studentData;
+            showToast('Student updated successfully!');
+        } else {
+            showToast('Student not found for editing.', 'error');
+            return;
+        }
+    } else {
+        studentData.id = generateId();
+        studentData.createdAt = new Date().toISOString();
+        store.students.unshift(studentData);
+        showToast('Student registered successfully!');
     }
 
-    // Reset and Redirect
-    router('students'); // Go to list to see the new card
+    saveData();
     resetIntakeForm();
-    renderDashboard();
+    if (typeof applyFilters === 'function') applyFilters();
 }
-function onGradeChange() { updateLiveCard(); }
 
+function onGradeChange() { updateLiveCard(); }
+function generateRegNumber(grade) {
+    const prefix = (grade || 'UNK').replace(/\s/g, '').substring(0, 3).toUpperCase();
+    const count = store.students.filter(s => s.grade === grade).length + 1;
+    return `${prefix}/${String(count).padStart(3, '0')}/${store.settings.academicYear || '2024'}`;
+}
 function updateLiveCard() { 
     const sn = getVal('surname') || ''; 
     const fn = getVal('firstName') || ''; 
@@ -2073,8 +2175,219 @@ function getCompetenceStatus(score) {
 
 
 function resetExamView() { currentExamContext = { studentId: null, subjectId: null }; if ($('examStudentSelect')) { $('examStudentSelect').innerHTML = "<option value=''>Select Learner...</option>"; $('examStudentSelect').disabled = true; } if ($('examTradeSelect')) $('examTradeSelect').value = ""; if ($('examInterface')) $('examInterface').style.display = 'none'; if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; }
-function loadExamStudents() { const grade = currentExamContext.tradeId; const studentSelect = $('examStudentSelect'); if (!studentSelect) return; studentSelect.innerHTML = "<option value=''>Select Learner...</option>"; currentExamContext.studentId = null; if (!grade) { studentSelect.disabled = true; return; } studentSelect.disabled = false; const filtered = StudentRepo.findBy('grade', grade); if (filtered.length === 0) { studentSelect.innerHTML = "<option value=''>No learners in this grade</option>"; studentSelect.disabled = true; return; } filtered.forEach(s => { studentSelect.innerHTML += `<option value="${s.id}">${s.name} (${s.reg})</option>`; }); if ($('examInterface')) $('examInterface').style.display = 'none'; if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; }
-function loadCBETUnits() { const studentId = currentExamContext.studentId; if (!studentId) return; const student = StudentRepo.getById(studentId); if (!student) return; if ($('examInterface')) $('examInterface').style.display = 'flex'; if ($('examEmptyState')) $('examEmptyState').style.display = 'none'; if ($('sidebarStudentName')) $('sidebarStudentName').innerText = student.name; if ($('sidebarStudentReg')) $('sidebarStudentReg').innerText = student.reg; if ($('sidebarStudentTrade')) $('sidebarStudentTrade').innerText = student.grade; renderCBETUnits(student); }
+
+function loadExamStudents() {
+    const select = $('examStudentSelect');
+    if (!select) return;
+
+    select.innerHTML = "<option value=''>Select Student...</option>";
+
+    const grade = currentExamContext.tradeId;
+    if (!grade) { select.disabled = true; return; }
+
+    const studentsInGrade = (store.students || []).filter(s => s.grade === grade);
+
+    if (studentsInGrade.length === 0) {
+        select.innerHTML = "<option value=''>No students enrolled in this grade</option>";
+        select.disabled = true;
+        return;
+    }
+
+    // Sort alphabetically
+    studentsInGrade.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    studentsInGrade.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name || 'Unknown'} \u2014 ${s.reg || 'No Reg'}`;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
+}
+
+function loadCBETUnits() {
+    const studentId = currentExamContext.studentId;
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+
+    if (!studentId || !subjectId) return;
+
+    const iface = $('examInterface');
+    const empty = $('examEmptyState');
+    if (iface) iface.style.display = 'block';
+    if (empty) empty.style.display = 'none';
+
+    const student = (store.students || []).find(s => s.id === studentId);
+    const subject = (store.learningAreas || []).find(la => la.id === subjectId);
+
+    if (!student || !subject) {
+        if (iface) iface.innerHTML = '<p style="color:var(--danger)">Student or subject not found.</p>';
+        return;
+    }
+
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+
+    // Find any existing scores for this student+subject+term+year
+    const existing = (store.exams || []).filter(e =>
+        e.studentId === studentId && e.subjectId === subjectId && e.term === term && e.year === year
+    );
+
+    // CBC exam structure
+    const examTypes = [
+        { key: 'cat1',     label: 'CAT 1',         max: 20, computed: false },
+        { key: 'cat2',     label: 'CAT 2',         max: 20, computed: false },
+        { key: 'endTerm',  label: 'End Term Exam', max: 60, computed: false },
+        { key: 'total',    label: 'Total Score',   max: 100, computed: true  }
+    ];
+
+    let html = `
+        <div class="exam-student-header">
+            <div>
+                <h3>${escapeHtml(student.name || 'Unknown')}</h3>
+                <p>${escapeHtml(subject.name)} &middot; ${escapeHtml(grade)} &middot; ${escapeHtml(term)} ${escapeHtml(year)}</p>
+                <p><small>Reg: ${escapeHtml(student.reg || 'N/A')}</small></p>
+            </div>
+        </div>
+        <div class="exam-scores-grid">
+    `;
+
+    examTypes.forEach(et => {
+        const rec = existing.find(e => e.examType === et.key);
+        const val = rec ? rec.score : '';
+        html += `
+            <div class="exam-score-card ${et.computed ? 'computed' : ''}">
+                <label>${et.label}</label>
+                <div class="score-input-row">
+                    <input type="number" id="examScore_${et.key}" value="${val}"
+                        min="0" max="${et.max}" placeholder="0"
+                        ${et.computed ? 'readonly' : ''}
+                        class="exam-score-input" data-exam-type="${et.key}" data-max="${et.max}" />
+                    <span class="score-max">/ ${et.max}</span>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `</div>
+        <div class="exam-actions">
+            <button class="btn btn-primary" onclick="saveExamScores()">
+                <i class="fa-solid fa-floppy-disk"></i> Save Scores
+            </button>
+            <button class="btn btn-secondary" onclick="clearExamScores()">
+                <i class="fa-solid fa-eraser"></i> Clear
+            </button>
+        </div>
+    `;
+
+    if (iface) iface.innerHTML = html;
+
+    // Attach live total computation to editable inputs
+    if (iface) {
+        iface.querySelectorAll('.exam-score-input:not([readonly])').forEach(inp => {
+            inp.addEventListener('input', computeExamTotal);
+            // Clamp on blur
+            inp.addEventListener('blur', function() {
+                const max = parseInt(this.dataset.max) || 100;
+                let v = parseFloat(this.value);
+                if (isNaN(v)) { this.value = ''; return; }
+                if (v < 0) v = 0;
+                if (v > max) v = max;
+                this.value = v;
+                computeExamTotal();
+            });
+        });
+    }
+
+    // Compute initial total from any pre-loaded scores
+    computeExamTotal();
+}
+function clearExamScores() {
+    ['cat1', 'cat2', 'endTerm'].forEach(key => {
+        const el = $('examScore_' + key);
+        if (el && !el.readOnly) el.value = '';
+    });
+    computeExamTotal();
+}
+
+function saveExamScores() {
+    const studentId = currentExamContext.studentId;
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+
+    if (!studentId || !subjectId) {
+        return showToast('No student or subject selected.', 'error');
+    }
+
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+
+    const types = [
+        { key: 'cat1',    max: 20 },
+        { key: 'cat2',    max: 20 },
+        { key: 'endTerm', max: 60 }
+    ];
+
+    let saved = 0;
+    const now = new Date().toISOString();
+
+    types.forEach(et => {
+        const input = $('examScore_' + et.key);
+        if (!input) return;
+
+        const raw = parseFloat(input.value);
+        if (isNaN(raw)) return; // Skip empty fields
+
+        // Clamp to valid range
+        const score = Math.max(0, Math.min(et.max, raw));
+
+        // Upsert: find existing record by composite key
+        const idx = store.exams.findIndex(e =>
+            e.studentId === studentId &&
+            e.subjectId === subjectId &&
+            e.examType === et.key &&
+            e.term === term &&
+            e.year === year
+        );
+
+        const record = {
+            id: idx !== -1 ? store.exams[idx].id : generateId(),
+            studentId,
+            subjectId,
+            grade,
+            examType: et.key,
+            term,
+            year,
+            score,
+            maxScore: et.max,
+            updatedAt: now
+        };
+
+        if (idx !== -1) {
+            store.exams[idx] = record;
+        } else {
+            store.exams.push(record);
+        }
+        saved++;
+    });
+
+    if (saved > 0) {
+        // Trigger the app's save pipeline (localStorage + server sync)
+        if (typeof saveData === 'function') saveData();
+        showToast(saved + ' score(s) saved successfully!');
+    } else {
+        showToast('Enter at least one score before saving.', 'error');
+    }
+}
+function computeExamTotal() {
+    const cat1 = parseFloat($('examScore_cat1')?.value) || 0;
+    const cat2 = parseFloat($('examScore_cat2')?.value) || 0;
+    const endTerm = parseFloat($('examScore_endTerm')?.value) || 0;
+    const totalEl = $('examScore_total');
+    if (totalEl) totalEl.value = cat1 + cat2 + endTerm;
+}
+
 function renderCBETUnits(student) { 
     const container = $('cbetUnitsList'); if (!container) return; container.innerHTML = ''; 
     const applicableSubjects = store.learningAreas.filter(sub => !sub.applicableLevels || sub.applicableLevels.includes(student.grade));
@@ -2115,73 +2428,184 @@ function updateExamProgress(studentId) {
     if (circle) { const radius = 70; const circumference = 2 * Math.PI * radius; const offset = circumference - (percent / 100) * circumference; circle.style.strokeDasharray = circumference; circle.style.strokeDashoffset = offset; } 
 }
 function loadExamSubjects(grade) {
-    const subjectSelect = $('examSubjectSelect'); if (!subjectSelect) return;
-    subjectSelect.innerHTML = "<option value=''>Select Subject...</option>"; subjectSelect.disabled = true; if (!grade) return;
-    const applicableSubjects = store.learningAreas.filter(sub => !sub.applicableLevels || sub.applicableLevels.includes(grade));
-    if (applicableSubjects.length === 0) { subjectSelect.innerHTML = "<option value=''>No Subjects Found</option>"; return; }
-    subjectSelect.disabled = false;
-    applicableSubjects.forEach(sub => { subjectSelect.innerHTML += `<option value='${sub.id}'>${sub.name}</option>`; });
+    const select = $('examSubjectSelect');
+    if (!select) return;
+
+    select.innerHTML = "<option value=''>Select Subject...</option>";
+
+    if (!grade) { select.disabled = true; return; }
+
+    // Filter learning areas whose applicableLevels array includes this grade
+    const applicable = store.learningAreas.filter(la =>
+        Array.isArray(la.applicableLevels) && la.applicableLevels.includes(grade)
+    );
+
+    if (applicable.length === 0) {
+        select.innerHTML = "<option value=''>No subjects found for this grade</option>";
+        select.disabled = true;
+        return;
+    }
+
+    // Sort alphabetically by name for consistent ordering
+    applicable.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    applicable.forEach(la => {
+        const opt = document.createElement('option');
+        opt.value = la.id;
+        opt.textContent = `${la.name} (${la.code})`;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
 }
 
-function openAssessmentModal(code, name, studentId) { 
-    $('assessUnitTitle').innerText = name; $('assessUnitId').value = code; 
-    const result = store.exams.find(e => e.studentId === studentId && e.unitCode === code); 
-    if (result) { $('assessScore').value = result.score; $('assessFeedback').value = result.feedback || ''; } 
-    else { $('assessScore').value = ''; $('assessFeedback').value = ''; } 
-    updateAssessmentPreview(); openModal('assessmentModal'); 
+
+function openAssessmentModal(code, name, studentId) {
+    if (!studentId) return showToast('Select a student first.', 'error');
+
+    const existing = (store.exams || []).find(e =>
+        e.studentId === studentId && e.examType === code
+    );
+
+    // Build modal HTML dynamically if it doesn't exist
+    let modal = $('assessmentModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'assessmentModal';
+        modal.className = 'modal-backdrop';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:420px">
+                <div class="modal-header">
+                    <h3 id="assessModalTitle">Assessment</h3>
+                    <button data-dismiss="modal" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="assessUnitCode" />
+                    <input type="hidden" id="assessStudentId" />
+                    <div class="form-group">
+                        <label>Score</label>
+                        <input type="number" id="assessScore" min="0" max="100" placeholder="Enter score" />
+                    </div>
+                    <div id="assessPreview" style="margin-top:10px;padding:10px;border-radius:6px;background:var(--bg);font-size:0.9rem;display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" id="btnSaveAssessment">
+                        <i class="fa-solid fa-check"></i> Save
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind events on the new modal
+        modal.querySelector('#btnSaveAssessment').addEventListener('click', saveUnitAssessment);
+        modal.querySelector('#assessScore').addEventListener('input', updateAssessmentPreview);
+        modal.addEventListener('click', e => {
+            if (e.target.classList.contains('modal-backdrop')) closeModal('assessmentModal');
+        });
+    }
+
+    $('assessModalTitle').textContent = name || 'Assessment';
+    $('assessUnitCode').value = code || '';
+    $('assessStudentId').value = studentId || '';
+    $('assessScore').value = existing ? existing.score : '';
+    $('assessPreview').style.display = 'none';
+
+    openModal('assessmentModal');
 }
 
-function updateAssessmentPreview() { 
-    const score = parseInt($('assessScore').value) || 0; const comp = getCompetenceStatus(score); 
-    const levelBox = $('assessLevelDisplay'); if (levelBox) { levelBox.innerText = comp.level; levelBox.className = `status-display-box ${comp.class}`; }
-    const decisionBox = $('assessDecisionDisplay'); if (decisionBox) { decisionBox.innerText = comp.decision; }
-    const feedbackBox = $('assessFeedback'); if (feedbackBox && !feedbackBox.value) feedbackBox.value = comp.feedback; 
+
+function updateAssessmentPreview() {
+    const score = parseFloat($('assessScore')?.value);
+    const preview = $('assessPreview');
+    if (!preview) return;
+
+    if (isNaN(score)) { preview.style.display = 'none'; return; }
+
+    let grade = '', color = '';
+    if (score >= 80)      { grade = 'Excellent'; color = 'var(--success)'; }
+    else if (score >= 60) { grade = 'Good'; color = 'var(--accent)'; }
+    else if (score >= 40) { grade = 'Fair'; color = 'var(--warning)'; }
+    else                  { grade = 'Needs Improvement'; color = 'var(--danger)'; }
+
+    preview.style.display = 'block';
+    preview.innerHTML = `<strong style="color:${color}">${grade}</strong> &mdash; ${score}/100`;
 }
 
 // ==========================================================================
 //   SAVE UNIT ASSESSMENT (Updated for Password Protection)
 // ==========================================================================
-function saveUnitAssessment() { 
-    const studentId = currentExamContext.studentId; 
-    const unitCode = $('assessUnitId').value; 
-    const score = parseInt($('assessScore').value); 
-    const feedback = $('assessFeedback').value; 
+function saveUnitAssessment() {
+    const code = $('assessUnitCode')?.value;
+    const studentId = $('assessStudentId')?.value;
+    const score = parseFloat($('assessScore')?.value);
 
-    if (isNaN(score) || score < 0 || score > 100) return showToast('Enter a valid score (0-100)', 'error'); 
-    
-    const comp = getCompetenceStatus(score);
-    
-    const data = { 
-        id: generateId(), 
-        studentId, 
-        unitCode, 
-        score, 
-        level: comp.level, 
-        status: comp.decision, 
-        grade: comp.abbr, 
-        feedback: feedback, 
-        date: new Date().toISOString() 
-    }; 
-    
-    const existingIndex = store.exams.findIndex(e => e.studentId === studentId && e.unitCode === unitCode); 
-    
+    if (!code || !studentId) return showToast('Missing context.', 'error');
+    if (isNaN(score) || score < 0) return showToast('Enter a valid score.', 'error');
+
+    const clamped = Math.max(0, Math.min(100, score));
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+    const now = new Date().toISOString();
+
+    const idx = store.exams.findIndex(e =>
+        e.studentId === studentId && e.examType === code && e.term === term && e.year === year
+    );
+
+    const record = {
+        id: idx !== -1 ? store.exams[idx].id : generateId(),
+        studentId,
+        subjectId: currentExamContext.subjectId || '',
+        grade: currentExamContext.tradeId || '',
+        examType: code,
+        term,
+        year,
+        score: clamped,
+        maxScore: 100,
+        updatedAt: now
+    };
+
+    if (idx !== -1) store.exams[idx] = record;
+    else store.exams.push(record);
+
+    if (typeof saveData === 'function') saveData();
+    closeModal('assessmentModal');
+    showToast('Assessment saved!');
+
+    // Refresh the exam interface if visible
+    if (currentExamContext.studentId && currentExamContext.subjectId) loadCBETUnits();
+}
+// CORRECT pattern for saving one exam score
+function saveExamScore(studentId, subjectId, score, term, year, comments = '') {
+    // Find existing record for this student + subject + term + year
+    const existingIndex = store.exams.findIndex(e => 
+        e.studentId === studentId && 
+        e.subjectId === subjectId && 
+        e.term === term && 
+        e.year === year
+    );
+
+    const examData = {
+        studentId,
+        subjectId,
+        score: parseInt(score) || 0,
+        term,
+        year: parseInt(year) || new Date().getFullYear(),
+        comments
+    };
+
     if (existingIndex !== -1) {
-        // --- ASSESSMENT EXISTS: REQUIRE ADMIN PASSWORD TO EDIT ---
-        pendingAction = 'update-assessment';
-        pendingActionData = { index: existingIndex, data: data };
-        
-        $('authMessage').textContent = 'This assessment has already been recorded. Enter Admin Password to UPDATE.'; 
-        $('adminPassword').value = ''; 
-        openModal('authModal');
+        // Update existing
+        store.exams[existingIndex] = { ...store.exams[existingIndex], ...examData };
     } else {
-        // --- NEW ASSESSMENT: SAVE DIRECTLY ---
-        store.exams.push(data); 
-        saveData(); 
-        closeModal('assessmentModal'); 
-        showToast(`Assessment Saved: ${comp.decision}`); 
-        loadCBETUnits(); 
-        renderDashboard(); 
+        // Create new
+        examData.id = generateId();
+        store.exams.push(examData);
     }
+
+    // THIS IS THE CRITICAL LINE — without it, nothing persists
+    saveData();
 }
 
 // ==========================================================================
@@ -3240,6 +3664,19 @@ function deleteCourse(id) {
         renderStaff(); 
         showToast('Subject Deleted'); 
     } 
+}
+
+/**
+ * Ensures data is loaded before generating reports.
+ * Returns true if data is ready, false if not.
+ */
+function ensureDataLoaded() {
+    // Check if exams exist
+    if (!store.exams || store.exams.length === 0) {
+        showToast('Assessment data not loaded yet. Please wait or check your connection.', 'error');
+        return false;
+    }
+    return true;
 }
 
 // ==========================================================================
@@ -4370,26 +4807,50 @@ function generateBulkProgressReports() {
 
 // Generate a ZIP bundle of individual PDFs
 async function generateZipBundle(students, gradeRanking, streamRanking, includeComments, grade, stream) {
+    if (typeof JSZip === 'undefined') {
+        showToast('ZIP library not loaded', 'error');
+        return;
+    }
+    if (!window.jspdf) {
+        showToast('PDF library not loaded', 'error');
+        return;
+    }
+
     const { jsPDF } = window.jspdf;
     const zip = new JSZip();
     const reportFolder = zip.folder('Progress_Reports');
+    let successCount = 0;
+    let failCount = 0;
 
-    // Generate each PDF as a blob and add to ZIP
+    showToast(`Generating ${students.length} PDFs...`);
+
+    // Generate each PDF and add to ZIP — wrapped in try/catch per student
     for (let i = 0; i < students.length; i++) {
         const student = students[i];
-        const classRank = gradeRanking ? (gradeRanking.find(r => r.studentId === student.id) || {}).rank : null;
-        const streamRank = (student.stream && streamRanking[student.stream])
-            ? (streamRanking[student.stream].find(r => r.studentId === student.id) || {}).rank
-            : null;
+        try {
+            const classRank = gradeRanking ? (gradeRanking.find(r => r.studentId === student.id) || {}).rank : null;
+            const streamRank = (student.stream && streamRanking[student.stream])
+                ? (streamRanking[student.stream].find(r => r.studentId === student.id) || {}).rank
+                : null;
 
-        const doc = new jsPDF();
-        renderTranscriptStylePage(doc, student, classRank, streamRank, includeComments, false);
+            const doc = new jsPDF();
+            renderTranscriptStylePage(doc, student, classRank, streamRank, includeComments, false);
 
-        // Get PDF as arraybuffer and add to zip
-        const pdfArrayBuffer = doc.output('arraybuffer');
-        const safeName = (student.name || 'Learner').replace(/[^a-z0-9]/gi, '_');
-        const safeReg = (student.reg || student.id || '').replace(/[^a-z0-9]/gi, '_');
-        reportFolder.file(`Progress_${safeName}_${safeReg}.pdf`, pdfArrayBuffer);
+            // Use 'blob' output — most reliable with JSZip across jsPDF versions
+            const pdfBlob = doc.output('blob');
+            const safeName = (student.name || 'Learner').replace(/[^a-z0-9]/gi, '_');
+            const safeReg = (student.reg || student.id || '').replace(/[^a-z0-9]/gi, '_');
+            reportFolder.file(`Progress_${safeName}_${safeReg}.pdf`, pdfBlob);
+            successCount++;
+        } catch (err) {
+            console.error(`Failed to generate PDF for ${student.name}:`, err);
+            failCount++;
+        }
+    }
+
+    if (successCount === 0) {
+        showToast('No PDFs could be generated. Check console for errors.', 'error');
+        return;
     }
 
     // Generate the ZIP and trigger download
@@ -4403,11 +4864,13 @@ async function generateZipBundle(students, gradeRanking, streamRanking, includeC
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        showToast(`${students.length} report${students.length === 1 ? '' : 's'} bundled into ZIP`, 'success');
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        const msg = `${successCount} report${successCount === 1 ? '' : 's'} bundled into ZIP` +
+            (failCount > 0 ? ` · ${failCount} failed` : '');
+        showToast(msg, failCount > 0 ? 'warning' : 'success');
     } catch (err) {
         console.error('ZIP generation failed:', err);
-        showToast('Failed to generate ZIP — try fewer reports or use Single PDF mode', 'error');
+        showToast('Failed to generate ZIP — try Single PDF mode instead', 'error');
     }
 }
 
@@ -4415,19 +4878,28 @@ async function generateZipBundle(students, gradeRanking, streamRanking, includeC
 function generateSeparatePDFs(students, gradeRanking, streamRanking, includeComments) {
     const { jsPDF } = window.jspdf;
     let count = 0;
+    let failCount = 0;
     students.forEach((student, idx) => {
         setTimeout(() => {
-            const doc = new jsPDF();
-            const classRank = gradeRanking ? (gradeRanking.find(r => r.studentId === student.id) || {}).rank : null;
-            const streamRank = (student.stream && streamRanking[student.stream])
-                ? (streamRanking[student.stream].find(r => r.studentId === student.id) || {}).rank
-                : null;
-            renderTranscriptStylePage(doc, student, classRank, streamRank, includeComments, false);
-            const safeName = student.name.replace(/[^a-z0-9]/gi, '_');
-            doc.save(`Progress_${safeName}_${student.reg || student.id}.pdf`);
-            count++;
-            if (count === students.length) {
-                showToast(`${count} reports downloaded`, 'success');
+            try {
+                const doc = new jsPDF();
+                const classRank = gradeRanking ? (gradeRanking.find(r => r.studentId === student.id) || {}).rank : null;
+                const streamRank = (student.stream && streamRanking[student.stream])
+                    ? (streamRanking[student.stream].find(r => r.studentId === student.id) || {}).rank
+                    : null;
+                renderTranscriptStylePage(doc, student, classRank, streamRank, includeComments, false);
+                const safeName = student.name.replace(/[^a-z0-9]/gi, '_');
+                doc.save(`Progress_${safeName}_${student.reg || student.id}.pdf`);
+                count++;
+            } catch (err) {
+                console.error(`Failed to generate PDF for ${student.name}:`, err);
+                failCount++;
+                count++;
+            }
+            if (count + failCount === students.length) {
+                const msg = `${count} report${count === 1 ? '' : 's'} downloaded` +
+                    (failCount > 0 ? ` · ${failCount} failed` : '');
+                showToast(msg, failCount > 0 ? 'warning' : 'success');
             }
         }, idx * 600);
     });
@@ -4486,8 +4958,11 @@ function renderTranscriptStylePage(doc, student, classRank, streamRank, includeC
     doc.setFillColor(0, 51, 102);
     doc.rect(0, 0, pageWidth, 32, 'F');
 
-    if (store.settings.logo) {
-        try { doc.addImage(store.settings.logo, 'PNG', margin, 6, 20, 20); } catch (e) {}
+    if (store.settings.logo && typeof store.settings.logo === 'string' && store.settings.logo.startsWith('data:image/') && !store.settings.logo.startsWith('data:image/svg')) {
+        try {
+            const logoFormat = store.settings.logo.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+            doc.addImage(store.settings.logo, logoFormat, margin, 6, 20, 20);
+        } catch (e) { /* skip logo on error */ }
     }
 
     doc.setTextColor(255, 255, 255);
@@ -4509,12 +4984,38 @@ function renderTranscriptStylePage(doc, student, classRank, streamRank, includeC
     doc.setFillColor(250, 250, 252);
     doc.roundedRect(margin, yPos, pageWidth - (margin * 2), 26, 2, 2, 'FD');
 
-    try {
-        doc.addImage(student.photo || DEFAULT_AVATAR, 'JPEG', margin + 3, yPos + 3, 20, 20);
-    } catch (e) {
-        // Fallback: draw placeholder rectangle
+    // Student photo — only add if it's a real image (PNG/JPEG data URL), not SVG
+    const studentPhoto = student.photo;
+    if (studentPhoto && typeof studentPhoto === 'string' && studentPhoto.startsWith('data:image/')) {
+        // Skip SVG — jsPDF can't render it
+        if (!studentPhoto.startsWith('data:image/svg')) {
+            try {
+                // Detect format from data URL prefix
+                const format = studentPhoto.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+                doc.addImage(studentPhoto, format, margin + 3, yPos + 3, 20, 20);
+            } catch (e) {
+                // Fallback: draw placeholder rectangle with initials
+                doc.setFillColor(226, 232, 240);
+                doc.roundedRect(margin + 3, yPos + 3, 20, 20, 2, 2, 'F');
+                doc.setFontSize(10).setTextColor(148, 163, 184).setFont(undefined, 'bold');
+                const initials = (student.name || '?').split(' ').map(w => w[0] || '').slice(0, 2).join('').toUpperCase();
+                doc.text(initials, margin + 13, yPos + 14, { align: 'center' });
+            }
+        } else {
+            // SVG photo — draw placeholder
+            doc.setFillColor(226, 232, 240);
+            doc.roundedRect(margin + 3, yPos + 3, 20, 20, 2, 2, 'F');
+            doc.setFontSize(10).setTextColor(148, 163, 184).setFont(undefined, 'bold');
+            const initials = (student.name || '?').split(' ').map(w => w[0] || '').slice(0, 2).join('').toUpperCase();
+            doc.text(initials, margin + 13, yPos + 14, { align: 'center' });
+        }
+    } else {
+        // No photo — draw placeholder
         doc.setFillColor(226, 232, 240);
         doc.roundedRect(margin + 3, yPos + 3, 20, 20, 2, 2, 'F');
+        doc.setFontSize(10).setTextColor(148, 163, 184).setFont(undefined, 'bold');
+        const initials = (student.name || '?').split(' ').map(w => w[0] || '').slice(0, 2).join('').toUpperCase();
+        doc.text(initials, margin + 13, yPos + 14, { align: 'center' });
     }
 
     doc.setTextColor(30, 41, 59);
@@ -6092,7 +6593,10 @@ function bindExamSystemControls() {
     const examGrade = $('examGrade');
     if (examGrade && !examGrade.dataset.bound) {
         examGrade.dataset.bound = '1';
-        examGrade.addEventListener('change', () => populateExamSubjectsCheckboxes(examGrade.value));
+        examGrade.addEventListener('change', () => {
+            populateExamSubjectsCheckboxes(examGrade.value);
+            populateExamStreamDropdown(examGrade.value);
+        });
     }
     const btnMarkInProgress = $('btnMarkInProgress');
     if (btnMarkInProgress && !btnMarkInProgress.dataset.bound) {
@@ -6150,6 +6654,100 @@ function bindExamSystemControls() {
         egImportFile.dataset.bound = '1';
         egImportFile.addEventListener('change', (e) => importExamScores(examGradingCurrentId, e.target.files[0]));
     }
+
+    // Portal tab switching
+    const portalTabs = $('examPortalTabs');
+    if (portalTabs && !portalTabs.dataset.bound) {
+        portalTabs.dataset.bound = '1';
+        portalTabs.addEventListener('click', (e) => {
+            const btn = e.target.closest('.ept-btn');
+            if (!btn) return;
+            switchExamPortalTab(btn.dataset.tab);
+        });
+    }
+
+    // Print timetable button
+    const btnPrintTt = $('btnExamTimetablePDF');
+    if (btnPrintTt && !btnPrintTt.dataset.bound) {
+        btnPrintTt.dataset.bound = '1';
+        btnPrintTt.addEventListener('click', printExamTimetable);
+    }
+
+    // Exam timetable filters
+    const ttGradeFilter = $('examTtGradeFilter');
+    if (ttGradeFilter && !ttGradeFilter.dataset.bound) {
+        ttGradeFilter.dataset.bound = '1';
+        ttGradeFilter.addEventListener('change', renderExamTimetable);
+    }
+    // Invigilation filters
+    const invigDateFilter = $('invigDateFilter');
+    if (invigDateFilter && !invigDateFilter.dataset.bound) {
+        invigDateFilter.dataset.bound = '1';
+        invigDateFilter.addEventListener('change', renderInvigilationRoster);
+    }
+    const invigStaffFilter = $('invigStaffFilter');
+    if (invigStaffFilter && !invigStaffFilter.dataset.bound) {
+        invigStaffFilter.dataset.bound = '1';
+        invigStaffFilter.addEventListener('change', renderInvigilationRoster);
+    }
+    // Invigilation status filter
+    const invigStatusFilter = $('invigStatusFilter');
+    if (invigStatusFilter && !invigStatusFilter.dataset.bound) {
+        invigStatusFilter.dataset.bound = '1';
+        invigStatusFilter.addEventListener('change', renderInvigilationRoster);
+    }
+    // Workload button
+    const btnInvigWorkload = $('btnInvigWorkload');
+    if (btnInvigWorkload && !btnInvigWorkload.dataset.bound) {
+        btnInvigWorkload.dataset.bound = '1';
+        btnInvigWorkload.addEventListener('click', showInvigilationWorkload);
+    }
+
+    // Personal schedule controls
+    const personalType = $('personalScheduleType');
+    if (personalType && !personalType.dataset.bound) {
+        personalType.dataset.bound = '1';
+        personalType.addEventListener('change', () => {
+            populatePersonalScheduleEntities(personalType.value);
+            renderPersonalSchedule();
+        });
+    }
+    const personalEntity = $('personalScheduleEntity');
+    if (personalEntity && !personalEntity.dataset.bound) {
+        personalEntity.dataset.bound = '1';
+        personalEntity.addEventListener('change', renderPersonalSchedule);
+    }
+    const btnExportPersonal = $('btnExportPersonalSchedule');
+    if (btnExportPersonal && !btnExportPersonal.dataset.bound) {
+        btnExportPersonal.dataset.bound = '1';
+        btnExportPersonal.addEventListener('click', exportPersonalSchedulePDF);
+    }
+
+    // Live exam clash detection
+    ['examDate', 'examStartTime', 'examDuration', 'examVenue', 'examInvigilator', 'examAssistantInvigilator'].forEach(id => {
+        const el = $(id);
+        if (el && !el.dataset.clashBound) {
+            el.dataset.clashBound = '1';
+            el.addEventListener('change', checkExamClashLive);
+            el.addEventListener('input', checkExamClashLive);
+        }
+    });
+}
+
+// Switch between portal tabs
+function switchExamPortalTab(tabName) {
+    document.querySelectorAll('.ept-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.exam-portal-panel').forEach(p => p.classList.remove('active'));
+    const btn = document.querySelector(`.ept-btn[data-tab="${tabName}"]`);
+    if (btn) btn.classList.add('active');
+    const panel = $('examPanel' + tabName.charAt(0).toUpperCase() + tabName.slice(1));
+    if (panel) panel.classList.add('active');
+
+    // Render the tab content on activation
+    if (tabName === 'timetable') renderExamTimetable();
+    if (tabName === 'personal') { populatePersonalScheduleEntities($('personalScheduleType') ? $('personalScheduleType').value : 'learner'); renderPersonalSchedule(); }
+    if (tabName === 'invigilation') renderInvigilationRoster();
+    if (tabName === 'grading') renderGradingOverview();
 }
 
 function renderExamSystemDashboard() {
@@ -6172,6 +6770,772 @@ function renderExamSystemDashboard() {
     window._prevExamPublished = published;
 
     renderExamListGrid();
+
+    // Populate portal filter dropdowns
+    populateExamPortalFilters(exams);
+
+    // Render other panels (in case they're active)
+    renderExamTimetable();
+    renderInvigilationRoster();
+    renderGradingOverview();
+    renderPersonalSchedule();
+}
+
+function populateExamPortalFilters(exams) {
+    // Grade filter for timetable
+    const ttGradeFilter = $('examTtGradeFilter');
+    if (ttGradeFilter) {
+        const grades = Array.from(new Set((exams || []).map(e => e.grade).filter(Boolean))).sort();
+        const current = ttGradeFilter.value;
+        ttGradeFilter.innerHTML = '<option value="all">All Grades</option>' +
+            grades.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
+        ttGradeFilter.value = current;
+    }
+    // Date filter for invigilation
+    const invigDateFilter = $('invigDateFilter');
+    if (invigDateFilter) {
+        const dates = Array.from(new Set((exams || []).map(e => e.date).filter(Boolean))).sort();
+        const current = invigDateFilter.value;
+        invigDateFilter.innerHTML = '<option value="all">All Dates</option>' +
+            dates.map(d => `<option value="${d}">${new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</option>`).join('');
+        invigDateFilter.value = current;
+    }
+    // Staff filter for invigilation
+    const invigStaffFilter = $('invigStaffFilter');
+    if (invigStaffFilter) {
+        const invigIds = new Set();
+        (exams || []).forEach(e => {
+            if (e.invigilatorId) invigIds.add(e.invigilatorId);
+            if (e.assistantInvigilatorId) invigIds.add(e.assistantInvigilatorId);
+        });
+        const current = invigStaffFilter.value;
+        invigStaffFilter.innerHTML = '<option value="all">All Invigilators</option>' +
+            Array.from(invigIds).map(id => {
+                const s = StaffRepo.getById(id);
+                return s ? `<option value="${id}">${escapeHtml(s.name)}</option>` : '';
+            }).join('');
+        invigStaffFilter.value = current;
+    }
+}
+
+// ==========================================================================
+//   EXAM TIMETABLE VIEW — grouped by date
+// ==========================================================================
+function renderExamTimetable() {
+    const container = $('examTimetableView');
+    if (!container) return;
+    const exams = store.examSchedules || [];
+    const gradeFilter = $('examTtGradeFilter') ? $('examTtGradeFilter').value : 'all';
+
+    let filtered = exams;
+    if (gradeFilter !== 'all') filtered = filtered.filter(e => e.grade === gradeFilter);
+
+    if (filtered.length === 0) {
+        container.innerHTML = `
+            <div class="heatmap-empty" style="padding:2rem;">
+                <i class="fa-solid fa-calendar-xmark" style="font-size:2.5rem; color:var(--text-muted); opacity:0.3;"></i>
+                <p style="margin-top:0.5rem;">No exams scheduled. Click <strong>Schedule Exam</strong> to create one.</p>
+            </div>`;
+        return;
+    }
+
+    // Group by date
+    const byDate = {};
+    filtered.forEach(e => {
+        const d = e.date || 'Undated';
+        if (!byDate[d]) byDate[d] = [];
+        byDate[d].push(e);
+    });
+
+    // Sort dates
+    const sortedDates = Object.keys(byDate).sort((a, b) => new Date(a) - new Date(b));
+
+    let html = '';
+    sortedDates.forEach(date => {
+        const dateObj = date === 'Undated' ? null : new Date(date);
+        const dateLabel = dateObj ? dateObj.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'Undated';
+        const dayExams = byDate[date].sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+
+        html += `
+            <div class="exam-tt-day">
+                <div class="exam-tt-day-header">
+                    <div class="exam-tt-date">
+                        <i class="fa-solid fa-calendar-day"></i>
+                        ${escapeHtml(dateLabel)}
+                    </div>
+                    <span class="exam-tt-count">${dayExams.length} exam${dayExams.length === 1 ? '' : 's'}</span>
+                </div>
+                <div class="exam-tt-slots">
+                    ${dayExams.map(e => renderExamTimetableCard(e)).join('')}
+                </div>
+            </div>
+        `;
+    });
+    container.innerHTML = html;
+}
+
+function renderExamTimetableCard(exam) {
+    const status = exam.status || 'Scheduled';
+    const statusClass = status.replace(/\s+/g, '-');
+    const startTime = exam.startTime || '08:00';
+    const endTime = computeExamEndTime(startTime, exam.duration || 60);
+    
+    const subjects = safeArray(exam.subjects).map(sub => {
+        const invigilator = exam.invigilatorId ? StaffById(exam.invigilatorId) : null;
+        const invigName = invigilator ? invigilator.name : 'Unassigned';
+        const asstInvig = exam.assistantInvigilatorId ? StaffRepo.getById(exam.assistantInvigilatorId) : null;
+        const sessionIcon = exam.session === 'Morning' ? 'fa-sun' : (exam.session === 'Afternoon' ? 'fa-cloud-sun' : 'fa-moon');
+        
+        return `<span class="ett-subject-tag">${escapeHtml(sub)}</span>`;
+    }).join(' ');
+
+    return `
+        <div class="exam-tt-card" data-status="${escapeHtml(status)}" onclick="openExamGradingModal('${exam.id}')">
+            <div class="ett-time">
+                <div class="ett-time-main">${escapeHtml(startTime)}</div>
+                <div class="ett-time-end">→ ${escapeHtml(endTime)}</div>
+            </div>
+            <div class="ett-body">
+                <div class="ett-header">
+                    <h4>${escapeHtml(exam.name)}</h4>
+                    <span class="exam-status-badge ${statusClass}">${escapeHtml(status)}</span>
+                </div>
+                <div class="ett-meta">
+                    <span><i class="fa-solid ${sessionIcon}"></i> ${escapeHtml(exam.session || 'Morning')}</span>
+                    <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(exam.grade)}${exam.stream && exam.stream !== 'all' ? ' · ' + escapeHtml(exam.stream) : ''}</span>
+                    <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(exam.venue || 'TBD')}</span>
+                    <span><i class="fa-solid fa-clock"></i> ${exam.duration || 60} min</span>
+                </div>
+                <div class="ett-subjects">${subjects || 'No subjects'}</div>
+                <div class="ett-invigilator">
+                    <i class="fa-solid fa-user-shield"></i>
+                    <strong>Unassigned</strong>
+                </div>
+            </div>
+        </div>
+    `;
+}
+function computeExamEndTime(startTime, durationMinutes) {
+    if (!startTime) return '';
+    const [h, m] = startTime.split(':').map(Number);
+    const total = h * 60 + m + (durationMinutes || 60);
+    const endH = Math.floor(total / 60) % 24;
+    const endM = total % 60;
+    return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+}
+
+// Print exam timetable as PDF
+function printExamTimetable() {
+    const exams = store.examSchedules || [];
+    if (exams.length === 0) { showToast('No exams to print', 'error'); return; }
+    if (!window.jspdf) { showToast('PDF library not loaded', 'error'); return; }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('landscape', 'pt', 'a4');
+
+    // Header
+    doc.setFillColor(0, 51, 102);
+    doc.rect(0, 0, doc.internal.pageSize.getWidth(), 50, 'F');
+    doc.setFontSize(18).setFont(undefined, 'bold').setTextColor(255);
+    doc.text(store.settings.schoolName || 'School', doc.internal.pageSize.getWidth() / 2, 25, { align: 'center' });
+    doc.setFontSize(12).setFont(undefined, 'normal');
+    doc.text('EXAMINATION TIMETABLE', doc.internal.pageSize.getWidth() / 2, 42, { align: 'center' });
+
+    // Group by date
+    const byDate = {};
+    exams.forEach(e => {
+        const d = e.date || 'Undated';
+        if (!byDate[d]) byDate[d] = [];
+        byDate[d].push(e);
+    });
+
+    let yPos = 70;
+    Object.keys(byDate).sort((a, b) => new Date(a) - new Date(b)).forEach(date => {
+        const dateObj = date === 'Undated' ? null : new Date(date);
+        const dateLabel = dateObj ? dateObj.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'Undated';
+
+        doc.setFontSize(11).setFont(undefined, 'bold').setTextColor(0, 51, 102);
+        doc.text(dateLabel, 40, yPos);
+        yPos += 5;
+        doc.setDrawColor(0, 51, 102).setLineWidth(1);
+        doc.line(40, yPos, doc.internal.pageSize.getWidth() - 40, yPos);
+        yPos += 10;
+
+        const dayExams = byDate[date].sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+        const tableBody = dayExams.map(e => {
+            const endTime = computeExamEndTime(e.startTime, e.duration);
+            const invig = e.invigilatorId ? StaffRepo.getById(e.invigilatorId) : null;
+            return [
+                `${e.startTime || ''} - ${endTime}`,
+                e.name,
+                e.grade + (e.stream && e.stream !== 'all' ? ' / ' + e.stream : ''),
+                e.venue || '-',
+                invig ? invig.name : '-',
+                (e.subjects || []).map(s => s.name).join(', ')
+            ];
+        });
+
+        doc.autoTable({
+            startY: yPos,
+            head: [['Time', 'Exam', 'Grade/Stream', 'Venue', 'Invigilator', 'Subjects']],
+            body: tableBody,
+            theme: 'grid',
+            headStyles: { fillColor: [0, 51, 102], textColor: 255, fontSize: 8 },
+            bodyStyles: { fontSize: 8, cellPadding: 4 },
+            columnStyles: {
+                0: { cellWidth: 80 },
+                1: { cellWidth: 120 },
+                2: { cellWidth: 70 },
+                3: { cellWidth: 70 },
+                4: { cellWidth: 90 },
+                5: { cellWidth: 'auto' }
+            },
+            margin: { left: 40, right: 40 }
+        });
+        yPos = doc.lastAutoTable.finalY + 20;
+    });
+
+    doc.save('Exam_Timetable.pdf');
+    showToast('Timetable exported');
+}
+
+// ==========================================================================
+//   INVIGILATION ROSTER
+// ==========================================================================
+function renderInvigilationRoster() {
+    const container = $('invigilationRoster');
+    if (!container) return;
+    const exams = store.examSchedules || [];
+    const dateFilter = $('invigDateFilter') ? $('invigDateFilter').value : 'all';
+    const staffFilter = $('invigStaffFilter') ? $('invigStaffFilter').value : 'all';
+    const statusFilter = $('invigStatusFilter') ? $('invigStatusFilter').value : 'all';
+
+    let filtered = exams;
+    if (dateFilter !== 'all') filtered = filtered.filter(e => e.date === dateFilter);
+    if (staffFilter !== 'all') filtered = filtered.filter(e => e.invigilatorId === staffFilter || e.assistantInvigilatorId === staffFilter);
+
+    // Filter by invigilation engagement status
+    if (statusFilter !== 'all') {
+        filtered = filtered.filter(e => {
+            const chiefStatus = (e.invigStatus && e.invigStatus.chief) || 'Pending';
+            const asstStatus = (e.invigStatus && e.invigStatus.assistant) || 'Pending';
+            return chiefStatus === statusFilter || asstStatus === statusFilter;
+        });
+    }
+
+    if (filtered.length === 0) {
+        container.innerHTML = `
+            <div class="heatmap-empty" style="padding:2rem;">
+                <i class="fa-solid fa-user-shield" style="font-size:2.5rem; color:var(--text-muted); opacity:0.3;"></i>
+                <p style="margin-top:0.5rem;">No invigilation duties match the selected filters.</p>
+            </div>`;
+        return;
+    }
+
+    // Sort by date + time
+    filtered.sort((a, b) => {
+        const da = (a.date || '') + (a.startTime || '');
+        const db = (b.date || '') + (b.startTime || '');
+        return da.localeCompare(db);
+    });
+
+    container.innerHTML = filtered.map(e => {
+        const invig = e.invigilatorId ? StaffRepo.getById(e.invigilatorId) : null;
+        const asst = e.assistantInvigilatorId ? StaffRepo.getById(e.assistantInvigilatorId) : null;
+        const dateLabel = e.date ? new Date(e.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : 'TBD';
+        const endTime = computeExamEndTime(e.startTime, e.duration);
+        const chiefStatus = (e.invigStatus && e.invigStatus.chief) || 'Pending';
+        const asstStatus = (e.invigStatus && e.invigStatus.assistant) || 'Pending';
+
+        return `
+            <div class="invig-duty-card">
+                <div class="idc-time">
+                    <div class="idc-date">${escapeHtml(dateLabel)}</div>
+                    <div class="idc-time-val">${escapeHtml(e.startTime || '')} - ${escapeHtml(endTime)}</div>
+                </div>
+                <div class="idc-body">
+                    <h4>${escapeHtml(e.name)}</h4>
+                    <div class="idc-meta">
+                        <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(e.grade)}${e.stream && e.stream !== 'all' ? ' · ' + escapeHtml(e.stream) : ''}</span>
+                        <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(e.venue || 'TBD')}</span>
+                        <span><i class="fa-solid fa-clock"></i> ${e.duration || 60} min</span>
+                        <span><i class="fa-solid fa-hourglass-start"></i> Report: ${escapeHtml(e.reportingTime || '07:45')}</span>
+                    </div>
+                </div>
+                <div class="idc-staff">
+                    <div class="idc-chief ${invig ? '' : 'unassigned'}">
+                        <div class="idc-staff-row">
+                            <i class="fa-solid fa-shield-halved"></i>
+                            <div>
+                                <small>Chief Invigilator</small>
+                                <strong>${invig ? escapeHtml(invig.name) : 'Unassigned'}</strong>
+                            </div>
+                        </div>
+                        ${invig ? `
+                            <div class="idc-engagement">
+                                <span class="invig-status-badge invig-status-${chiefStatus.toLowerCase()}">${chiefStatus}</span>
+                                <div class="invig-actions">
+                                    <button class="btn btn-xs btn-success" onclick="setInvigStatus('${e.id}', 'chief', 'Accepted')" title="Accept"><i class="fa-solid fa-check"></i></button>
+                                    <button class="btn btn-xs btn-danger" onclick="setInvigStatus('${e.id}', 'chief', 'Declined')" title="Decline"><i class="fa-solid fa-xmark"></i></button>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                    ${asst ? `
+                        <div class="idc-assistant">
+                            <div class="idc-staff-row">
+                                <i class="fa-solid fa-user"></i>
+                                <div>
+                                    <small>Assistant</small>
+                                    <strong>${escapeHtml(asst.name)}</strong>
+                                </div>
+                            </div>
+                            <div class="idc-engagement">
+                                <span class="invig-status-badge invig-status-${asstStatus.toLowerCase()}">${asstStatus}</span>
+                                <div class="invig-actions">
+                                    <button class="btn btn-xs btn-success" onclick="setInvigStatus('${e.id}', 'assistant', 'Accepted')" title="Accept"><i class="fa-solid fa-check"></i></button>
+                                    <button class="btn btn-xs btn-danger" onclick="setInvigStatus('${e.id}', 'assistant', 'Declined')" title="Decline"><i class="fa-solid fa-xmark"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Set invigilation engagement status (accept/decline)
+function setInvigStatus(examId, role, status) {
+    const exam = (store.examSchedules || []).find(e => e.id === examId);
+    if (!exam) return;
+    if (!exam.invigStatus) exam.invigStatus = { chief: 'Pending', assistant: 'Pending' };
+    exam.invigStatus[role] = status;
+    saveData();
+    renderInvigilationRoster();
+    showToast(`Invigilation ${status === 'Accepted' ? 'accepted' : 'declined'}`);
+}
+
+// Show invigilation workload balance across all staff
+function showInvigilationWorkload() {
+    const exams = store.examSchedules || [];
+    const staff = StaffRepo.getAll();
+
+    // Count duties per staff member
+    const workload = {};
+    staff.forEach(s => { workload[s.id] = { name: s.name, designation: s.designation || 'Staff', photo: s.photo, chief: 0, assistant: 0, accepted: 0, declined: 0, pending: 0 }; });
+    exams.forEach(e => {
+        if (e.invigilatorId && workload[e.invigilatorId]) {
+            workload[e.invigilatorId].chief++;
+            const st = (e.invigStatus && e.invigStatus.chief) || 'Pending';
+            if (st === 'Accepted') workload[e.invigilatorId].accepted++;
+            else if (st === 'Declined') workload[e.invigilatorId].declined++;
+            else workload[e.invigilatorId].pending++;
+        }
+        if (e.assistantInvigilatorId && workload[e.assistantInvigilatorId]) {
+            workload[e.assistantInvigilatorId].assistant++;
+            const st = (e.invigStatus && e.invigStatus.assistant) || 'Pending';
+            if (st === 'Accepted') workload[e.assistantInvigilatorId].accepted++;
+            else if (st === 'Declined') workload[e.assistantInvigilatorId].declined++;
+            else workload[e.assistantInvigilatorId].pending++;
+        }
+    });
+
+    // Sort by total duties (chief + assistant) descending
+    const items = Object.values(workload).filter(w => w.chief + w.assistant > 0)
+        .sort((a, b) => (b.chief + b.assistant) - (a.chief + a.assistant));
+
+    if (items.length === 0) {
+        showToast('No invigilation duties assigned yet', 'error');
+        return;
+    }
+
+    // Build modal
+    const existing = $('invigWorkloadModal');
+    if (existing) existing.remove();
+    const maxDuties = Math.max(...items.map(i => i.chief + i.assistant), 1);
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop active';
+    modal.id = 'invigWorkloadModal';
+    modal.innerHTML = `
+        <div class="modal modal-lg" style="max-width: 720px;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #6366f1, #4f46e5); color: white;">
+                <h3><i class="fa-solid fa-scale-balanced"></i> Invigilation Workload Balance</h3>
+                <button data-dismiss="modal" style="color:white;">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 1.25rem; max-height: 65vh; overflow-y: auto;">
+                <p style="margin:0 0 1rem; font-size:0.82rem; color:var(--text-muted);">
+                    Distribution of invigilation duties across staff. Higher bars indicate heavier workload.
+                </p>
+                <div style="display:flex; flex-direction:column; gap:0.65rem;">
+                    ${items.map(w => {
+                        const total = w.chief + w.assistant;
+                        const pct = (total / maxDuties) * 100;
+                        let barColor = '#22C55E';
+                        if (total >= 5) barColor = '#ef4444';
+                        else if (total >= 3) barColor = '#f59e0b';
+                        return `
+                            <div class="workload-bar-item">
+                                <div class="wbi-info">
+                                    <div class="wbi-avatar"><img src="${w.photo || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'"></div>
+                                    <div class="wbi-name">
+                                        <strong>${escapeHtml(w.name)}</strong>
+                                        <small>${escapeHtml(w.designation)}</small>
+                                    </div>
+                                </div>
+                                <div class="wbi-bar-wrapper">
+                                    <div class="wbi-bar" style="width: ${pct}%; background: ${barColor};"></div>
+                                </div>
+                                <div class="wbi-counts">
+                                    <span class="wbi-count-chief"><i class="fa-solid fa-shield-halved"></i> ${w.chief} chief</span>
+                                    <span class="wbi-count-asst"><i class="fa-solid fa-user"></i> ${w.assistant} asst</span>
+                                </div>
+                                <div class="wbi-status">
+                                    ${w.accepted > 0 ? `<span class="invig-status-badge invig-status-accepted">${w.accepted} ✓</span>` : ''}
+                                    ${w.pending > 0 ? `<span class="invig-status-badge invig-status-pending">${w.pending} ⏳</span>` : ''}
+                                    ${w.declined > 0 ? `<span class="invig-status-badge invig-status-declined">${w.declined} ✗</span>` : ''}
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelectorAll('[data-dismiss="modal"]').forEach(btn => {
+        btn.addEventListener('click', () => modal.remove());
+    });
+}
+
+// ==========================================================================
+//   PERSONAL SCHEDULE — per-learner and per-staff exam timetables
+// ==========================================================================
+function populatePersonalScheduleEntities(type) {
+    const sel = $('personalScheduleEntity');
+    if (!sel) return;
+    if (type === 'learner') {
+        const students = StudentRepo.getAll();
+        sel.innerHTML = '<option value="">Select Learner...</option>' +
+            students.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.grade || '-')})</option>`).join('');
+    } else {
+        const staff = StaffRepo.getAll();
+        sel.innerHTML = '<option value="">Select Staff...</option>' +
+            staff.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.designation || 'Staff')})</option>`).join('');
+    }
+}
+
+function renderPersonalSchedule() {
+    const container = $('personalScheduleView');
+    if (!container) return;
+    const type = $('personalScheduleType') ? $('personalScheduleType').value : 'learner';
+    const entityId = $('personalScheduleEntity') ? $('personalScheduleEntity').value : '';
+
+    if (!entityId) {
+        container.innerHTML = '<div class="heatmap-empty">Select a person to view their exam schedule.</div>';
+        return;
+    }
+
+    const exams = store.examSchedules || [];
+    let relevantExams = [];
+
+    if (type === 'learner') {
+        const student = StudentRepo.getById(entityId);
+        if (!student) { container.innerHTML = '<div class="heatmap-empty">Learner not found.</div>'; return; }
+
+        // Exams for this learner's grade
+        relevantExams = exams.filter(e => e.grade === student.grade &&
+            (!e.stream || e.stream === 'all' || e.stream === student.stream));
+
+        // Render header
+        let html = `
+            <div class="personal-schedule-header">
+                <div class="psh-info">
+                    <div class="psh-avatar"><img src="${student.photo || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'"></div>
+                    <div>
+                        <h3>${escapeHtml(student.name)}</h3>
+                        <p>Grade ${escapeHtml(student.grade || '-')} · Stream ${escapeHtml(student.stream || '-')} · ADM ${escapeHtml(student.reg || '-')}</p>
+                    </div>
+                </div>
+                <div class="psh-stats">
+                    <span class="psh-stat"><strong>${relevantExams.length}</strong> exams</span>
+                </div>
+            </div>
+        `;
+
+        if (relevantExams.length === 0) {
+            html += '<div class="heatmap-empty">No exams scheduled for this learner\'s grade.</div>';
+        } else {
+            html += '<div class="personal-schedule-list">';
+            // Group by date
+            const byDate = {};
+            relevantExams.forEach(e => {
+                const d = e.date || 'Undated';
+                if (!byDate[d]) byDate[d] = [];
+                byDate[d].push(e);
+            });
+            Object.keys(byDate).sort((a, b) => new Date(a) - new Date(b)).forEach(date => {
+                const dateObj = date === 'Undated' ? null : new Date(date);
+                const dateLabel = dateObj ? dateObj.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Undated';
+                const dayExams = byDate[date].sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+                html += `
+                    <div class="ps-day">
+                        <div class="ps-day-header">${escapeHtml(dateLabel)}</div>
+                        ${dayExams.map(e => {
+                            const endTime = computeExamEndTime(e.startTime, e.duration);
+                            const subjects = (e.subjects || []).map(s => s.name).join(', ');
+                            const invig = e.invigilatorId ? StaffRepo.getById(e.invigilatorId) : null;
+                            return `
+                                <div class="ps-exam-row">
+                                    <div class="ps-time">${escapeHtml(e.startTime || '')} - ${escapeHtml(endTime)}</div>
+                                    <div class="ps-detail">
+                                        <strong>${escapeHtml(e.name)}</strong>
+                                        <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(e.venue || 'TBD')}</span>
+                                        <span><i class="fa-solid fa-book"></i> ${escapeHtml(subjects || 'All subjects')}</span>
+                                        <span><i class="fa-solid fa-clock"></i> Report by ${escapeHtml(e.reportingTime || '07:45')}</span>
+                                        ${invig ? `<span><i class="fa-solid fa-user-shield"></i> ${escapeHtml(invig.name)}</span>` : ''}
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                `;
+            });
+            html += '</div>';
+        }
+        container.innerHTML = html;
+    } else {
+        // Staff / Invigilator schedule
+        const staffMember = StaffRepo.getById(entityId);
+        if (!staffMember) { container.innerHTML = '<div class="heatmap-empty">Staff not found.</div>'; return; }
+
+        // Exams where this staff is chief or assistant invigilator
+        relevantExams = exams.filter(e => e.invigilatorId === entityId || e.assistantInvigilatorId === entityId);
+
+        let html = `
+            <div class="personal-schedule-header">
+                <div class="psh-info">
+                    <div class="psh-avatar"><img src="${staffMember.photo || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'"></div>
+                    <div>
+                        <h3>${escapeHtml(staffMember.name)}</h3>
+                        <p>${escapeHtml(staffMember.designation || 'Staff')} · ${escapeHtml(staffMember.dept || '-')}</p>
+                    </div>
+                </div>
+                <div class="psh-stats">
+                    <span class="psh-stat"><strong>${relevantExams.length}</strong> duties</span>
+                </div>
+            </div>
+        `;
+
+        if (relevantExams.length === 0) {
+            html += '<div class="heatmap-empty">No invigilation duties assigned to this staff member.</div>';
+        } else {
+            html += '<div class="personal-schedule-list">';
+            const byDate = {};
+            relevantExams.forEach(e => {
+                const d = e.date || 'Undated';
+                if (!byDate[d]) byDate[d] = [];
+                byDate[d].push(e);
+            });
+            Object.keys(byDate).sort((a, b) => new Date(a) - new Date(b)).forEach(date => {
+                const dateObj = date === 'Undated' ? null : new Date(date);
+                const dateLabel = dateObj ? dateObj.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Undated';
+                const dayExams = byDate[date].sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+                html += `
+                    <div class="ps-day">
+                        <div class="ps-day-header">${escapeHtml(dateLabel)}</div>
+                        ${dayExams.map(e => {
+                            const endTime = computeExamEndTime(e.startTime, e.duration);
+                            const isChief = e.invigilatorId === entityId;
+                            const status = e.invigStatus ? (isChief ? e.invigStatus.chief : e.invigStatus.assistant) : 'Pending';
+                            return `
+                                <div class="ps-exam-row">
+                                    <div class="ps-time">${escapeHtml(e.startTime || '')} - ${escapeHtml(endTime)}</div>
+                                    <div class="ps-detail">
+                                        <strong>${escapeHtml(e.name)}</strong>
+                                        <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(e.grade)}</span>
+                                        <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(e.venue || 'TBD')}</span>
+                                        <span><i class="fa-solid fa-shield-halved"></i> ${isChief ? 'Chief Invigilator' : 'Assistant Invigilator'}</span>
+                                        <span class="invig-status-badge invig-status-${status.toLowerCase()}">${status}</span>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                `;
+            });
+            html += '</div>';
+        }
+        container.innerHTML = html;
+    }
+}
+
+// Export personal schedule as PDF
+function exportPersonalSchedulePDF() {
+    if (!window.jspdf) { showToast('PDF library not loaded', 'error'); return; }
+    const type = $('personalScheduleType') ? $('personalScheduleType').value : 'learner';
+    const entityId = $('personalScheduleEntity') ? $('personalScheduleEntity').value : '';
+    if (!entityId) { showToast('Select a person first', 'error'); return; }
+
+    const exams = store.examSchedules || [];
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 15;
+
+    // Header
+    doc.setFillColor(0, 51, 102);
+    doc.rect(0, 0, pageWidth, 32, 'F');
+    doc.setFontSize(16).setFont(undefined, 'bold').setTextColor(255);
+    doc.text(store.settings.schoolName || 'School', pageWidth / 2, 13, { align: 'center' });
+    doc.setFontSize(10).setFont(undefined, 'normal');
+    doc.text(type === 'learner' ? 'PERSONAL EXAMINATION TIMETABLE' : 'INVIGILATION DUTY SCHEDULE', pageWidth / 2, 25, { align: 'center' });
+
+    let yPos = 42;
+    let relevantExams = [];
+    let personName = '';
+
+    if (type === 'learner') {
+        const student = StudentRepo.getById(entityId);
+        if (!student) return;
+        personName = student.name;
+        relevantExams = exams.filter(e => e.grade === student.grade && (!e.stream || e.stream === 'all' || e.stream === student.stream));
+        doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
+        doc.text(`Name: ${student.name}`, margin, yPos);
+        doc.text(`Grade: ${student.grade} (${student.stream || '-'})`, margin + 100, yPos);
+        doc.text(`ADM: ${student.reg || '-'}`, margin, yPos + 6);
+        yPos += 14;
+    } else {
+        const staffMember = StaffRepo.getById(entityId);
+        if (!staffMember) return;
+        personName = staffMember.name;
+        relevantExams = exams.filter(e => e.invigilatorId === entityId || e.assistantInvigilatorId === entityId);
+        doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
+        doc.text(`Staff: ${staffMember.name}`, margin, yPos);
+        doc.text(`Role: ${staffMember.designation || 'Staff'}`, margin + 100, yPos);
+        yPos += 14;
+    }
+
+    if (relevantExams.length === 0) {
+        doc.setFontSize(11).setTextColor(100);
+        doc.text('No exams scheduled.', pageWidth / 2, yPos + 10, { align: 'center' });
+    } else {
+        const tableBody = relevantExams.sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime)).map(e => {
+            const endTime = computeExamEndTime(e.startTime, e.duration);
+            const dateStr = e.date ? new Date(e.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '-';
+            const subjects = (e.subjects || []).map(s => s.name).join(', ');
+            const invig = e.invigilatorId ? StaffRepo.getById(e.invigilatorId) : null;
+            const role = type === 'staff' ? (e.invigilatorId === entityId ? 'Chief' : 'Assistant') : '';
+            return [dateStr, `${e.startTime || ''}-${endTime}`, e.name, e.grade, e.venue || '-', subjects.substring(0, 30), role];
+        });
+
+        doc.autoTable({
+            startY: yPos,
+            head: [['Date', 'Time', 'Exam', 'Grade', 'Venue', 'Subjects', type === 'staff' ? 'Role' : '']],
+            body: tableBody,
+            theme: 'grid',
+            headStyles: { fillColor: [0, 51, 102], textColor: 255, fontSize: 8 },
+            bodyStyles: { fontSize: 8, cellPadding: 3 },
+            margin: { left: margin, right: margin }
+        });
+    }
+
+    addDocFooter(doc, false);
+    const safeName = personName.replace(/[^a-z0-9]/gi, '_');
+    doc.save(`${type === 'learner' ? 'Exam_Schedule' : 'Invigilation_Duties'}_${safeName}.pdf`);
+    showToast('Personal schedule exported');
+}
+
+// ==========================================================================
+//   GRADING OVERVIEW — shows all exams with grading progress + deadlines
+// ==========================================================================
+function renderGradingOverview() {
+    const container = $('gradingOverview');
+    if (!container) return;
+    const exams = store.examSchedules || [];
+
+    if (exams.length === 0) {
+        container.innerHTML = `
+            <div class="heatmap-empty" style="padding:2rem;">
+                <i class="fa-solid fa-pen-ruler" style="font-size:2.5rem; color:var(--text-muted); opacity:0.3;"></i>
+                <p style="margin-top:0.5rem;">No exams to grade yet.</p>
+            </div>`;
+        return;
+    }
+
+    container.innerHTML = exams.map(exam => {
+        const results = exam.results || [];
+        const subjects = exam.subjects || [];
+        const fullyGraded = results.filter(r => countGradedSubjects(r, exam) === subjects.length).length;
+        const partial = results.filter(r => countGradedSubjects(r, exam) > 0 && countGradedSubjects(r, exam) < subjects.length).length;
+        const pending = results.filter(r => countGradedSubjects(r, exam) === 0).length;
+        const total = results.length;
+        const pct = total > 0 ? Math.round(fullyGraded / total * 100) : 0;
+        const status = exam.status || 'Scheduled';
+        const statusClass = status.replace(/\s+/g, '-');
+
+        // Deadline analysis
+        let deadlineBadge = '';
+        if (exam.scoreSubmissionDeadline) {
+            const now = new Date();
+            const deadline = new Date(exam.scoreSubmissionDeadline);
+            const diffHours = (deadline - now) / (1000 * 60 * 60);
+            if (diffHours < 0 && pct < 100) {
+                deadlineBadge = `<span class="deadline-badge deadline-overdue"><i class="fa-solid fa-circle-exclamation"></i> Overdue by ${Math.abs(Math.round(diffHours / 24))}d</span>`;
+            } else if (diffHours < 24 && pct < 100) {
+                deadlineBadge = `<span class="deadline-badge deadline-urgent"><i class="fa-solid fa-clock"></i> Due in ${Math.round(diffHours)}h</span>`;
+            } else if (diffHours < 72 && pct < 100) {
+                deadlineBadge = `<span class="deadline-badge deadline-soon"><i class="fa-solid fa-hourglass-half"></i> Due in ${Math.round(diffHours / 24)}d</span>`;
+            } else {
+                deadlineBadge = `<span class="deadline-badge deadline-normal"><i class="fa-regular fa-calendar-check"></i> Due ${deadline.toLocaleDateString('en-GB', {day:'numeric',month:'short'})}</span>`;
+            }
+        }
+
+        return `
+            <div class="grading-overview-card" onclick="openExamGradingModal('${exam.id}')">
+                <div class="goc-header">
+                    <div>
+                        <h4>${escapeHtml(exam.name)}</h4>
+                        <div class="goc-meta">
+                            <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(exam.grade)}</span>
+                            <span><i class="fa-solid fa-calendar"></i> ${exam.date ? new Date(exam.date).toLocaleDateString('en-GB') : '-'}</span>
+                            <span><i class="fa-solid fa-book"></i> ${subjects.length} subject${subjects.length === 1 ? '' : 's'}</span>
+                        </div>
+                    </div>
+                    <span class="exam-status-badge ${statusClass}">${escapeHtml(status)}</span>
+                </div>
+                ${deadlineBadge ? `<div class="goc-deadline">${deadlineBadge}</div>` : ''}
+                <div class="goc-progress-row">
+                    <div class="goc-progress-bar">
+                        <div class="goc-progress-fill" style="width: ${pct}%"></div>
+                    </div>
+                    <span class="goc-progress-pct">${pct}%</span>
+                </div>
+                <div class="goc-stats">
+                    <span class="goc-stat graded"><i class="fa-solid fa-circle-check"></i> ${fullyGraded} fully graded</span>
+                    <span class="goc-stat partial"><i class="fa-solid fa-circle-half-stroke"></i> ${partial} partial</span>
+                    <span class="goc-stat pending"><i class="fa-regular fa-circle"></i> ${pending} pending</span>
+                    <span class="goc-stat total"><i class="fa-solid fa-users"></i> ${total} learners</span>
+                </div>
+                <div class="goc-actions">
+                    <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openExamGradingModal('${exam.id}')"><i class="fa-solid fa-pen-ruler"></i> Enter Scores</button>
+                    <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); exportExamScores('${exam.id}')"><i class="fa-solid fa-download"></i> Export</button>
+                    <button class="btn btn-sm btn-success" onclick="event.stopPropagation(); importExamScoresPrompt('${exam.id}')"><i class="fa-solid fa-upload"></i> Import</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Helper: trigger file import dialog for an exam
+function importExamScoresPrompt(examId) {
+    examGradingCurrentId = examId;
+    const fileInput = $('egImportFile');
+    if (fileInput) fileInput.click();
 }
 
 function renderExamListGrid() {
@@ -6196,18 +7560,19 @@ function renderExamListGrid() {
 
     container.innerHTML = filtered.map(exam => {
         const status = exam.status || 'Scheduled';
-        const subjects = (exam.subjects || []).map(s => s.name || s);
+        const subjects = safeArray(exam.subjects);
         const grade = exam.grade || '—';
         const dateStr = exam.date ? new Date(exam.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
         const term = exam.term || '—';
         const type = exam.type || '—';
         const duration = exam.duration || 60;
 
-        // Grading progress
+        // Grading progress — use countGradedSubjects for accurate per-subject progress
         const results = exam.results || [];
-        const gradedCount = results.filter(r => r.score !== null && r.score !== undefined && r.score !== '').length;
+        const gradedCount = results.filter(r => countGradedSubjects(r, exam) > 0).length;
+        const fullyGradedCount = results.filter(r => countGradedSubjects(r, exam) === subjects.length).length;
         const totalStudents = results.length;
-        const progressPct = totalStudents > 0 ? Math.round(gradedCount / totalStudents * 100) : 0;
+        const progressPct = totalStudents > 0 ? Math.round(fullyGradedCount / totalStudents * 100) : 0;
 
         const statusClass = status.replace(/\s+/g, '-');
 
@@ -6221,7 +7586,7 @@ function renderExamListGrid() {
                     <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(grade)}</span>
                     <span><i class="fa-solid fa-calendar"></i> ${dateStr}</span>
                     <span><i class="fa-solid fa-clock"></i> ${duration} min</span>
-                    <span><i class="fa-solid fa-book"></i> ${type}</span>
+                    <span><i class="fa-solid fa-book"></i> ${escapeHtml(type)}</span>
                     <span><i class="fa-solid fa-folder"></i> ${escapeHtml(term)}</span>
                 </div>
                 <div class="exam-card-subjects">
@@ -6231,7 +7596,7 @@ function renderExamListGrid() {
                     <div>
                         <div style="display:flex; justify-content:space-between; font-size:0.72rem; color:var(--text-muted); margin-bottom:4px;">
                             <span>Grading Progress</span>
-                            <span>${gradedCount} / ${totalStudents}</span>
+                            <span>${fullyGradedCount}/${totalStudents} fully graded${gradedCount > fullyGradedCount ? ` · ${gradedCount - fullyGradedCount} partial` : ''}</span>
                         </div>
                         <div class="exam-card-progress">
                             <div class="exam-card-progress-fill" style="width: ${progressPct}%"></div>
@@ -6255,6 +7620,25 @@ function openExamFormModal(examId) {
     $('examEditId').value = '';
     populateExamSubjectsCheckboxes('');
 
+    // Populate invigilator dropdowns from staff
+    const staff = StaffRepo.getAll();
+    const invigSel = $('examInvigilator');
+    const asstSel = $('examAssistantInvigilator');
+    if (invigSel) {
+        invigSel.innerHTML = '<option value="">Select Staff...</option>' +
+            staff.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.designation || 'Staff')})</option>`).join('');
+    }
+    if (asstSel) {
+        asstSel.innerHTML = '<option value="">None</option>' +
+            staff.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.designation || 'Staff')})</option>`).join('');
+    }
+
+    // Default date = today, default start time = 08:00
+    $('examDate').value = new Date().toISOString().slice(0, 10);
+    if ($('examStartTime')) $('examStartTime').value = '08:00';
+    if ($('examReportingTime')) $('examReportingTime').value = '07:45';
+    if ($('examClashWarning')) $('examClashWarning').style.display = 'none';
+
     if (examId) {
         const exam = (store.examSchedules || []).find(e => e.id === examId);
         if (exam) {
@@ -6265,22 +7649,46 @@ function openExamFormModal(examId) {
             $('examTerm').value = exam.term || 'Term 1';
             $('examGrade').value = exam.grade || '';
             populateExamSubjectsCheckboxes(exam.grade);
+            populateExamStreamDropdown(exam.grade);
+            if ($('examStream')) $('examStream').value = exam.stream || 'all';
             $('examDate').value = exam.date || '';
+            if ($('examStartTime')) $('examStartTime').value = exam.startTime || '08:00';
+            if ($('examReportingTime')) $('examReportingTime').value = exam.reportingTime || '07:45';
+            if ($('examSession')) $('examSession').value = exam.session || 'Morning';
             $('examDuration').value = exam.duration || 60;
             $('examTotalMarks').value = exam.totalMarks || 100;
+            if ($('examVenue')) $('examVenue').value = exam.venue || '';
+            if ($('examInvigilator')) $('examInvigilator').value = exam.invigilatorId || '';
+            if ($('examAssistantInvigilator')) $('examAssistantInvigilator').value = exam.assistantInvigilatorId || '';
+            if ($('examSeatingCapacity')) $('examSeatingCapacity').value = exam.seatingCapacity || '';
+            if ($('examRegDeadline')) $('examRegDeadline').value = exam.registrationDeadline || '';
+            if ($('examScoreDeadline')) $('examScoreDeadline').value = exam.scoreSubmissionDeadline || '';
+            if ($('examPublishDate')) $('examPublishDate').value = exam.resultsPublishDate || '';
             $('examNotes').value = exam.notes || '';
-            // Mark selected subjects
-            const selectedCodes = (exam.subjects || []).map(s => s.code);
+            
+            // FIX: Safely parse subjects and check checkboxes separately
+            const selectedCodes = safeArray(exam.subjects);
             document.querySelectorAll('input[name="examSubject"]').forEach(cb => {
                 if (selectedCodes.includes(cb.value)) cb.checked = true;
             });
         }
     } else {
-        setText('examFormTitle', 'Schedule New Exam');
-        // Default date = today
-        $('examDate').value = new Date().toISOString().slice(0, 10);
+        setText('examFormTitle', 'Schedule Exam');
     }
     openModal('examFormModal');
+}
+
+// Populate the stream dropdown based on grade
+function populateExamStreamDropdown(grade) {
+    const sel = $('examStream');
+    if (!sel) return;
+    if (!grade) {
+        sel.innerHTML = '<option value="all">All Streams</option>';
+        return;
+    }
+    const streams = Array.from(new Set(StudentRepo.findBy('grade', grade).map(s => s.stream).filter(Boolean))).sort();
+    sel.innerHTML = '<option value="all">All Streams</option>' +
+        streams.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
 }
 
 function populateExamSubjectsCheckboxes(grade) {
@@ -6308,7 +7716,11 @@ function handleExamFormSubmit(e) {
     const editId = $('examEditId').value;
     const grade = $('examGrade').value;
     const name = $('examName').value.trim();
+    const venue = $('examVenue').value.trim();
+    const invigilator = $('examInvigilator').value;
     if (!name || !grade) { showToast('Name and grade required', 'error'); return; }
+    if (!venue) { showToast('Venue is required', 'error'); return; }
+    if (!invigilator) { showToast('Chief invigilator is required', 'error'); return; }
 
     const selectedSubjects = Array.from(document.querySelectorAll('input[name="examSubject"]:checked')).map(cb => ({
         code: cb.value,
@@ -6319,19 +7731,51 @@ function handleExamFormSubmit(e) {
         return;
     }
 
+    // Check for exam clashes (venue or invigilator double-booking)
+    const clash = detectExamClash({
+        editId, date: $('examDate').value, startTime: $('examStartTime').value,
+        duration: parseInt($('examDuration').value) || 60, venue,
+        invigilatorId: invigilator, assistantInvigilatorId: $('examAssistantInvigilator').value || null
+    }, store.examSchedules || []);
+
+    if (clash) {
+        showExamClashWarning(clash, () => {
+            persistExamSchedule(editId, grade, name, venue, invigilator, selectedSubjects);
+        });
+        return;
+    }
+
+    persistExamSchedule(editId, grade, name, venue, invigilator, selectedSubjects);
+}
+
+function persistExamSchedule(editId, grade, name, venue, invigilator, selectedSubjects) {
     const examData = {
         id: editId || generateId(),
         name,
         type: $('examType').value,
         term: $('examTerm').value,
         grade,
+        stream: $('examStream').value || 'all',
         date: $('examDate').value,
+        startTime: $('examStartTime').value || '08:00',
+        reportingTime: $('examReportingTime').value || '07:45',
+        session: $('examSession').value,
         duration: parseInt($('examDuration').value) || 60,
         totalMarks: parseInt($('examTotalMarks').value) || 100,
+        venue,
+        invigilatorId: invigilator,
+        assistantInvigilatorId: $('examAssistantInvigilator').value || null,
+        seatingCapacity: $('examSeatingCapacity').value ? parseInt($('examSeatingCapacity').value) : null,
+        // Deadlines
+        registrationDeadline: $('examRegDeadline').value || null,
+        scoreSubmissionDeadline: $('examScoreDeadline').value || null,
+        resultsPublishDate: $('examPublishDate').value || null,
         subjects: selectedSubjects,
         notes: $('examNotes').value.trim(),
         status: 'Scheduled',
         results: [],
+        // Invigilation engagement
+        invigStatus: { chief: 'Pending', assistant: 'Pending' },
         createdAt: new Date().toISOString()
     };
 
@@ -6339,9 +7783,16 @@ function handleExamFormSubmit(e) {
     if (editId) {
         const idx = store.examSchedules.findIndex(e => e.id === editId);
         if (idx >= 0) {
-            // Preserve existing status & results
             examData.status = store.examSchedules[idx].status || 'Scheduled';
             examData.results = store.examSchedules[idx].results || [];
+            // Preserve invigilation engagement status if same invigilators
+            const prev = store.examSchedules[idx];
+            if (prev.invigStatus) {
+                examData.invigStatus = {
+                    chief: prev.invigilatorId === invigilator ? prev.invigStatus.chief : 'Pending',
+                    assistant: prev.assistantInvigilatorId === examData.assistantInvigilatorId ? prev.invigStatus.assistant : 'Pending'
+                };
+            }
             store.examSchedules[idx] = examData;
         }
     } else {
@@ -6350,7 +7801,155 @@ function handleExamFormSubmit(e) {
     saveData();
     closeModal('examFormModal');
     renderExamSystemDashboard();
+    renderExamTimetable();
+    renderInvigilationRoster();
+    renderGradingOverview();
+    renderPersonalSchedule();
     showToast(editId ? 'Exam updated' : 'Exam scheduled');
+}
+
+// Detect exam clashes — venue or invigilator double-booking on same date+time
+function detectExamClash(newExam, existing) {
+    const { editId, date, startTime, duration, venue, invigilatorId, assistantInvigilatorId } = newExam;
+    if (!date || !startTime) return null;
+
+    const newStart = parseTimeToMinutes(startTime);
+    const newEnd = newStart + (duration || 60);
+    const others = existing.filter(e => e.id !== editId && e.date === date);
+
+    // Check venue clash
+    for (const e of others) {
+        if (e.venue && e.venue.toLowerCase() === venue.toLowerCase()) {
+            const eStart = parseTimeToMinutes(e.startTime);
+            const eEnd = eStart + (e.duration || 60);
+            if (timeRangesOverlap(newStart, newEnd, eStart, eEnd)) {
+                return {
+                    type: 'venue',
+                    title: 'Venue Clash',
+                    message: `Venue <strong>${escapeHtml(venue)}</strong> is already booked for <strong>${escapeHtml(e.name)}</strong> (${escapeHtml(e.grade)}) on ${e.date} at ${e.startTime}.`,
+                    detail: 'Two exams cannot use the same venue at the same time. Choose a different venue, time, or date.',
+                    conflictingExam: e
+                };
+            }
+        }
+    }
+
+    // Check invigilator clash (chief)
+    for (const e of others) {
+        if (e.invigilatorId && e.invigilatorId === invigilatorId) {
+            const eStart = parseTimeToMinutes(e.startTime);
+            const eEnd = eStart + (e.duration || 60);
+            if (timeRangesOverlap(newStart, newEnd, eStart, eEnd)) {
+                const staff = StaffRepo.getById(invigilatorId);
+                return {
+                    type: 'invigilator',
+                    title: 'Invigilator Clash',
+                    message: `<strong>${escapeHtml(staff ? staff.name : 'This invigilator')}</strong> is already assigned to invigilate <strong>${escapeHtml(e.name)}</strong> (${escapeHtml(e.grade)}) on ${e.date} at ${e.startTime}.`,
+                    detail: 'An invigilator cannot be in two venues at the same time. Choose a different invigilator, time, or date.',
+                    conflictingExam: e
+                };
+            }
+        }
+        // Check assistant invigilator clash
+        if (assistantInvigilatorId && e.invigilatorId === assistantInvigilatorId) {
+            const eStart = parseTimeToMinutes(e.startTime);
+            const eEnd = eStart + (e.duration || 60);
+            if (timeRangesOverlap(newStart, newEnd, eStart, eEnd)) {
+                const staff = StaffRepo.getById(assistantInvigilatorId);
+                return {
+                    type: 'invigilator',
+                    title: 'Assistant Invigilator Clash',
+                    message: `<strong>${escapeHtml(staff ? staff.name : 'The assistant')}</strong> is already chief invigilator for <strong>${escapeHtml(e.name)}</strong> at the same time.`,
+                    detail: 'Staff cannot invigilate two exams simultaneously.',
+                    conflictingExam: e
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
+function parseTimeToMinutes(timeStr) {
+    if (!timeStr) return 0;
+    const [h, m] = timeStr.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+}
+
+function timeRangesOverlap(start1, end1, start2, end2) {
+    return start1 < end2 && start2 < end1;
+}
+
+function showExamClashWarning(clash, onProceed) {
+    const existing = $('examClashModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop active';
+    modal.id = 'examClashModal';
+    modal.innerHTML = `
+        <div class="modal" style="max-width: 480px;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #ef4444, #dc2626); color: white;">
+                <h3><i class="fa-solid fa-triangle-exclamation"></i> ${clash.title}</h3>
+                <button data-dismiss="modal" style="color:white;">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 1.5rem;">
+                <div style="display:flex; gap:1rem; align-items:flex-start;">
+                    <div style="width:48px; height:48px; border-radius:50%; background:#fee2e2; color:#ef4444; display:flex; align-items:center; justify-content:center; font-size:1.4rem; flex-shrink:0;">
+                        <i class="fa-solid fa-circle-exclamation"></i>
+                    </div>
+                    <div style="flex:1;">
+                        <p style="margin:0 0 0.75rem; font-size:0.95rem; line-height:1.5;">${clash.message}</p>
+                        <p style="margin:0; font-size:0.82rem; color:var(--text-muted); line-height:1.5;">${clash.detail}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button class="btn btn-warning" id="btnOverrideClash"><i class="fa-solid fa-exclamation-triangle"></i> Override & Save Anyway</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    modal.querySelectorAll('[data-dismiss="modal"]').forEach(btn => {
+        btn.addEventListener('click', () => modal.remove());
+    });
+    const overrideBtn = modal.querySelector('#btnOverrideClash');
+    if (overrideBtn) {
+        overrideBtn.addEventListener('click', () => {
+            modal.remove();
+            onProceed();
+        });
+    }
+}
+
+// Live exam clash detection on form changes
+function checkExamClashLive() {
+    const editId = $('examEditId').value;
+    const date = $('examDate').value;
+    const startTime = $('examStartTime').value;
+    const duration = parseInt($('examDuration').value) || 60;
+    const venue = $('examVenue').value.trim();
+    const invigilatorId = $('examInvigilator').value;
+    const assistantInvigilatorId = $('examAssistantInvigilator').value || null;
+
+    const warningEl = $('examClashWarning');
+    if (!warningEl) return;
+
+    if (!date || !startTime || !venue || !invigilatorId) {
+        warningEl.style.display = 'none';
+        return;
+    }
+
+    const clash = detectExamClash({ editId, date, startTime, duration, venue, invigilatorId, assistantInvigilatorId }, store.examSchedules || []);
+    if (clash) {
+        warningEl.style.display = 'flex';
+        warningEl.className = 'tt-clash-warning ' + (clash.type === 'venue' ? 'grade' : 'teacher');
+        warningEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> <div><strong>${escapeHtml(clash.title)}:</strong> ${clash.message}</div>`;
+    } else {
+        warningEl.style.display = 'none';
+    }
 }
 
 function deleteExamSchedule(examId) {
@@ -6484,12 +8083,12 @@ function renderExamGradingTable(exam) {
         const statusLabel = gradedSubs === 0 ? 'Pending' : (gradedSubs === subjects.length ? 'Graded' : 'Partial');
         const statusClass = gradedSubs === 0 ? 'Pending' : (gradedSubs === subjects.length ? 'Graded' : 'Partial');
 
-        // Per-subject score inputs
+        // Per-subject score inputs — use oninput for live updates, onblur for save flush
         let subjectCells = '';
         subjects.forEach(subj => {
             const val = r.subjectScores ? r.subjectScores[subj.code] : null;
             const displayVal = (val === null || val === undefined || val === '') ? '' : Number(val);
-            subjectCells += `<td class="eg-td-score"><input type="number" class="eg-score-input" min="0" max="${totalMarks}" value="${displayVal}" placeholder="-" data-idx="${idx}" data-code="${escapeHtml(subj.code)}" onchange="updateExamSubjectGrade('${exam.id}', ${idx}, '${escapeHtml(subj.code)}', this.value, ${totalMarks})"></td>`;
+            subjectCells += `<td class="eg-td-score"><input type="number" class="eg-score-input" min="0" max="${totalMarks}" value="${displayVal}" placeholder="-" data-idx="${idx}" data-code="${escapeHtml(subj.code)}" oninput="updateExamSubjectGrade('${exam.id}', ${idx}, '${escapeHtml(subj.code)}', this.value, ${totalMarks})" onblur="flushExamSaves()"></td>`;
         });
 
         return `
@@ -6507,6 +8106,8 @@ function renderExamGradingTable(exam) {
 }
 
 // Update a single subject score for a student in an exam
+// Uses targeted DOM updates instead of full table re-render to preserve input focus
+let _examSaveTimer = null;
 function updateExamSubjectGrade(examId, idx, subjectCode, value, totalMarks) {
     const exam = (store.examSchedules || []).find(e => e.id === examId);
     if (!exam || !exam.results || !exam.results[idx]) return;
@@ -6516,7 +8117,10 @@ function updateExamSubjectGrade(examId, idx, subjectCode, value, totalMarks) {
     const num = (value === '' || value === null || value === undefined) ? null : Number(value);
     if (num !== null && (isNaN(num) || num < 0 || num > totalMarks)) {
         showToast(`Score must be between 0 and ${totalMarks}`, 'error');
-        renderExamGradingTable(exam); // re-render to restore previous value
+        // Restore the previous value in the input without re-rendering
+        const prevVal = exam.results[idx].subjectScores[subjectCode];
+        const input = document.querySelector(`input[data-idx="${idx}"][data-code="${subjectCode}"]`);
+        if (input) input.value = prevVal !== undefined ? prevVal : '';
         return;
     }
 
@@ -6526,11 +8130,23 @@ function updateExamSubjectGrade(examId, idx, subjectCode, value, totalMarks) {
         exam.results[idx].subjectScores[subjectCode] = num;
     }
 
-    // Recompute average
+    // Recompute average and status for this student only
     exam.results[idx].score = computeStudentAverage(exam.results[idx], exam);
     exam.results[idx].status = countGradedSubjects(exam.results[idx], exam) > 0 ? 'Graded' : 'Pending';
-    saveData();
-    renderExamGradingTable(exam);
+
+    // Update only this row's Avg/Grade/Status cells — do NOT re-render the whole table
+    updateExamRowCells(exam, idx);
+
+    // Update the progress counter
+    const gradedCount = (exam.results || []).filter(r => countGradedSubjects(r, exam) > 0).length;
+    const fullyGradedCount = (exam.results || []).filter(r => countGradedSubjects(r, exam) === (exam.subjects || []).length).length;
+    setText('egProgress', `${fullyGradedCount} / ${exam.results.length} fully graded · ${gradedCount} partial`);
+
+    // Debounced save — don't hit the server on every keystroke
+    if (_examSaveTimer) clearTimeout(_examSaveTimer);
+    _examSaveTimer = setTimeout(() => {
+        saveData();
+    }, 800);
 
     // Auto-advance status to "Graded" if ALL students have ALL subjects graded
     const allFullyGraded = exam.results.length > 0 && exam.results.every(r => countGradedSubjects(r, exam) === (exam.subjects || []).length);
@@ -6538,6 +8154,50 @@ function updateExamSubjectGrade(examId, idx, subjectCode, value, totalMarks) {
         exam.status = 'Graded';
         saveData();
         renderExamListGrid();
+    }
+}
+
+// Update only the Avg/Grade/Status cells for a specific row — preserves input focus
+function updateExamRowCells(exam, idx) {
+    const result = exam.results[idx];
+    if (!result) return;
+    const totalMarks = exam.totalMarks || 100;
+    const row = document.querySelector(`tr[data-student-id="${result.studentId}"]`);
+    if (!row) return;
+
+    const avg = computeStudentAverage(result, exam);
+    const avgCell = row.querySelector('.eg-td-avg');
+    if (avgCell) avgCell.textContent = avg !== null ? avg + '%' : '-';
+
+    let gradeClass = 'BE';
+    let gradeLabel = '-';
+    if (avg !== null) {
+        if (avg >= 80) { gradeClass = 'EE'; gradeLabel = 'EE'; }
+        else if (avg >= 50) { gradeClass = 'ME'; gradeLabel = 'ME'; }
+        else { gradeClass = 'BE'; gradeLabel = 'BE'; }
+    }
+    const gradeCell = row.querySelector('.eg-grade-cell');
+    if (gradeCell) {
+        gradeCell.className = `eg-grade-cell ${gradeClass}`;
+        gradeCell.textContent = gradeLabel;
+    }
+
+    const gradedSubs = countGradedSubjects(result, exam);
+    const statusLabel = gradedSubs === 0 ? 'Pending' : (gradedSubs === (exam.subjects || []).length ? 'Graded' : 'Partial');
+    const statusClass = gradedSubs === 0 ? 'Pending' : (gradedSubs === (exam.subjects || []).length ? 'Graded' : 'Partial');
+    const statusCell = row.querySelector('.eg-status-cell');
+    if (statusCell) {
+        statusCell.className = `eg-status-cell ${statusClass}`;
+        statusCell.textContent = statusLabel;
+    }
+}
+
+// Save any pending debounced exam saves when the modal closes
+function flushExamSaves() {
+    if (_examSaveTimer) {
+        clearTimeout(_examSaveTimer);
+        _examSaveTimer = null;
+        saveData();
     }
 }
 
@@ -9510,55 +11170,84 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================================================
 //   BATCH ASSESSMENT (UPDATED)
 // ==========================================================================
-function openBatchAssessmentModal() { 
-    const subjectId = currentExamContext.subjectId; 
-    const gradeId = currentExamContext.tradeId; 
-    if (!subjectId || !gradeId) return showToast('Select Grade and Subject first', 'error'); 
-    
-    const subject = store.learningAreas.find(s => s.id === subjectId); 
-    if (!subject) return; 
-    
-    $('batchSubjectName').innerText = subject.name; 
-    $('batchGradeName').innerText = gradeId; 
-    
-    const students = StudentRepo.findBy('grade', gradeId); 
-    const tbody = $('batchAssessmentBody'); 
-    tbody.innerHTML = ''; 
-    
-    if (students.length === 0) { 
-        tbody.innerHTML = `<tr><td colspan="5">No learners found.</td></tr>`; 
-        return openModal('batchAssessmentModal'); 
-    } 
-    
-    students.forEach(s => { 
-        const result = store.exams.find(e => e.studentId === s.id && e.unitCode === subject.code); 
-        const score = result ? result.score : '';
-        
-        let levelDisplay = '-';
-        let decisionDisplay = '-';
-        
-        if(result) {
-            const comp = getCompetenceStatus(result.score);
-            levelDisplay = comp.abbr; 
-            decisionDisplay = comp.decision; 
-        }
-        
-        tbody.innerHTML += `
-            <tr data-student-id="${s.id}">
-                <td>${s.reg}</td>
-                <td>${s.name}</td>
-                <td>
-                    <input type="number" class="form-control batch-score" min="0" max="100" value="${score}" style="width:80px; text-align:center;">
-                </td>
-                <td class="batch-level-display">${levelDisplay}</td>
-                <td class="batch-decision-display">${decisionDisplay}</td>
-            </tr>`; 
-    }); 
-    
-    tbody.removeEventListener('input', handleBatchScoreInput); 
-    tbody.addEventListener('input', handleBatchScoreInput); 
-    openModal('batchAssessmentModal'); 
+function openBatchAssessmentModal() {
+    const grade = currentExamContext.tradeId;
+    const subjectId = currentExamContext.subjectId;
+
+    if (!grade || !subjectId) return showToast('Select grade and subject first.', 'error');
+
+    const students = (store.students || []).filter(s => s.grade === grade).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (students.length === 0) return showToast('No students in this grade.', 'error');
+
+    const subject = (store.learningAreas || []).find(la => la.id === subjectId);
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+
+    let modal = $('batchAssessmentModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'batchAssessmentModal';
+        modal.className = 'modal-backdrop';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:700px;max-height:85vh;overflow-y:auto">
+                <div class="modal-header">
+                    <h3>Batch Assessment — <span id="batchAssessTitle"></span></h3>
+                    <button data-dismiss="modal" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body" id="batchAssessBody"></div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" id="btnSaveBatchAssessment">
+                        <i class="fa-solid fa-floppy-disk"></i> Save All
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        modal.querySelector('#btnSaveBatchAssessment').addEventListener('click', saveBatchAssessments);
+        modal.addEventListener('click', e => {
+            if (e.target.classList.contains('modal-backdrop')) closeModal('batchAssessmentModal');
+        });
+    }
+
+    $('batchAssessTitle').textContent = (subject ? subject.name : '') + ' — ' + grade;
+
+    let tableHtml = `
+        <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+            <thead>
+                <tr style="background:var(--bg);text-align:left">
+                    <th style="padding:10px;border-bottom:2px solid var(--border)">Student</th>
+                    <th style="padding:10px;border-bottom:2px solid var(--border);width:100px">CAT 1 /20</th>
+                    <th style="padding:10px;border-bottom:2px solid var(--border);width:100px">CAT 2 /20</th>
+                    <th style="padding:10px;border-bottom:2px solid var(--border);width:120px">End Term /60</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    students.forEach(s => {
+        const exams = (store.exams || []).filter(e =>
+            e.studentId === s.id && e.subjectId === subjectId && e.term === term && e.year === year
+        );
+        const cat1 = exams.find(e => e.examType === 'cat1');
+        const cat2 = exams.find(e => e.examType === 'cat2');
+        const endT = exams.find(e => e.examType === 'endTerm');
+
+        tableHtml += `
+            <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:8px">${escapeHtml(s.name || '')}<br><small style="color:var(--muted)">${escapeHtml(s.reg || '')}</small></td>
+                <td style="padding:8px"><input type="number" class="batch-score" data-sid="${s.id}" data-type="cat1" min="0" max="20" value="${cat1 ? cat1.score : ''}" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:center" /></td>
+                <td style="padding:8px"><input type="number" class="batch-score" data-sid="${s.id}" data-type="cat2" min="0" max="20" value="${cat2 ? cat2.score : ''}" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:center" /></td>
+                <td style="padding:8px"><input type="number" class="batch-score" data-sid="${s.id}" data-type="endTerm" min="0" max="60" value="${endT ? endT.score : ''}" style="width:80px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:center" /></td>
+            </tr>
+        `;
+    });
+
+    tableHtml += '</tbody></table>';
+    $('batchAssessBody').innerHTML = tableHtml;
+    openModal('batchAssessmentModal');
 }
+
 
 function handleBatchScoreInput(e) { 
     if (e.target.classList.contains('batch-score')) { 
@@ -9571,45 +11260,58 @@ function handleBatchScoreInput(e) {
     } 
 }
 
-function saveBatchAssessments() { 
-    const subjectId = currentExamContext.subjectId; 
-    const subject = store.learningAreas.find(s => s.id === subjectId); 
-    if (!subject) return; 
-    
-    const rows = $('batchAssessmentBody').querySelectorAll('tr[data-student-id]'); 
-    let count = 0; 
-    
-    rows.forEach(row => { 
-        const studentId = row.dataset.studentId; 
-        const scoreInput = row.querySelector('.batch-score'); 
-        const score = parseInt(scoreInput.value); 
-        
-        if (!isNaN(score) && score >= 0 && score <= 100) { 
-            const comp = getCompetenceStatus(score); 
-            
-            const data = { 
-                id: generateId(), 
-                studentId, 
-                unitCode: subject.code, 
-                score, 
-                level: comp.level, 
-                status: comp.decision, 
-                grade: comp.abbr, 
-                date: new Date().toISOString() 
-            }; 
-            
-            const existingIndex = store.exams.findIndex(e => e.studentId === studentId && e.unitCode === subject.code); 
-            if (existingIndex !== -1) store.exams[existingIndex] = data; 
-            else store.exams.push(data); 
-            count++; 
-        } 
-    }); 
-    
-    saveData(); 
-    closeModal('batchAssessmentModal'); 
-    renderDashboard(); 
-    showToast(`${count} assessments saved.`); 
-}
+function saveBatchAssessments() {
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+    const now = new Date().toISOString();
+
+    const maxMap = { cat1: 20, cat2: 20, endTerm: 60 };
+    const inputs = document.querySelectorAll('.batch-score');
+    let saved = 0;
+
+    inputs.forEach(inp => {
+        const raw = parseFloat(inp.value);
+        if (isNaN(raw)) return; // Skip blanks
+
+        const sid = inp.dataset.sid;
+        const type = inp.dataset.type;
+        const max = maxMap[type] || 100;
+        const score = Math.max(0, Math.min(max, raw));
+
+        const idx = store.exams.findIndex(e =>
+            e.studentId === sid && e.subjectId === subjectId && e.examType === type && e.term === term && e.year === year
+        );
+
+        const record = {
+            id: idx !== -1 ? store.exams[idx].id : generateId(),
+            studentId: sid,
+            subjectId,
+            grade,
+            examType: type,
+            term,
+            year,
+            score,
+            maxScore: max,
+            updatedAt: now
+        };
+
+        if (idx !== -1) store.exams[idx] = record;
+        else store.exams.push(record);
+        saved++;
+    });
+
+    if (saved > 0) {
+        if (typeof saveData === 'function') saveData();
+        closeModal('batchAssessmentModal');
+        showToast(saved + ' batch score(s) saved!');
+        // Refresh individual view if open
+        if (currentExamContext.studentId) loadCBETUnits();
+    } else {
+        showToast('Enter at least one score.', 'error');
+    }
+
 
 // ==========================================================================
 //   SIDEBAR TOGGLE LOGIC
@@ -11120,7 +12822,14 @@ try {
     if (typeof deleteExamSchedule === 'function') window.deleteExamSchedule = deleteExamSchedule;
     if (typeof updateExamGrade === 'function') window.updateExamGrade = updateExamGrade;
     if (typeof updateExamSubjectGrade === 'function') window.updateExamSubjectGrade = updateExamSubjectGrade;
+    if (typeof flushExamSaves === 'function') window.flushExamSaves = flushExamSaves;
     if (typeof setExamStatus === 'function') window.setExamStatus = setExamStatus;
+    if (typeof switchExamPortalTab === 'function') window.switchExamPortalTab = switchExamPortalTab;
+    if (typeof printExamTimetable === 'function') window.printExamTimetable = printExamTimetable;
+    if (typeof importExamScoresPrompt === 'function') window.importExamScoresPrompt = importExamScoresPrompt;
+    if (typeof setInvigStatus === 'function') window.setInvigStatus = setInvigStatus;
+    if (typeof showInvigilationWorkload === 'function') window.showInvigilationWorkload = showInvigilationWorkload;
+    if (typeof exportPersonalSchedulePDF === 'function') window.exportPersonalSchedulePDF = exportPersonalSchedulePDF;
     // Core utilities
     if (typeof showToast === 'function') window.showToast = showToast;
     if (typeof openModal === 'function') window.openModal = openModal;
@@ -11138,4 +12847,4 @@ try {
     // Bulk progress
     if (typeof generateBulkProgressReports === 'function') window.generateBulkProgressReports = generateBulkProgressReports;
     if (typeof initBulkProgressModal === 'function') window.initBulkProgressModal = initBulkProgressModal;
-} catch(e) { console.warn('Global export failed:', e); }
+} catch(e) { console.warn('Global export failed:', e);

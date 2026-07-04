@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ElimuTrack | Primary & JS Manager</title>
     <meta name="description" content="Modern Management System for Kenyan Primary and Junior Secondary Schools (CBC)">
-    
+    <!-- Inline SVG Favicon (no file needed) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect rx='18' width='100' height='100' fill='%2310b981'/%3E%3Ctext x='50%25' y='58%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='52' fill='white'%3EE%3C/text%3E%3C/svg%3E">
     <!-- Fonts & Icons -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,13 +17,15 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bcryptjs/2.4.3/bcrypt.min.js"></script>
 
     
     <!-- Main Stylesheet -->
-    <link rel="stylesheet" href="style.css"> 
-
+    
+<link rel="stylesheet" href="style.css?v=4"> 
+<script src="script.js?v=4"></script>
     <!-- Additional Modern Styles -->
     <style>
        
@@ -81,6 +84,7 @@
                 <div class="nav-section-content">
                     <li class="nav-item" data-page="curricula" tabindex="0"><i class="fa-solid fa-book-open"></i><span>Learning Areas</span></li>
                     <li class="nav-item" data-page="exams" tabindex="0"><i class="fa-solid fa-clipboard-check"></i><span>Assessment</span></li>
+                    <li class="nav-item" data-page="timetable" tabindex="0"><i class="fa-solid fa-calendar-days"></i><span>Timetable</span></li>
                 </div>
             </div>
             
@@ -254,6 +258,7 @@
                         <button data-type="line" title="Line"><i class="fa-solid fa-chart-line"></i></button>
                         <button data-type="doughnut" title="Doughnut"><i class="fa-solid fa-chart-pie"></i></button>
                         <button data-type="polarArea" title="Polar"><i class="fa-solid fa-bullseye"></i></button>
+                        
                     </div>
                     <select id="chartFilter" class="filter-select-modern dash-filter-sm">
                         <option value="all">All Levels</option>
@@ -435,14 +440,13 @@
 
 <!-- ANALYSIS SECTION -->
 <section id="analysis" class="view-section" aria-label="Analysis Section">
-    
+
     <div class="section-header-modern">
         <div class="header-info">
-            <h2>Academic Analysis</h2>
-            <p>Deep dive into curriculum performance, competency trends, and learner metrics.</p>
+            <h2>Academic Analytics</h2>
+            <p>Deep dive into curriculum performance, competency trends, and learner metrics across the institution.</p>
         </div>
         <div class="header-actions">
-            <!-- Grade Selector for Analysis Context -->
             <select id="analysisGradeSelect" class="filter-select-modern" style="min-width: 150px;">
                 <option value="all">Whole School</option>
                 <option value="Grade 7">Grade 7 (JSS)</option>
@@ -452,83 +456,145 @@
                 <option value="Grade 5">Grade 5</option>
                 <option value="Grade 6">Grade 6</option>
             </select>
+            <select id="analysisMetricSelect" class="filter-select-modern" style="min-width: 130px;">
+                <option value="avg">Average</option>
+                <option value="highest">Highest</option>
+                <option value="lowest">Needs Support</option>
+            </select>
             <button class="btn btn-secondary btn-sm" onclick="showToast('Report Generated')"><i class="fa-solid fa-download"></i> Export PDF</button>
         </div>
     </div>
 
     <!-- ANALYSIS BENTO GRID -->
-    <div class="analysis-container">
-        
-        <!-- TOP ROW: KPIs -->
-        <div class="analysis-kpi-row">
-            <div class="modern-card kpi-mini">
-                <div class="kmi-label">Class Average</div>
-                <div class="kmi-value" id="anaClassAvg">0%</div>
+    <div class="analysis-container modern-bento">
+
+        <!-- TOP ROW: SPARKLINE KPI CARDS -->
+        <div class="analysis-kpi-row kpi-sparkline-row">
+            <div class="modern-card kpi-spark-card" data-tone="primary">
+                <div class="ksc-top">
+                    <div class="ksc-icon"><i class="fa-solid fa-chart-line"></i></div>
+                    <div class="ksc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="anaClassAvgTrend">+0%</span></div>
+                </div>
+                <div class="ksc-body">
+                    <div class="ksc-label">Class Average</div>
+                    <div class="ksc-value" id="anaClassAvg">0%</div>
+                </div>
+                <div class="ksc-spark"><canvas id="sparkClassAvg" height="40"></canvas></div>
             </div>
-            <div class="modern-card kpi-mini">
-                <div class="kmi-label">Exceeding Exp.</div>
-                <div class="kmi-value" id="anaExceeding" style="color: var(--success);">0</div>
+
+            <div class="modern-card kpi-spark-card" data-tone="success">
+                <div class="ksc-top">
+                    <div class="ksc-icon"><i class="fa-solid fa-star"></i></div>
+                    <div class="ksc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="anaExceedingTrend">+0</span></div>
+                </div>
+                <div class="ksc-body">
+                    <div class="ksc-label">Exceeding Expectation</div>
+                    <div class="ksc-value" id="anaExceeding" style="color: var(--success);">0</div>
+                </div>
+                <div class="ksc-spark"><canvas id="sparkExceeding" height="40"></canvas></div>
             </div>
-            <div class="modern-card kpi-mini">
-                <div class="kmi-label">Approaching Exp.</div>
-                <div class="kmi-value" id="anaApproaching" style="color: var(--warning);">0</div>
+
+            <div class="modern-card kpi-spark-card" data-tone="warning">
+                <div class="ksc-top">
+                    <div class="ksc-icon"><i class="fa-solid fa-bullseye"></i></div>
+                    <div class="ksc-trend trend-down"><i class="fa-solid fa-arrow-trend-down"></i> <span id="anaApproachingTrend">-0</span></div>
+                </div>
+                <div class="ksc-body">
+                    <div class="ksc-label">Meeting Expectation</div>
+                    <div class="ksc-value" id="anaApproaching" style="color: var(--warning);">0</div>
+                </div>
+                <div class="ksc-spark"><canvas id="sparkApproaching" height="40"></canvas></div>
             </div>
-            <div class="modern-card kpi-mini">
-                <div class="kmi-label">Below Exp.</div>
-                <div class="kmi-value" id="anaBelow" style="color: var(--danger);">0</div>
+
+            <div class="modern-card kpi-spark-card" data-tone="danger">
+                <div class="ksc-top">
+                    <div class="ksc-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="ksc-trend trend-down"><i class="fa-solid fa-arrow-trend-down"></i> <span id="anaBelowTrend">-0</span></div>
+                </div>
+                <div class="ksc-body">
+                    <div class="ksc-label">Below Expectation</div>
+                    <div class="ksc-value" id="anaBelow" style="color: var(--danger);">0</div>
+                </div>
+                <div class="ksc-spark"><canvas id="sparkBelow" height="40"></canvas></div>
             </div>
         </div>
 
-        <!-- MIDDLE ROW: VISUALIZATIONS -->
+        <!-- ROW 2: SUBJECT BAR + POLAR COMPETENCY -->
         <div class="analysis-grid-visuals">
-            
-            <!-- 1. SUBJECT PERFORMANCE (Bar Chart) -->
             <div class="modern-card chart-card-lg">
                 <div class="card-header">
-                    <h3>Average Performance by Subject</h3>
-                    <small id="chartContextLabel" style="color: var(--text-muted);">Based on selected grade</small>
+                    <div>
+                        <h3>Average Performance by Subject</h3>
+                        <small id="chartContextLabel" style="color: var(--text-muted);">Based on selected grade context</small>
+                    </div>
+                    <div class="chart-legend-pills">
+                        <span class="lp-item lp-primary"><i></i> Score</span>
+                        <span class="lp-item lp-muted"><i></i> Target 80%</span>
+                    </div>
                 </div>
                 <div class="chart-wrapper-canvas">
                     <canvas id="subjectPerformanceChart"></canvas>
                 </div>
             </div>
 
-            <!-- 2. COMPETENCY DISTRIBUTION (Doughnut Chart) -->
             <div class="modern-card chart-card-sm">
                 <div class="card-header">
-                    <h3>Competency Distribution</h3>
+                    <h3>Competency Mix</h3>
+                    <small style="color: var(--text-muted);">CBC distribution</small>
                 </div>
                 <div class="chart-wrapper-canvas">
                     <canvas id="competencyDistributionChart"></canvas>
                 </div>
+                <div class="polar-legend" id="competencyLegend"></div>
             </div>
         </div>
 
-        <!-- BOTTOM ROW: TOP PERFORMERS TABLE -->
-        <div class="modern-card table-card-lg">
-            <div class="card-header">
-                <h3><i class="fa-solid fa-trophy" style="color: gold; margin-right: 8px;"></i> Top Performers Leaderboard</h3>
-                <div class="btn-group">
-                    <button class="btn btn-sm active">Overall</button>
-                    <button class="btn btn-sm">Math</button>
-                    <button class="btn btn-sm">Eng</button>
+        <!-- ROW 3: TREND + GENDER + HEATMAP -->
+        <div class="analysis-grid-tertiary">
+            <div class="modern-card chart-card-md">
+                <div class="card-header">
+                    <h3>Performance Trend</h3>
+                    <small style="color: var(--text-muted);">Across recent assessments</small>
+                </div>
+                <div class="chart-wrapper-canvas">
+                    <canvas id="analysisTrendChart"></canvas>
                 </div>
             </div>
-            <div class="table-responsive">
-                <table class="data-table modern-table">
-                    <thead>
-                        <tr>
-                            <th>Rank</th>
-                            <th>Learner</th>
-                            <th>Grade/Stream</th>
-                            <th>Avg. Score</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="analysisLeaderboard">
-                        <!-- JS Injected Rows -->
-                    </tbody>
-                </table>
+
+            <div class="modern-card chart-card-md">
+                <div class="card-header">
+                    <h3>Gender Performance</h3>
+                    <small style="color: var(--text-muted);">Comparative averages</small>
+                </div>
+                <div class="chart-wrapper-canvas">
+                    <canvas id="genderComparisonChart"></canvas>
+                </div>
+            </div>
+
+            <div class="modern-card chart-card-md heatmap-card">
+                <div class="card-header">
+                    <h3>Subject Mastery Heatmap</h3>
+                    <small style="color: var(--text-muted);">Per-grade mastery levels</small>
+                </div>
+                <div class="heatmap-wrapper" id="subjectHeatmap">
+                    <div class="heatmap-empty">Loading heatmap...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- BOTTOM ROW: TOP PERFORMERS LEADERBOARD -->
+        <div class="modern-card table-card-lg leaderboard-modern">
+            <div class="card-header">
+                <h3><i class="fa-solid fa-trophy" style="color: gold; margin-right: 8px;"></i> Top Performers Leaderboard</h3>
+                <div class="leaderboard-filter" id="leaderboardFilter">
+                    <button class="lf-btn active" data-subject="overall">Overall</button>
+                    <button class="lf-btn" data-subject="Mathematics">Maths</button>
+                    <button class="lf-btn" data-subject="English">English</button>
+                    <button class="lf-btn" data-subject="Science">Science</button>
+                </div>
+            </div>
+            <div class="leaderboard-grid" id="analysisLeaderboard">
+                <!-- JS injects modern leaderboard cards -->
             </div>
         </div>
 
@@ -542,7 +608,7 @@
     
     <div class="profile-split-layout">
         
-        <!-- LEFT: SEARCHABLE SIDEBAR (Kept existing logic structure) -->
+        <!-- LEFT: SEARCHABLE SIDEBAR -->
         <aside class="profile-sidebar-list" id="profileSidebar">
             <div class="ps-header">
                 <div class="search-box-advanced" style="width:100%;">
@@ -559,50 +625,70 @@
         <main class="profile-main-content" id="profileMainContent">
             
             <!-- 1. HERO HEADER (Identity) -->
-            <div class="profile-hero-modern">
-                <div class="ph-banner"></div>
+            <div class="profile-hero-modern profile-hero-v2">
+                <div class="ph-banner">
+                    <div class="ph-banner-pattern"></div>
+                    <div class="ph-banner-blob blob-1"></div>
+                    <div class="ph-banner-blob blob-2"></div>
+                </div>
                 <div class="ph-content">
                     <div class="ph-avatar-group">
-                        <img id="pPhoto" src="" class="ph-avatar-img" alt="Student">
+                        <div class="ph-avatar-ring">
+                            <img id="pPhoto" src="" class="ph-avatar-img" alt="Student">
+                        </div>
                         <div class="ph-grade-badge" id="pGrade">Grade 7</div>
                     </div>
                     <div class="ph-info">
                         <h1 id="pName">Select a Learner</h1>
                         <div class="ph-meta">
-                            <span id="pReg" class="tag">ADM: ---</span>
-                            <span id="pStream" class="tag">Stream: ---</span>
-                            <span id="pGender" class="tag"><i class="fa-solid fa-venus-mars"></i> ---</span>
+                            <span id="pReg" class="tag tag-soft"><i class="fa-solid fa-id-card"></i> ADM: ---</span>
+                            <span id="pStream" class="tag tag-soft"><i class="fa-solid fa-users"></i> Stream: ---</span>
+                            <span id="pGender" class="tag tag-soft"><i class="fa-solid fa-venus-mars"></i> ---</span>
                         </div>
                     </div>
                     <div class="ph-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="alert('Edit Mode')"><i class="fa-solid fa-pen"></i> Edit</button>
-                        <button class="btn btn-primary btn-sm" onclick="alert('Generating Report...')"><i class="fa-solid fa-print"></i> Report Card</button>
+                        <button class="btn-pill btn-pill-ghost" onclick="alert('Edit Mode')"><i class="fa-solid fa-pen"></i> Edit</button>
+                        <button class="btn-pill btn-pill-primary" onclick="alert('Generating Report...')"><i class="fa-solid fa-print"></i> Report Card</button>
                     </div>
                 </div>
             </div>
 
-            <!-- 2. QUICK STATS (Sticky) -->
-            <div class="profile-stats-bar">
-                <div class="psb-item">
-                    <span class="psb-label">Attendance</span>
-                    <strong class="psb-val text-green">94%</strong>
+            <!-- 2. QUICK STATS (Sparkline Cards) -->
+            <div class="profile-stats-bar stats-bar-v2">
+                <div class="psb-item psb-v2" data-tone="green">
+                    <div class="psb-icon"><i class="fa-solid fa-calendar-check"></i></div>
+                    <div class="psb-meta">
+                        <span class="psb-label">Attendance</span>
+                        <strong class="psb-val text-green" id="pAttendance">94%</strong>
+                    </div>
+                    <canvas class="psb-spark" id="pSparkAttendance" height="32"></canvas>
                 </div>
-                <div class="psb-item">
-                    <span class="psb-label">Avg. Score</span>
-                    <strong class="psb-val text-blue" id="pAvgScore">0%</strong>
+                <div class="psb-item psb-v2" data-tone="blue">
+                    <div class="psb-icon"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <div class="psb-meta">
+                        <span class="psb-label">Avg. Score</span>
+                        <strong class="psb-val text-blue" id="pAvgScore">0%</strong>
+                    </div>
+                    <canvas class="psb-spark" id="pSparkScore" height="32"></canvas>
                 </div>
-                <div class="psb-item">
-                    <span class="psb-label">Fee Status</span>
-                    <strong class="psb-val text-orange">Pending</strong>
+                <div class="psb-item psb-v2" data-tone="orange">
+                    <div class="psb-icon"><i class="fa-solid fa-wallet"></i></div>
+                    <div class="psb-meta">
+                        <span class="psb-label">Fee Status</span>
+                        <strong class="psb-val text-orange" id="pFeeStatus">Pending</strong>
+                    </div>
                 </div>
-                <div class="psb-item">
-                    <span class="psb-label">Rank</span>
-                    <strong class="psb-val text-purple">#5</strong>
+                <div class="psb-item psb-v2" data-tone="purple">
+                    <div class="psb-icon"><i class="fa-solid fa-ranking-star"></i></div>
+                    <div class="psb-meta">
+                        <span class="psb-label">Class Rank</span>
+                        <strong class="psb-val text-purple" id="pRank">#5</strong>
+                    </div>
                 </div>
             </div>
 
             <!-- 3. DATA VISUALIZATION ROW -->
-            <div class="profile-viz-row">
+            <div class="profile-viz-row viz-row-v2">
                 
                 <!-- Subject Strength (Radar Chart) -->
                 <div class="modern-card viz-card">
@@ -619,53 +705,66 @@
                 <div class="modern-card viz-card">
                     <div class="viz-header">
                         <h4><i class="fa-solid fa-chart-line"></i> Performance Trend</h4>
-                        <small>Academic progress over terms</small>
+                        <small>Academic progress over assessments</small>
                     </div>
                     <div class="line-container">
                         <canvas id="studentTrendChart"></canvas>
                     </div>
                 </div>
+
+                <!-- Subject Mastery Gauges -->
+                <div class="modern-card viz-card">
+                    <div class="viz-header">
+                        <h4><i class="fa-solid fa-gauge-high"></i> Subject Mastery</h4>
+                        <small>Top learning area scores</small>
+                    </div>
+                    <div class="gauge-grid" id="pGaugeGrid">
+                        <div class="gauge-empty">Select a learner to view mastery gauges.</div>
+                    </div>
+                </div>
             </div>
 
             <!-- 4. TABS & DETAILS -->
-            <div class="profile-tabs-modern">
-                <button class="ptm-item active" onclick="switchProfileTab('assessments')">Assessments</button>
-                <button class="ptm-item" onclick="switchProfileTab('bio')">Bio & Guardian</button>
-                <button class="ptm-item" onclick="switchProfileTab('notes')">Discipline</button>
+            <div class="profile-tabs-modern tabs-v2">
+                <button class="ptm-item active" onclick="switchProfileTab('assessments')"><i class="fa-solid fa-list-check"></i> Assessments</button>
+                <button class="ptm-item" onclick="switchProfileTab('bio')"><i class="fa-solid fa-user"></i> Bio & Guardian</button>
+                <button class="ptm-item" onclick="switchProfileTab('notes')"><i class="fa-solid fa-clipboard"></i> Discipline</button>
             </div>
 
             <div class="profile-content-area" id="pContentAssessments">
                 <!-- Dynamic Assessment List -->
-                <div class="assessment-timeline" id="pAssessmentList">
+                <div class="assessment-timeline timeline-v2" id="pAssessmentList">
                     <p style="text-align:center; color:var(--text-muted); padding:2rem;">Select a student to view assessment history.</p>
                 </div>
             </div>
             
             <div class="profile-content-area" id="pContentBio" style="display:none;">
                 <!-- Bio Grid -->
-                <div class="bio-grid">
+                <div class="bio-grid bio-grid-v2">
                     <div class="info-group">
-                        <label>Date of Birth</label>
+                        <label><i class="fa-solid fa-cake-candles"></i> Date of Birth</label>
                         <span id="pDob">---</span>
                     </div>
                     <div class="info-group">
-                        <label>Admission No</label>
+                        <label><i class="fa-solid fa-id-badge"></i> Admission No</label>
                         <span id="pAdmNo">---</span>
                     </div>
                     <div class="info-group">
-                        <label>Guardian Name</label>
+                        <label><i class="fa-solid fa-user-shield"></i> Guardian Name</label>
                         <span id="pGuardian">---</span>
                     </div>
                     <div class="info-group">
-                        <label>Guardian Phone</label>
+                        <label><i class="fa-solid fa-phone"></i> Guardian Phone</label>
                         <span id="pGuardianPhone">---</span>
                     </div>
                 </div>
             </div>
 
-            <!-- Placeholder for Discipline -->
+            <!-- Discipline Tab Content -->
             <div class="profile-content-area" id="pContentNotes" style="display:none;">
-                <div class="empty-state">No disciplinary records found.</div>
+                <div class="discipline-board" id="pDisciplineBoard">
+                    <div class="empty-state">No disciplinary records found.</div>
+                </div>
             </div>
 
         </main>
@@ -1156,70 +1255,171 @@
            <!-- 3. LEARNERS LIST -->
             <!-- LEARNERS SECTION -->
 <section id="students" class="view-section" aria-label="Learners Section">
-    
+
     <div class="split-layout-students">
-        
-        <!-- LEFT SIDEBAR: Navigation & List -->
-        <aside class="student-sidebar" id="studentSidebar">
-            
-            <div class="ss-header">
-                <div class="search-box-advanced">
-                    <i class="fa-solid fa-search"></i>
-                    <input type="text" id="studentSearch" class="search-input" placeholder="Search name, ADM...">
+
+        <!-- LEFT SIDEBAR: Smart Filters & List -->
+        <aside class="student-sidebar learner-sidebar-modern" id="studentSidebar">
+
+            <!-- Sidebar header with total count -->
+            <div class="ls-header">
+                <div class="ls-title-row">
+                    <h3><i class="fa-solid fa-users"></i> Learners</h3>
+                    <span class="ls-count-badge" id="lsTotalCount">0</span>
                 </div>
                 <button class="btn btn-primary btn-block btn-sm" onclick="router('intake')">
                     <i class="fa-solid fa-plus"></i> New Learner
                 </button>
             </div>
 
-            <div class="ss-list" id="studentSidebarList">
+            <!-- Smart Search -->
+            <div class="ls-search-wrap">
+                <i class="fa-solid fa-search ls-search-icon"></i>
+                <input type="text" id="studentSearch" class="search-input ls-search-input" placeholder="Search name, ADM, guardian, phone...">
+                <button class="ls-search-clear" id="learnerSearchClear" title="Clear search" style="display:none;">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Quick Stats -->
+            <div class="ls-stats" id="learnerSidebarStats">
+                <div class="ls-stat-chip" data-gender="all">
+                    <span class="ls-stat-dot" style="background:var(--primary);"></span>
+                    <span class="ls-stat-label">All</span>
+                    <span class="ls-stat-num" id="lsStatAll">0</span>
+                </div>
+                <div class="ls-stat-chip" data-gender="Male" title="Male learners">
+                    <span class="ls-stat-dot" style="background:#3b82f6;"></span>
+                    <span class="ls-stat-label"><i class="fa-solid fa-mars"></i></span>
+                    <span class="ls-stat-num" id="lsStatMale">0</span>
+                </div>
+                <div class="ls-stat-chip" data-gender="Female" title="Female learners">
+                    <span class="ls-stat-dot" style="background:#ec4899;"></span>
+                    <span class="ls-stat-label"><i class="fa-solid fa-venus"></i></span>
+                    <span class="ls-stat-num" id="lsStatFemale">0</span>
+                </div>
+            </div>
+
+            <!-- Grade Accordion List -->
+            <div class="ls-list" id="studentSidebarList">
                 <!-- Populated by JS (Accordion Groups by Grade) -->
+            </div>
+
+            <!-- Sidebar footer: clear all -->
+            <div class="ls-footer">
+                <button class="ls-clear-btn" id="learnerClearAll">
+                    <i class="fa-solid fa-eraser"></i> Clear all filters
+                </button>
             </div>
         </aside>
 
         <!-- RIGHT MAIN: Student Cards Grid -->
-        <main class="student-main-view">
-            
-            <!-- FILTERS BAR -->
-            <div class="toolbar-modern">
-                <div class="toolbar-left">
-                    <h3 id="currentViewTitle" style="margin-right: 1rem; font-size: 1.2rem; font-weight: 700;">All Learners</h3>
-                    <div class="filters-group">
-                        <select id="streamFilter" class="filter-select-modern" aria-label="Filter by Stream">
-                            <option value="all">All Streams</option>
-                            <option value="Blue">Blue</option>
-                            <option value="Yellow">Yellow</option>
-                            <option value="Red">Red</option>
-                            <option value="Green">Green</option>
-                        </select>
+        <main class="student-main-view learner-main-modern">
+
+            <!-- MODERN FILTER TOOLBAR -->
+            <div class="learner-toolbar">
+                <div class="lt-left">
+                    <div class="lt-title-block">
+                        <h3 id="currentViewTitle">All Learners</h3>
+                        <span class="lt-result-count">
+                            <span id="learnerResultCount">0</span> of <span id="learnerTotalCount">0</span> learners
+                        </span>
                     </div>
                 </div>
-                <div class="toolbar-right">
-                    <div class="view-toggles" id="viewToggleBtns">
-                        <button class="btn btn-sm active" data-view="grid" title="Grid"><i class="fa-solid fa-grip"></i></button>
-                        <button class="btn btn-sm" data-view="list" title="List"><i class="fa-solid fa-list"></i></button>
+                <div class="lt-right">
+                    <!-- Sort -->
+                    <div class="lt-sort-group">
+                        <i class="fa-solid fa-arrow-down-wide-short"></i>
+                        <select id="learnerSortSelect" class="filter-select-modern dash-filter-sm" title="Sort by">
+                            <option value="name-asc">Name (A-Z)</option>
+                            <option value="name-desc">Name (Z-A)</option>
+                            <option value="recent">Recently added</option>
+                            <option value="grade-asc">Grade (asc)</option>
+                            <option value="grade-desc">Grade (desc)</option>
+                            <option value="reg-asc">ADM No (asc)</option>
+                        </select>
                     </div>
-                    <button class="btn btn-secondary btn-sm" id="btnExportCSV"><i class="fa-solid fa-download"></i> Export</button>
+                    <!-- Per page -->
+                    <select id="learnerPerPageSelect" class="filter-select-modern dash-filter-sm" title="Rows per page">
+                        <option value="12">12 / page</option>
+                        <option value="24" selected>24 / page</option>
+                        <option value="48">48 / page</option>
+                        <option value="all">All</option>
+                    </select>
+                    <!-- Stream Filter -->
+                    <select id="streamFilter" class="filter-select-modern dash-filter-sm" aria-label="Filter by Stream">
+                        <option value="all">All Streams</option>
+                        <option value="Blue">Blue</option>
+                        <option value="Yellow">Yellow</option>
+                        <option value="Red">Red</option>
+                        <option value="Green">Green</option>
+                    </select>
+                    <!-- View toggles -->
+                    <div class="view-toggles" id="viewToggleBtns">
+                        <button class="btn btn-sm active" data-view="grid" title="Grid view"><i class="fa-solid fa-grip"></i></button>
+                        <button class="btn btn-sm" data-view="list" title="List view"><i class="fa-solid fa-list"></i></button>
+                        <button id="btnForceSync" class="btn btn-sm" style="background: #059669; color: white; margin: 8px 12px; width: calc(100% - 24px);">
+    <i class="fa-solid fa-cloud-arrow-up"></i> Push Local Data to Cloud
+</button>
+                    </div>
+                    <!-- Export menu -->
+                    <button class="btn btn-secondary btn-sm" id="btnExportCSV" title="Export to CSV"><i class="fa-solid fa-download"></i> Export</button>
                 </div>
             </div>
 
-            <!-- DYNAMIC CONTENT -->
-            <div class="student-grid-modern" id="studentsContainer">
+            <!-- ACTIVE FILTER CHIPS -->
+            <div class="learner-filter-chips" id="learnerActiveFilters" style="display:none;">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- BULK ACTION BAR (hidden until selection) -->
+            <div class="learner-bulk-bar" id="learnerBulkBar" style="display:none;">
+                <div class="lbb-left">
+                    <button class="lbb-clear" id="learnerBulkClear" title="Clear selection">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                    <span><strong id="learnerBulkCount">0</strong> selected</span>
+                </div>
+                <div class="lbb-right">
+                    <button class="btn btn-sm btn-secondary" id="learnerBulkPrint">
+                        <i class="fa-solid fa-print"></i> Print Cards
+                    </button>
+                    <button class="btn btn-sm btn-secondary" id="learnerBulkExport">
+                        <i class="fa-solid fa-file-export"></i> Export Selected
+                    </button>
+                    <button class="btn btn-sm btn-danger" id="learnerBulkDelete">
+                        <i class="fa-solid fa-trash"></i> Delete
+                    </button>
+                </div>
+            </div>
+
+            <!-- DYNAMIC CONTENT (GRID VIEW) -->
+            <div class="student-grid-modern learner-grid" id="studentsContainer">
                 <!-- JS Injects Cards Here -->
             </div>
 
             <!-- LIST VIEW CONTAINER (Hidden by default) -->
-            <div class="table-responsive" id="studentsListContainer" style="display:none;">
-                <table class="data-table modern-table">
+            <div class="table-responsive learner-table-wrap" id="studentsListContainer" style="display:none;">
+                <table class="data-table modern-table learner-table">
                     <thead>
-                        <tr><th>ADM</th><th>Learner</th><th>Grade</th><th>Stream</th><th>Status</th><th>Action</th></tr>
+                        <tr>
+                            <th style="width:36px;"><input type="checkbox" id="learnerSelectAll" title="Select all"></th>
+                            <th class="sortable" data-sort="reg">ADM <i class="fa-solid fa-sort"></i></th>
+                            <th class="sortable" data-sort="name">Learner <i class="fa-solid fa-sort"></i></th>
+                            <th class="sortable" data-sort="grade">Grade <i class="fa-solid fa-sort"></i></th>
+                            <th>Stream</th>
+                            <th>Gender</th>
+                            <th>Guardian</th>
+                            <th>Phone</th>
+                            <th style="width:120px;">Actions</th>
+                        </tr>
                     </thead>
                     <tbody id="studentsTableBody"></tbody>
                 </table>
             </div>
 
             <!-- PAGINATION -->
-            <div class="pagination-footer" id="studentsPagination" style="display:none;">
+            <div class="pagination-footer learner-pagination" id="studentsPagination" style="display:none;">
                 <!-- JS Injects Pagination -->
             </div>
 
@@ -1233,14 +1433,165 @@
     <!-- Header -->
     <div class="exam-header-modern">
         <div class="exam-header-content">
-            <h2>CBC Assessment Center</h2>
-            <p>Competency Based Curriculum Evaluation Portal</p>
+            <h2>Exam Portal</h2>
+            <p>Schedule exams, manage invigilation, enter scores & publish results</p>
         </div>
         <div class="header-actions">
-            <button class="btn btn-warning" id="btnOpenBatchAssessment" disabled>
-                <i class="fa-solid fa-layer-group"></i> Batch Entry
+            <button class="btn btn-secondary btn-sm" id="btnExamTimetablePDF" title="Print exam timetable">
+                <i class="fa-solid fa-print"></i> Print Timetable
+            </button>
+            <button class="btn btn-primary" id="btnCreateExam">
+                <i class="fa-solid fa-plus"></i> Schedule Exam
             </button>
         </div>
+    </div>
+
+    <!-- EXAM PORTAL TABS -->
+    <div class="exam-portal-tabs" id="examPortalTabs">
+        <button class="ept-btn active" data-tab="dashboard"><i class="fa-solid fa-gauge-high"></i> Dashboard</button>
+        <button class="ept-btn" data-tab="timetable"><i class="fa-solid fa-calendar-days"></i> Exam Timetable</button>
+        <button class="ept-btn" data-tab="personal"><i class="fa-solid fa-id-badge"></i> My Schedule</button>
+        <button class="ept-btn" data-tab="invigilation"><i class="fa-solid fa-user-shield"></i> Invigilation</button>
+        <button class="ept-btn" data-tab="grading"><i class="fa-solid fa-pen-ruler"></i> Grading</button>
+    </div>
+
+    <!-- TAB: DASHBOARD -->
+    <div class="exam-portal-panel active" id="examPanelDashboard">
+    <div class="exam-system-dashboard">
+        <!-- KPI row -->
+        <div class="exam-kpi-row">
+            <div class="modern-card exam-kpi-card" data-tone="primary">
+                <div class="ekc-top">
+                    <div class="ekc-icon"><i class="fa-solid fa-calendar-plus"></i></div>
+                    <span class="ekc-trend trend-up"><i class="fa-solid fa-bolt"></i> Live</span>
+                </div>
+                <div class="ekc-body">
+                    <div class="ekc-label">Scheduled Exams</div>
+                    <div class="ekc-value" id="examKpiScheduled">0</div>
+                    <div class="ekc-sub">Upcoming & in progress</div>
+                </div>
+            </div>
+            <div class="modern-card exam-kpi-card" data-tone="warning">
+                <div class="ekc-top">
+                    <div class="ekc-icon"><i class="fa-solid fa-pen-ruler"></i></div>
+                    <span class="ekc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="examKpiGradingTrend">+0</span></span>
+                </div>
+                <div class="ekc-body">
+                    <div class="ekc-label">Awaiting Grading</div>
+                    <div class="ekc-value" id="examKpiGrading" style="color: var(--warning);">0</div>
+                    <div class="ekc-sub">Papers pending marking</div>
+                </div>
+            </div>
+            <div class="modern-card exam-kpi-card" data-tone="success">
+                <div class="ekc-top">
+                    <div class="ekc-icon"><i class="fa-solid fa-circle-check"></i></div>
+                    <span class="ekc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="examKpiGradedTrend">+0</span></span>
+                </div>
+                <div class="ekc-body">
+                    <div class="ekc-label">Graded Exams</div>
+                    <div class="ekc-value" id="examKpiGraded" style="color: var(--success);">0</div>
+                    <div class="ekc-sub">Marked this term</div>
+                </div>
+            </div>
+            <div class="modern-card exam-kpi-card" data-tone="purple">
+                <div class="ekc-top">
+                    <div class="ekc-icon"><i class="fa-solid fa-bullhorn"></i></div>
+                    <span class="ekc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="examKpiPublishedTrend">+0</span></span>
+                </div>
+                <div class="ekc-body">
+                    <div class="ekc-label">Published</div>
+                    <div class="ekc-value" id="examKpiPublished" style="color: #8b5cf6;">0</div>
+                    <div class="ekc-sub">Results released</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action bar -->
+        <div class="exam-system-actions">
+            <div class="exam-filter-pills" id="examFilterPills">
+                <button class="fp-btn active" data-filter="all">All</button>
+                <button class="fp-btn" data-filter="Scheduled">Scheduled</button>
+                <button class="fp-btn" data-filter="In Progress">In Progress</button>
+                <button class="fp-btn" data-filter="Graded">Graded</button>
+                <button class="fp-btn" data-filter="Published">Published</button>
+            </div>
+        </div>
+
+        <!-- Exam list -->
+        <div class="exam-list-grid" id="examListGrid">
+            <div class="heatmap-empty">Loading exams...</div>
+        </div>
+    </div>
+    </div>
+
+    <!-- TAB: TIMETABLE -->
+    <div class="exam-portal-panel" id="examPanelTimetable">
+        <div class="exam-tt-controls">
+            <select id="examTtGradeFilter" class="filter-select-modern">
+                <option value="all">All Grades</option>
+            </select>
+            <select id="examTtWeekFilter" class="filter-select-modern">
+                <option value="all">All Weeks</option>
+            </select>
+        </div>
+        <div class="modern-card">
+            <div id="examTimetableView" class="exam-tt-view">
+                <div class="heatmap-empty">No exams scheduled yet.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB: PERSONAL SCHEDULE -->
+    <div class="exam-portal-panel" id="examPanelPersonal">
+        <div class="personal-schedule-controls">
+            <select id="personalScheduleType" class="filter-select-modern">
+                <option value="learner">Learner Timetable</option>
+                <option value="staff">Staff / Invigilator Timetable</option>
+            </select>
+            <select id="personalScheduleEntity" class="filter-select-modern">
+                <option value="">Select...</option>
+            </select>
+            <button class="btn btn-sm btn-secondary" id="btnExportPersonalSchedule"><i class="fa-solid fa-file-pdf"></i> Export PDF</button>
+        </div>
+        <div id="personalScheduleView" class="personal-schedule-view">
+            <div class="heatmap-empty">Select a person to view their exam schedule.</div>
+        </div>
+    </div>
+
+    <!-- TAB: INVIGILATION -->
+    <div class="exam-portal-panel" id="examPanelInvigilation">
+        <div class="invigilation-controls">
+            <select id="invigDateFilter" class="filter-select-modern">
+                <option value="all">All Dates</option>
+            </select>
+            <select id="invigStaffFilter" class="filter-select-modern">
+                <option value="all">All Invigilators</option>
+            </select>
+            <select id="invigStatusFilter" class="filter-select-modern">
+                <option value="all">All Status</option>
+                <option value="Pending">Pending</option>
+                <option value="Accepted">Accepted</option>
+                <option value="Declined">Declined</option>
+            </select>
+            <button class="btn btn-sm btn-secondary" id="btnInvigWorkload" title="View workload balance"><i class="fa-solid fa-scale-balanced"></i> Workload</button>
+        </div>
+        <div id="invigilationRoster" class="invigilation-roster">
+            <div class="heatmap-empty">No invigilation duties assigned.</div>
+        </div>
+    </div>
+
+    <!-- TAB: GRADING -->
+    <div class="exam-portal-panel" id="examPanelGrading">
+        <div class="grading-overview" id="gradingOverview">
+            <div class="heatmap-empty">Loading grading overview...</div>
+        </div>
+    </div>
+
+    <!-- DIVIDER + Existing Single-Learner Assessment Workflow -->
+    <div class="exam-divider">
+        <span class="ed-line"></span>
+        <span class="ed-label"><i class="fa-solid fa-user-pen"></i> Quick Single-Learner Assessment</span>
+        <span class="ed-line"></span>
     </div>
 
     <!-- Selector Bar -->
@@ -1333,6 +1684,92 @@
     </div>
 
 </section>
+
+<!-- TIMETABLE SECTION -->
+<section id="timetable" class="view-section" aria-label="Timetable Section">
+    <div class="section-header-modern">
+        <div class="header-info">
+            <h2><i class="fa-solid fa-calendar-days"></i> Timetable Management</h2>
+            <p>Build the master weekly schedule; teachers can extract personal timetables.</p>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-secondary" id="btnCheckClashes"><i class="fa-solid fa-shield-halved"></i> Check Clashes</button>
+            <button class="btn btn-primary" id="btnAddSlot"><i class="fa-solid fa-plus"></i> Add Slot</button>
+            <button class="btn btn-secondary" id="btnExportTimetable"><i class="fa-solid fa-file-pdf"></i> Export PDF</button>
+        </div>
+    </div>
+
+    <!-- Timetable KPI row -->
+    <div class="tt-kpi-row">
+        <div class="modern-card tt-kpi-card" data-tone="primary">
+            <div class="ttc-top">
+                <div class="ttc-icon"><i class="fa-solid fa-clock"></i></div>
+            </div>
+            <div class="ttc-body">
+                <div class="ttc-label">Total Lessons</div>
+                <div class="ttc-value" id="ttKpiTotal">0</div>
+            </div>
+        </div>
+        <div class="modern-card tt-kpi-card" data-tone="success">
+            <div class="ttc-top">
+                <div class="ttc-icon"><i class="fa-solid fa-user-check"></i></div>
+            </div>
+            <div class="ttc-body">
+                <div class="ttc-label">Assigned</div>
+                <div class="ttc-value" id="ttKpiAssigned" style="color: var(--success);">0</div>
+            </div>
+        </div>
+        <div class="modern-card tt-kpi-card" data-tone="warning">
+            <div class="ttc-top">
+                <div class="ttc-icon"><i class="fa-solid fa-circle-question"></i></div>
+            </div>
+            <div class="ttc-body">
+                <div class="ttc-label">Free Slots</div>
+                <div class="ttc-value" id="ttKpiFree" style="color: var(--warning);">0</div>
+            </div>
+        </div>
+        <div class="modern-card tt-kpi-card" data-tone="purple">
+            <div class="ttc-top">
+                <div class="ttc-icon"><i class="fa-solid fa-chalkboard-user"></i></div>
+            </div>
+            <div class="ttc-body">
+                <div class="ttc-label">Teachers Active</div>
+                <div class="ttc-value" id="ttKpiTeachers" style="color: #8b5cf6;">0</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- View switch + filters -->
+    <div class="tt-controls">
+        <div class="tt-tabs" id="ttTabs">
+            <button class="ttt-btn active" data-view="master"><i class="fa-solid fa-table-cells"></i> Master Timetable</button>
+            <button class="ttt-btn" data-view="teacher"><i class="fa-solid fa-user-tie"></i> Teacher Extract</button>
+            <button class="ttt-btn" data-view="grade"><i class="fa-solid fa-users"></i> Grade View</button>
+        </div>
+        <div class="tt-filters">
+            <select id="ttGradeFilter" class="filter-select-modern">
+                <option value="all">All Grades</option>
+            </select>
+            <select id="ttTeacherFilter" class="filter-select-modern" style="display:none;">
+                <option value="all">All Teachers</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Timetable grid -->
+    <div class="modern-card tt-grid-card">
+        <div class="tt-grid-wrapper" id="ttGridWrapper">
+            <div class="heatmap-empty">Select a view to load the timetable.</div>
+        </div>
+    </div>
+
+    <!-- Teacher workload summary (only shown in teacher view) -->
+    <div class="tt-workload-section" id="ttWorkloadSection" style="display:none;">
+        <h3 style="margin: 1.5rem 0 0.75rem; font-size: 1.05rem; font-weight: 700;">Teacher Workload Summary</h3>
+        <div class="tt-workload-grid" id="ttWorkloadGrid"></div>
+    </div>
+</section>
+
                         <!-- 5. CURRICULA SECTION -->
             <section id="curricula" class="view-section" aria-label="Curricula Section">
                 <div class="section-header-modern">
@@ -1341,6 +1778,92 @@
                         <button class="btn btn-primary" data-modal="courseModal"><i class="fa-solid fa-plus"></i> Add Subject</button>
                     </div>
                 </div>
+
+                <!-- MODERN ANALYTICS LAYER -->
+                <div class="la-analytics-layer">
+                    <!-- KPI row -->
+                    <div class="la-kpi-row">
+                        <div class="modern-card la-kpi-card" data-tone="primary">
+                            <div class="lak-top">
+                                <div class="lak-icon"><i class="fa-solid fa-book"></i></div>
+                                <span class="lak-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="laTotalTrend">+0</span></span>
+                            </div>
+                            <div class="lak-body">
+                                <div class="lak-label">Total Learning Areas</div>
+                                <div class="lak-value" id="laTotalCount">0</div>
+                            </div>
+                        </div>
+                        <div class="modern-card la-kpi-card" data-tone="success">
+                            <div class="lak-top">
+                                <div class="lak-icon"><i class="fa-solid fa-user-check"></i></div>
+                                <span class="lak-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="laAssignedTrend">+0</span></span>
+                            </div>
+                            <div class="lak-body">
+                                <div class="lak-label">Subjects Assigned</div>
+                                <div class="lak-value" id="laAssignedCount" style="color: var(--success);">0</div>
+                            </div>
+                        </div>
+                        <div class="modern-card la-kpi-card" data-tone="warning">
+                            <div class="lak-top">
+                                <div class="lak-icon"><i class="fa-solid fa-user-slash"></i></div>
+                                <span class="lak-trend trend-down"><i class="fa-solid fa-arrow-trend-down"></i> <span id="laUnassignedTrend">-0</span></span>
+                            </div>
+                            <div class="lak-body">
+                                <div class="lak-label">Unassigned</div>
+                                <div class="lak-value" id="laUnassignedCount" style="color: var(--warning);">0</div>
+                            </div>
+                        </div>
+                        <div class="modern-card la-kpi-card" data-tone="purple">
+                            <div class="lak-top">
+                                <div class="lak-icon"><i class="fa-solid fa-layer-group"></i></div>
+                                <span class="lak-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="laBandsTrend">4</span></span>
+                            </div>
+                            <div class="lak-body">
+                                <div class="lak-label">Active CBC Bands</div>
+                                <div class="lak-value" id="laBandsCount" style="color: #8b5cf6;">4</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Charts row -->
+                    <div class="la-charts-row">
+                        <div class="modern-card la-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Subject Distribution by Band</h3>
+                                    <small style="color: var(--text-muted);">CBC structure coverage</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="laBandChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="modern-card la-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Assignment Coverage</h3>
+                                    <small style="color: var(--text-muted);">Teacher allocation</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="laCoverageChart"></canvas>
+                            </div>
+                            <div class="polar-legend" id="laCoverageLegend"></div>
+                        </div>
+                        <div class="modern-card la-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Teacher Workload</h3>
+                                    <small style="color: var(--text-muted);">Subjects per teacher</small>
+                                </div>
+                            </div>
+                            <div class="la-workload-list" id="laWorkloadList">
+                                <div class="heatmap-empty">Loading workload...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="content-card-modern">
                     <div class="curriculum-accordion" id="curriculumAccordion"></div>
                 </div>
@@ -1364,40 +1887,130 @@
                     </div>
                 </div>
 
-                <!-- Main Content Wrapper -->
-                <div class="content-card-modern">
-                    
-                    <!-- Stats Bar -->
-                    <div class="staff-stats-bar">
-                        <div class="stat-mini">
-                            <i class="fa-solid fa-users" style="background: linear-gradient(135deg, #6366f1, #4f46e5);"></i>
-                            <div class="stat-info">
-                                <span>Total Staff</span>
-                                <strong id="statStaffCount">0</strong>
+                <!-- STAFF ANALYTICS DASHBOARD -->
+                <div class="staff-analytics-layer">
+                    <!-- Top KPI row with sparklines -->
+                    <div class="staff-kpi-row">
+                        <div class="modern-card staff-kpi-card" data-tone="primary">
+                            <div class="skc-top">
+                                <div class="skc-icon"><i class="fa-solid fa-users"></i></div>
+                                <div class="skc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="staffTotalTrend">+0</span></div>
+                            </div>
+                            <div class="skc-body">
+                                <div class="skc-label">Total Staff</div>
+                                <div class="skc-value" id="statStaffCount">0</div>
+                            </div>
+                            <div class="skc-spark"><canvas id="sparkStaffTotal" height="36"></canvas></div>
+                        </div>
+
+                        <div class="modern-card staff-kpi-card" data-tone="success">
+                            <div class="skc-top">
+                                <div class="skc-icon"><i class="fa-solid fa-chalkboard-user"></i></div>
+                                <div class="skc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="staffTeachersTrend">+0</span></div>
+                            </div>
+                            <div class="skc-body">
+                                <div class="skc-label">Teaching Staff</div>
+                                <div class="skc-value" id="statTeachersCount" style="color: var(--success);">0</div>
+                            </div>
+                            <div class="skc-spark"><canvas id="sparkStaffTeachers" height="36"></canvas></div>
+                        </div>
+
+                        <div class="modern-card staff-kpi-card" data-tone="purple">
+                            <div class="skc-top">
+                                <div class="skc-icon"><i class="fa-solid fa-user-gear"></i></div>
+                                <div class="skc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="staffAdminTrend">+0</span></div>
+                            </div>
+                            <div class="skc-body">
+                                <div class="skc-label">Administration</div>
+                                <div class="skc-value" id="statAdminCount" style="color: #8b5cf6;">0</div>
+                            </div>
+                            <div class="skc-spark"><canvas id="sparkStaffAdmin" height="36"></canvas></div>
+                        </div>
+
+                        <div class="modern-card staff-kpi-card" data-tone="warning">
+                            <div class="skc-top">
+                                <div class="skc-icon"><i class="fa-solid fa-headset"></i></div>
+                                <div class="skc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="staffSupportTrend">+0</span></div>
+                            </div>
+                            <div class="skc-body">
+                                <div class="skc-label">Support Staff</div>
+                                <div class="skc-value" id="statSupportCount" style="color: var(--warning);">0</div>
+                            </div>
+                            <div class="skc-spark"><canvas id="sparkStaffSupport" height="36"></canvas></div>
+                        </div>
+                    </div>
+
+                    <!-- Charts row -->
+                    <div class="staff-charts-row">
+                        <div class="modern-card staff-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Department Distribution</h3>
+                                    <small style="color: var(--text-muted);">Staff allocation by department</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="staffDeptChart"></canvas>
+                            </div>
+                            <div class="polar-legend" id="staffDeptLegend"></div>
+                        </div>
+
+                        <div class="modern-card staff-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Gender Ratio</h3>
+                                    <small style="color: var(--text-muted);">Workforce composition</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="staffGenderChart"></canvas>
+                            </div>
+                            <div class="polar-legend" id="staffGenderLegend"></div>
+                        </div>
+
+                        <div class="modern-card staff-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Employment Type</h3>
+                                    <small style="color: var(--text-muted);">Contract breakdown</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="staffEmploymentChart"></canvas>
+                            </div>
+                            <div class="polar-legend" id="staffEmploymentLegend"></div>
+                        </div>
+                    </div>
+
+                    <!-- Workload & Subject Coverage row -->
+                    <div class="staff-coverage-row">
+                        <div class="modern-card staff-coverage-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Teacher Subject Workload</h3>
+                                    <small style="color: var(--text-muted);">Subjects assigned per teacher</small>
+                                </div>
+                            </div>
+                            <div class="staff-workload-list" id="staffWorkloadList">
+                                <div class="heatmap-empty">Loading workload...</div>
                             </div>
                         </div>
-                        <div class="stat-mini">
-                            <i class="fa-solid fa-chalkboard-user" style="background: linear-gradient(135deg, #22c55e, #16a34a);"></i>
-                            <div class="stat-info">
-                                <span>Teachers</span>
-                                <strong id="statTeachersCount">0</strong>
+                        <div class="modern-card staff-coverage-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Top Performers by Student Average</h3>
+                                    <small style="color: var(--text-muted);">Teachers ranked by their students' scores</small>
+                                </div>
                             </div>
-                        </div>
-                        <div class="stat-mini">
-                            <i class="fa-solid fa-user-gear" style="background: linear-gradient(135deg, #ec4899, #be185d);"></i>
-                            <div class="stat-info">
-                                <span>Administration</span>
-                                <strong id="statAdminCount">0</strong>
-                            </div>
-                        </div>
-                        <div class="stat-mini">
-                            <i class="fa-solid fa-headset" style="background: linear-gradient(135deg, #f59e0b, #d97706);"></i>
-                            <div class="stat-info">
-                                <span>Support Staff</span>
-                                <strong id="statSupportCount">0</strong>
+                            <div class="staff-perf-list" id="staffPerfList">
+                                <div class="heatmap-empty">Loading performance...</div>
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- Main Content Wrapper -->
+                <div class="content-card-modern">
 
                     <!-- Toolbar -->
                     <div class="toolbar-modern">
@@ -1439,7 +2052,107 @@
 
                         <!-- 7. REPORTS SECTION -->
             <section id="reports" class="view-section" aria-label="Reports Section">
-                <div class="report-header"><div><h2>Reports & Analytics</h2><p>Generate official institutional documents and analyze performance.</p></div></div>
+                <div class="section-header-modern">
+                    <div class="header-info">
+                        <h2><i class="fa-solid fa-file-chart-column"></i> Reports & Analytics</h2>
+                        <p>Generate official institutional documents and analyze performance.</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary btn-sm" id="btnRefreshReportStats" title="Refresh analytics">
+                            <i class="fa-solid fa-rotate"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- REPORTS ANALYTICS DASHBOARD -->
+                <div class="reports-analytics-layer">
+                    <!-- KPI tiles -->
+                    <div class="reports-kpi-row">
+                        <div class="modern-card rpt-kpi-card" data-tone="primary">
+                            <div class="rkc-top">
+                                <div class="rkc-icon"><i class="fa-solid fa-file-circle-check"></i></div>
+                                <span class="rkc-trend trend-up"><i class="fa-solid fa-bolt"></i> Live</span>
+                            </div>
+                            <div class="rkc-body">
+                                <div class="rkc-label">Reports Generated</div>
+                                <div class="rkc-value" id="rptTotalGenerated">0</div>
+                                <div class="rkc-sub" id="rptTotalSub">All-time document count</div>
+                            </div>
+                        </div>
+                        <div class="modern-card rpt-kpi-card" data-tone="success">
+                            <div class="rkc-top">
+                                <div class="rkc-icon"><i class="fa-solid fa-user-graduate"></i></div>
+                                <span class="rkc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="rptStudentsTrend">+0</span></span>
+                            </div>
+                            <div class="rkc-body">
+                                <div class="rkc-label">Active Learners</div>
+                                <div class="rkc-value" id="rptStudentCount" style="color: var(--success);">0</div>
+                                <div class="rkc-sub">Available for transcripts</div>
+                            </div>
+                        </div>
+                        <div class="modern-card rpt-kpi-card" data-tone="purple">
+                            <div class="rkc-top">
+                                <div class="rkc-icon"><i class="fa-solid fa-id-card-clip"></i></div>
+                                <span class="rkc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="rptStaffTrend">+0</span></span>
+                            </div>
+                            <div class="rkc-body">
+                                <div class="rkc-label">Staff On File</div>
+                                <div class="rkc-value" id="rptStaffCount" style="color: #8b5cf6;">0</div>
+                                <div class="rkc-sub">For staff directory</div>
+                            </div>
+                        </div>
+                        <div class="modern-card rpt-kpi-card" data-tone="warning">
+                            <div class="rkc-top">
+                                <div class="rkc-icon"><i class="fa-solid fa-chart-simple"></i></div>
+                                <span class="rkc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="rptAvgTrend">+0%</span></span>
+                            </div>
+                            <div class="rkc-body">
+                                <div class="rkc-label">School Avg Score</div>
+                                <div class="rkc-value" id="rptSchoolAvg" style="color: var(--warning);">0%</div>
+                                <div class="rkc-sub">Across all assessments</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Analytics charts row -->
+                    <div class="reports-charts-row">
+                        <div class="modern-card rpt-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Grade Population</h3>
+                                    <small style="color: var(--text-muted);">Learner distribution</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="rptGradeChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="modern-card rpt-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Performance Tiers</h3>
+                                    <small style="color: var(--text-muted);">Exceeding / Meeting / Below</small>
+                                </div>
+                            </div>
+                            <div class="chart-wrapper-canvas">
+                                <canvas id="rptTiersChart"></canvas>
+                            </div>
+                            <div class="polar-legend" id="rptTiersLegend"></div>
+                        </div>
+                        <div class="modern-card rpt-chart-card">
+                            <div class="card-header">
+                                <div>
+                                    <h3>Recent Activity</h3>
+                                    <small style="color: var(--text-muted);">Last 7 days</small>
+                                </div>
+                            </div>
+                            <div class="rpt-activity-list" id="rptActivityList">
+                                <div class="heatmap-empty">No recent activity tracked.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="reports-grid-layout">
                     
                     <!-- Individual Reports Card -->
@@ -1484,6 +2197,7 @@
                         <div class="report-cat-header"><div class="report-cat-icon purple"><i class="fa-solid fa-users"></i></div><div><h3>Class Reports</h3><p>Stream & Grade Analysis</p></div></div>
                         <div class="report-list">
                             <div class="report-item" data-modal="classReportModal"><div class="ri-icon green"><i class="fa-solid fa-table"></i></div><div class="ri-text"><h4>Class/Stream Marksheet</h4><p>Marksheet with totals and positions</p></div><i class="fa-solid fa-chevron-right"></i></div>
+                            <div class="report-item" data-modal="bulkProgressModal"><div class="ri-icon blue"><i class="fa-solid fa-layer-group"></i></div><div class="ri-text"><h4>Bulk Progress Reports</h4><p>Generate transcripts for a whole class, stream, or grade</p></div><i class="fa-solid fa-chevron-right"></i></div>
                         </div>
                     </div>
                     
@@ -2046,12 +2760,356 @@
     <!-- Other Modals -->
     <div class="modal-backdrop" id="subjectReportModal"><div class="modal"><div class="modal-header"><h3>Subject Score List</h3><button data-dismiss="modal">&times;</button></div><div class="modal-body"><div class="form-group"><label>Select Grade</label><select id="subjectReportGrade" class="form-control"><option value="">Select...</option></select></div></div><div class="modal-footer"><button class="btn btn-primary" id="btnGenSubjectList">Generate</button></div></div></div>
     <div class="modal-backdrop" id="classReportModal"><div class="modal"><div class="modal-header"><h3>Class Marksheet</h3><button data-dismiss="modal">&times;</button></div><div class="modal-body"><div class="form-row-2"><div class="form-group"><label>Grade</label><select id="classReportGrade" class="form-control"></select></div><div class="form-group"><label>Stream</label><select id="classReportStream" class="form-control"></select></div></div></div><div class="modal-footer"><button class="btn btn-primary" id="btnGenClassList">Generate</button></div></div></div>
+
+    <!-- BULK PROGRESS REPORT MODAL -->
+    <div class="modal-backdrop" id="bulkProgressModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-layer-group"></i> Bulk Progress Reports</h3>
+                <button data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin:0 0 1rem; font-size:0.85rem; color:var(--text-muted);">
+                    Generate progress report PDFs for every learner in a class, stream, or grade. Each learner gets their own page (or separate PDF).
+                </p>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Grade *</label>
+                        <select id="bulkProgressGrade" class="form-control">
+                            <option value="">Select Grade...</option>
+                            <optgroup label="Pre-Primary"><option>PP1</option><option>PP2</option></optgroup>
+                            <optgroup label="Lower Primary"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option></optgroup>
+                            <optgroup label="Middle School"><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option></optgroup>
+                            <optgroup label="Junior Secondary"><option>Grade 7</option><option>Grade 8</option><option>Grade 9</option></optgroup>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Stream</label>
+                        <select id="bulkProgressStream" class="form-control">
+                            <option value="all">All Streams</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Output</label>
+                        <select id="bulkProgressOutput" class="form-control">
+                            <option value="single">Single PDF (one page per learner)</option>
+                            <option value="zip">ZIP file (separate PDF per learner)</option>
+                            <option value="separate">Separate PDFs (individual downloads)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" id="bulkProgressIncludeRank" checked>
+                        <span>Include class rank &amp; stream rank on each report</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" id="bulkProgressIncludeComments" checked>
+                        <span>Include auto-generated teacher comments</span>
+                    </label>
+                </div>
+                <div id="bulkProgressPreview" style="margin-top:1rem; padding:0.75rem; background:var(--bg-alt); border-radius:8px; font-size:0.82rem; color:var(--text-muted); display:none;">
+                    Select a grade to see how many learners will be processed.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+                <button class="btn btn-primary" id="btnGenerateBulkProgress"><i class="fa-solid fa-file-pdf"></i> Generate Reports</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TIMETABLE SLOT MODAL -->
+    <div class="modal-backdrop" id="ttSlotModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="ttSlotModalTitle"><i class="fa-solid fa-calendar-plus"></i> Add Timetable Slot</h3>
+                <button data-dismiss="modal">&times;</button>
+            </div>
+            <form id="ttSlotForm">
+                <input type="hidden" id="ttSlotEditId">
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Day *</label>
+                        <select id="ttSlotDay" class="form-control" required>
+                            <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+                            <option>Thursday</option><option>Friday</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Period *</label>
+                        <select id="ttSlotPeriod" class="form-control" required>
+                            <option value="1">Period 1 (08:00-08:40)</option>
+                            <option value="2">Period 2 (08:40-09:20)</option>
+                            <option value="3">Period 3 (09:20-10:00)</option>
+                            <option value="break">Morning Break (10:00-10:30)</option>
+                            <option value="4">Period 4 (10:30-11:10)</option>
+                            <option value="5">Period 5 (11:10-11:50)</option>
+                            <option value="6">Period 6 (11:50-12:30)</option>
+                            <option value="lunch">Lunch (12:30-13:30)</option>
+                            <option value="7">Period 7 (13:30-14:10)</option>
+                            <option value="8">Period 8 (14:10-14:50)</option>
+                            <option value="9">Period 9 (14:50-15:30)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Grade *</label>
+                        <select id="ttSlotGrade" class="form-control" required>
+                            <option value="">Select Grade...</option>
+                            <optgroup label="Pre-Primary"><option>PP1</option><option>PP2</option></optgroup>
+                            <optgroup label="Lower Primary"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option></optgroup>
+                            <optgroup label="Middle School"><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option></optgroup>
+                            <optgroup label="Junior Secondary"><option>Grade 7</option><option>Grade 8</option><option>Grade 9</option></optgroup>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Subject *</label>
+                        <select id="ttSlotSubject" class="form-control" required>
+                            <option value="">Select Grade First...</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Teacher *</label>
+                        <select id="ttSlotTeacher" class="form-control" required>
+                            <option value="">Select Teacher...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Room / Venue</label>
+                        <input type="text" id="ttSlotRoom" class="form-control" placeholder="e.g. Room 7B / Lab">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Notes (optional)</label>
+                    <input type="text" id="ttSlotNotes" class="form-control" placeholder="e.g. Double lesson / Co-curricular">
+                </div>
+                <div id="ttClashWarning" class="tt-clash-warning" style="display:none;"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-save"></i> Save Slot</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- EXAM CREATE / EDIT MODAL -->
+    <div class="modal-backdrop" id="examFormModal">
+        <div class="modal modal-lg" style="max-width: 780px;">
+            <div class="modal-header">
+                <h3 id="examFormTitle"><i class="fa-solid fa-calendar-plus"></i> Schedule Exam</h3>
+                <button data-dismiss="modal">&times;</button>
+            </div>
+            <form id="examForm">
+                <input type="hidden" id="examEditId">
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Exam Name *</label>
+                        <input type="text" id="examName" class="form-control" required placeholder="e.g. Mid-Term Assessment">
+                    </div>
+                    <div class="form-group">
+                        <label>Exam Type *</label>
+                        <select id="examType" class="form-control" required>
+                            <option>Opener</option>
+                            <option>Mid-Term</option>
+                            <option>End-Term</option>
+                            <option>Continuous Assessment</option>
+                            <option>Mock</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Term *</label>
+                        <select id="examTerm" class="form-control" required>
+                            <option>Term 1</option><option>Term 2</option><option>Term 3</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Grade *</label>
+                        <select id="examGrade" class="form-control" required>
+                            <option value="">Select Grade...</option>
+                            <optgroup label="Pre-Primary"><option>PP1</option><option>PP2</option></optgroup>
+                            <optgroup label="Lower Primary"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option></optgroup>
+                            <optgroup label="Middle School"><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option></optgroup>
+                            <optgroup label="Junior Secondary"><option>Grade 7</option><option>Grade 8</option><option>Grade 9</option></optgroup>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Stream (optional)</label>
+                        <select id="examStream" class="form-control">
+                            <option value="all">All Streams</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Exam Date *</label>
+                        <input type="date" id="examDate" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Start Time *</label>
+                        <input type="time" id="examStartTime" class="form-control" required value="08:00">
+                    </div>
+                    <div class="form-group">
+                        <label>Reporting Time *</label>
+                        <input type="time" id="examReportingTime" class="form-control" required value="07:45">
+                    </div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Session *</label>
+                        <select id="examSession" class="form-control" required>
+                            <option value="Morning">Morning (8AM - 12PM)</option>
+                            <option value="Afternoon">Afternoon (1PM - 5PM)</option>
+                            <option value="Evening">Evening (5PM - 7PM)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Duration (minutes) *</label>
+                        <input type="number" id="examDuration" class="form-control" required min="15" max="240" value="60">
+                    </div>
+                    <div class="form-group">
+                        <label>Total Marks *</label>
+                        <input type="number" id="examTotalMarks" class="form-control" required min="10" max="500" value="100">
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Venue / Room *</label>
+                        <input type="text" id="examVenue" class="form-control" required placeholder="e.g. Hall A / Room 7B">
+                    </div>
+                    <div class="form-group">
+                        <label>Seating Capacity</label>
+                        <input type="number" id="examSeatingCapacity" class="form-control" min="1" max="500" placeholder="e.g. 40 (auto from grade if blank)">
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Chief Invigilator *</label>
+                        <select id="examInvigilator" class="form-control" required>
+                            <option value="">Select Staff...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Assistant Invigilator</label>
+                        <select id="examAssistantInvigilator" class="form-control">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- DEADLINES SECTION -->
+                <div class="exam-form-section">
+                    <h4><i class="fa-solid fa-flag-checkered"></i> Deadlines</h4>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label>Registration Deadline</label>
+                            <input type="datetime-local" id="examRegDeadline" class="form-control">
+                            <small class="form-hint">Last moment for learners to register</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Score Submission Deadline</label>
+                            <input type="datetime-local" id="examScoreDeadline" class="form-control">
+                            <small class="form-hint">Teachers must submit scores by this time</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Results Publication Date</label>
+                            <input type="date" id="examPublishDate" class="form-control">
+                            <small class="form-hint">When results become visible to learners</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Subjects Covered *</label>
+                    <div class="grades-checkbox-grid" id="examSubjectsGrid">
+                        <p style="color:var(--text-muted); font-size:0.85rem;">Select a grade first to populate subjects.</p>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Instructions to Candidates</label>
+                    <textarea id="examNotes" class="form-control" rows="2" placeholder="e.g. Bring geometrical set, calculator not allowed"></textarea>
+                </div>
+                <div id="examClashWarning" class="tt-clash-warning" style="display:none;"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-save"></i> Save Exam</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- EXAM GRADING MODAL -->
+    <div class="modal-backdrop" id="examGradingModal">
+        <div class="modal modal-lg" style="max-width: 1100px;">
+            <div class="modal-header">
+                <h3 id="examGradingTitle"><i class="fa-solid fa-pen-ruler"></i> Grade Exam</h3>
+                <button data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="exam-grading-header">
+                    <div>
+                        <strong id="egExamName">-</strong>
+                        <span id="egExamMeta" style="color:var(--text-muted); margin-left:8px;"></span>
+                    </div>
+                    <div class="eg-progress" id="egProgress">0 / 0 graded</div>
+                </div>
+
+                <!-- BATCH ENTRY TOOLBAR -->
+                <div class="batch-entry-toolbar">
+                    <div class="bet-left">
+                        <select id="egBatchScope" class="filter-select-modern">
+                            <option value="all">All Learners</option>
+                            <option value="stream">By Stream</option>
+                        </select>
+                        <select id="egBatchStream" class="filter-select-modern" style="display:none;">
+                            <option value="all">All Streams</option>
+                        </select>
+                    </div>
+                    <div class="bet-right">
+                        <button class="btn btn-sm btn-secondary" id="btnExportExamTemplate"><i class="fa-solid fa-file-excel"></i> Download Template</button>
+                        <button class="btn btn-sm btn-secondary" id="btnExportExamScores"><i class="fa-solid fa-download"></i> Export Scores</button>
+                        <button class="btn btn-sm btn-success" id="btnImportExamScores"><i class="fa-solid fa-upload"></i> Import Scores</button>
+                        <input type="file" id="egImportFile" accept=".xlsx,.xls,.csv" style="display:none;">
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="data-table eg-table" id="examGradingTable">
+                        <thead id="examGradingHead">
+                            <tr>
+                                <th>Adm No</th>
+                                <th>Learner</th>
+                                <th>Stream</th>
+                                <!-- Per-subject columns injected by JS -->
+                                <th>Avg</th>
+                                <th>Grade</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="examGradingBody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+                <button class="btn btn-warning" id="btnMarkInProgress"><i class="fa-solid fa-play"></i> Start Grading</button>
+                <button class="btn btn-success" id="btnPublishExam"><i class="fa-solid fa-bullhorn"></i> Publish Results</button>
+            </div>
+        </div>
+    </div>
     
     <div id="toast" class="toast" role="alert"></div>
     <div class="ai-fab" data-modal="aiAssistantModal" title="AI Assistant"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
 
     <!-- Sidebar Toggle Logic -->
-    <script src="script.js"></script>
+ 
     
 </body>
 </html>

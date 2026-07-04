@@ -1,0 +1,4 @@
+PnoiGjYpBPnY0xBngFam8ERbChZmgaYH
+postgresql://school_db_7j68_user:PnoiGjYpBPnY0xBngFam8ERbChZmgaYH@dpg-d93u9iuq1p3s73ac7qdg-a/school_db_7j68
+postgresql://school_db_7j68_user:PnoiGjYpBPnY0xBngFam8ERbChZmgaYH@dpg-d93u9iuq1p3s73ac7qdg-a.frankfurt-postgres.render.com/school_db_7j68
+PGPASSWORD=PnoiGjYpBPnY0xBngFam8ERbChZmgaYH psql -h dpg-d93u9iuq1p3s73ac7qdg-a.frankfurt-postgres.render.com -U school_db_7j68_user school_db_7j68

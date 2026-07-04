@@ -1,13 +1,14 @@
 'use strict';
-// Define your backend API URL
-// SMART URL: Automatically uses localhost if testing, or the live site if deployed
-// Force both Localhost and Render to use the Cloud Database
-const API_URL = "https://tvet-json-db.onrender.com";
+
+// ──── SMART API URL: Auto-detects local vs production ────
+const API_URL = (window.location.hostname === 'localhost' || 
+                 window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'                    // Local development
+    : 'https://tvet-json-db.onrender.com';       // Production (deployed)
     
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
 // ==========================================================================
-// CBC Grade Configuration
 const CBC_LEVELS = {
     'PP1': { name: 'Pre-Primary 1', type: 'Pre-Primary' },
     'PP2': { name: 'Pre-Primary 2', type: 'Pre-Primary' },
@@ -22,7 +23,6 @@ const CBC_LEVELS = {
     'Grade 9': { name: 'Grade 9 (JSS)', type: 'JSS' }
 };
 
-// Helper to map bands to grades for filtering
 const BAND_GRADE_MAP = {
     'pp': ['PP1', 'PP2'],
     'lower': ['Grade 1', 'Grade 2', 'Grade 3'],
@@ -34,15 +34,12 @@ const BAND_GRADE_MAP = {
 //   EXPANDED LEARNING AREAS (SUBJECTS)
 // ==========================================================================
 const DEFAULT_LEARNING_AREAS = [
-    // --- PRE-PRIMARY (PP1, PP2) ---
     { id: 'pp_lang', name: 'Language Activities', code: 'PP-LA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_math', name: 'Mathematical Activities', code: 'PP-MA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_env', name: 'Environmental Activities', code: 'PP-EA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_creative', name: 'Creative Activities', code: 'PP-CA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_psycho', name: 'Psychomotor Activities', code: 'PP-PA', applicableLevels: ['PP1', 'PP2'] },
     { id: 'pp_re', name: 'Religious Education Activities', code: 'PP-RE', applicableLevels: ['PP1', 'PP2'] },
-
-    // --- LOWER PRIMARY (Grade 1, 2, 3) ---
     { id: 'lp_lit_eng', name: 'Literacy Activities (English)', code: 'LP-LEN', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_lit_kis', name: 'Literacy Activities (Kiswahili)', code: 'LP-LKIS', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_math', name: 'Mathematical Activities', code: 'LP-MATH', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
@@ -50,8 +47,6 @@ const DEFAULT_LEARNING_AREAS = [
     { id: 'lp_creative', name: 'Creative Activities (Art/Craft)', code: 'LP-CA', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_pe', name: 'Movement & Creative Activities (PE)', code: 'LP-PE', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
     { id: 'lp_re', name: 'Religious Education (CRE/IRE)', code: 'LP-RE', applicableLevels: ['Grade 1', 'Grade 2', 'Grade 3'] },
-
-    // --- MIDDLE SCHOOL (Grade 4, 5, 6) ---
     { id: 'ms_eng', name: 'English', code: 'MS-ENG', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_kis', name: 'Kiswahili', code: 'MS-KIS', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_math', name: 'Mathematics', code: 'MS-MATH', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
@@ -63,8 +58,6 @@ const DEFAULT_LEARNING_AREAS = [
     { id: 'ms_agri', name: 'Agriculture', code: 'MS-AGR', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_hs', name: 'Home Science', code: 'MS-HS', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
     { id: 'ms_lang', name: 'Foreign Language (French/German)', code: 'MS-FL', applicableLevels: ['Grade 4', 'Grade 5', 'Grade 6'] },
-
-    // --- JUNIOR SECONDARY (Grade 7, 8, 9) - CORRECTED & EXPANDED ---
     { id: 'js_eng', name: 'English', code: 'JS-ENG', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
     { id: 'js_kis', name: 'Kiswahili', code: 'JS-KIS', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
     { id: 'js_math', name: 'Mathematics', code: 'JS-MATH', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
@@ -81,6 +74,7 @@ const DEFAULT_LEARNING_AREAS = [
     { id: 'js_bus', name: 'Business Studies', code: 'JS-BS', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] },
     { id: 'js_sports', name: 'Sports', code: 'JS-PE', applicableLevels: ['Grade 7', 'Grade 8', 'Grade 9'] }
 ];
+
 const store = {
     students: [],
     staff: [],
@@ -123,7 +117,6 @@ const store = {
 const ADMIN_PASSWORD = 'admin123';
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23e2e8f0' width='150' height='150'/%3E%3Ctext fill='%2394a3b8' font-family='sans-serif' font-size='14' x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle'%3ENo Photo%3C/text%3E%3C/svg%3E";
 
-// State variables
 let CURRENT_USER = null;
 let currentView = { students: 'grid', staff: 'grid' };
 let currentPage = 1;
@@ -139,7 +132,6 @@ let currentReportContext = { type: null };
 // ==========================================================================
 //   UTILITY FUNCTIONS
 // ==========================================================================
-
 const $ = id => document.getElementById(id);
 const getVal = id => $(id) ? $(id).value.trim() : '';
 const setVal = (id, val) => { if ($(id)) $(id).value = val; };
@@ -157,7 +149,6 @@ function escapeHtml(text) {
     if (!text) return ''; 
     return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); 
 }
-
 function formatCurrency(num) { return 'KES ' + (num || 0).toLocaleString(); }
 function generateId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
 
@@ -186,213 +177,295 @@ function openModal(id) {
             if(btnTrans) btnTrans.style.display = isTranscript ? 'block' : 'none';
             if(btnLeave) btnLeave.style.display = isTranscript ? 'none' : 'block';
         }
-        if (id === 'subjectReportModal' || id === 'classReportModal') {
-            populateDropdownsForReports();
-        }
-        if (id === 'bulkProgressModal') {
-            if (typeof initBulkProgressModal === 'function') initBulkProgressModal();
-        }
+        if (id === 'subjectReportModal' || id === 'classReportModal') populateDropdownsForReports();
+        if (id === 'bulkProgressModal' && typeof initBulkProgressModal === 'function') initBulkProgressModal();
     }
 }
 
 function closeModal(id) {
     if ($(id)) { $(id).classList.remove('active'); document.body.style.overflow = ''; }
-    // Flush any pending debounced exam saves when the grading modal closes
-    if (id === 'examGradingModal' && typeof flushExamSaves === 'function') {
-        flushExamSaves();
-    }
+    if (id === 'examGradingModal' && typeof flushExamSaves === 'function') flushExamSaves();
 }
 
 // ==========================================================================
-//   API & AUTHENTICATION LAYER
+//   API & AUTHENTICATION LAYER (ROBUST VERSION)
 // ==========================================================================
-
 function logout() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('user');
     window.location.href = 'login.html'; 
 }
 
+const API_TIMEOUT_MS = 60000;
+const API_RETRIES = 3;
+
+async function robustFetch(url, options = {}, retries = API_RETRIES) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        let data = null;
+        try { data = await res.json(); } catch (e) {}
+        return { ok: res.ok, status: res.status, data, fromCache: false };
+    } catch (err) {
+        clearTimeout(timeoutId);
+        if (retries > 0 && (err.name === 'AbortError' || err.name === 'TypeError')) {
+            console.warn(`[API] Request failed (${err.name}), retrying... (${retries} left)`);
+            await new Promise(r => setTimeout(r, 5000));
+            return robustFetch(url, options, retries - 1);
+        }
+        return { ok: false, status: 0, data: null, fromCache: false, error: err.name };
+    }
+}
+
+// Cleans duplicate IDs from arrays before sending to server
+const dedupById = (arr) => {
+    if (!arr || !Array.isArray(arr)) return arr || [];
+    const seen = new Set();
+    return arr.filter(item => {
+        if (!item.id) return true;
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+    });
+};
+
 async function loadData() {
     const token = localStorage.getItem('authToken');
     if (!token) return logout();
 
-    try {
-        // 1. Try to fetch from Server
-        const res = await fetch(`${API_URL}/api/db`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+    const loaderText = document.querySelector('#appLoader p');
+    if (loaderText) loaderText.textContent = 'Connecting to server...';
 
-        if (res.ok) {
-            const db = await res.json();
-            // Populate Store from Server
-            store.students = db.students || [];
-            store.staff = db.staff || [];
-            store.exams = db.exams || [];
-            store.notes = db.notes || [];
-            store.timetable = db.timetable || [];
-            store.examSchedules = db.examSchedules || [];
-            store.settings = { ...store.settings, ...db.settings };
-            
-            let existingAreas = db.learningAreas || [];
-            DEFAULT_LEARNING_AREAS.forEach(def => {
-                if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
-            });
-            store.learningAreas = existingAreas;
+    const result = await robustFetch(`${API_URL}/api/db`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
 
-            // Seed demo staff on first run so the Staff section isn't empty.
-            // seedStaffData() is a no-op once any staff exist (server or local).
-            seedStaffData();
-        } else {
-            throw new Error("Server response not OK");
+    if (result.ok && result.data) {
+                        const serverData = result.data;
+        
+        // ⚠️ PHONE SURVIVAL FIX: Strip huge Base64 photos immediately!
+        // Phones crash (Out of Memory) when parsing 20MB+ of image data.
+        if (serverData.students) serverData.students.forEach(s => s.photo = null);
+        if (serverData.staff) serverData.staff.forEach(s => s.photo = null);
+        if (serverData.settings) {
+            serverData.settings.logo = null;
+            serverData.settings.stamp = null;
+            serverData.settings.hoiSignature = null;
+            serverData.settings.ctSignature = null;
+        }
+        
+        // Grab local data BEFORE overwriting anything
+        // ⚠️ PHONE SURVIVAL FIX: Don't parse local data if it's huge
+        const localRaw = localStorage.getItem('elimutrack_backup');
+        let localData = null;
+        if (localRaw && localRaw.length < 5000000) {
+            try { localData = JSON.parse(localRaw); } catch (e) { localData = null; }
+        } else if (localRaw) {
+            console.warn('[DATA] Local backup too large, clearing it.');
+            localStorage.removeItem('elimutrack_backup');
         }
 
-        renderDashboard(); 
-        renderStaff();
+        // ──── FIX: UNION MERGE BY ID (No more empty reports on new devices!) ────
+        const mergeArray = (serverArr, localArr) => {
+            if (!serverArr?.length && !localArr?.length) return [];
+            if (!serverArr?.length) return localArr || [];
+            if (!localArr?.length) return serverArr || [];
+            
+            const mergedMap = new Map();
+            serverArr.forEach(item => { if (item.id) mergedMap.set(item.id, item); });
+            
+            localArr.forEach(item => {
+                if (!item.id) return;
+                const existing = mergedMap.get(item.id);
+                if (!existing) {
+                    mergedMap.set(item.id, item);
+                } else if (item.updatedAt && existing.updatedAt) {
+                    if (item.updatedAt > existing.updatedAt) mergedMap.set(item.id, item);
+                } else {
+                    mergedMap.set(item.id, item);
+                }
+            });
+            return Array.from(mergedMap.values());
+        };
 
-    } catch (err) {
-        console.error("Failed to load data from server.", err);
+        const serverCounts = {
+            students: serverData.students?.length || 0,
+            staff: serverData.staff?.length || 0,
+            exams: serverData.exams?.length || 0,
+            notes: serverData.notes?.length || 0,
+            timetable: serverData.timetable?.length || 0,
+            examSchedules: serverData.examSchedules?.length || 0
+        };
+
+        store.students = mergeArray(serverData.students, localData?.students);
+        store.staff = mergeArray(serverData.staff, localData?.staff);
+        store.exams = mergeArray(serverData.exams, localData?.exams);
+        // FIX: Convert string arrays back to real arrays (prevents .map crash)
+        store.exams = store.exams.map(exam => {
+            if (exam.subjects && typeof exam.subjects === 'string') {
+                try { exam.subjects = JSON.parse(exam.subjects); } catch(e) { exam.subjects = []; }
+            }
+            return exam;
+        });
+        store.notes = mergeArray(serverData.notes, localData?.notes);
+        store.timetable = mergeArray(serverData.timetable, localData?.timetable);
+        store.examSchedules = mergeArray(serverData.examSchedules, localData?.examSchedules);
         
-        // 2. FALLBACK: Load from LocalStorage (The Safety Net)
+        store.settings = { ...store.settings, ...(serverData.settings || {}), ...(localData?.settings || {}) };
+
+                // Learning Areas: merge
+        let existingAreas = serverData.learningAreas || [];
+        DEFAULT_LEARNING_AREAS.forEach(def => {
+            if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
+        });
+        
+                // FIX: Safe parse for applicableLevels (prevents fatal crash on mobile)
+        store.learningAreas = existingAreas.map(area => {
+            let levels = area.applicableLevels;
+            if (!Array.isArray(levels)) {
+                try {
+                    levels = JSON.parse(levels || '[]');
+                } catch (e) {
+                    levels = [];
+                }
+            }
+            return { ...area, applicableLevels: levels };
+        });
+        seedStaffData();
+
+        const needsSync = (
+            store.students.length > serverCounts.students ||
+            store.staff.length > serverCounts.staff ||
+            store.exams.length > serverCounts.exams ||
+            store.notes.length > serverCounts.notes ||
+            store.timetable.length > serverCounts.timetable ||
+            store.examSchedules.length > serverCounts.examSchedules
+        );
+
+        if (needsSync) {
+            console.log('[SYNC] Merged data has new items — pushing to server...');
+            if (loaderText) loaderText.textContent = 'Syncing data to server...';
+            
+            const syncResult = await robustFetch(`${API_URL}/api/restore`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    students: dedupById(store.students),
+                    staff: dedupById(store.staff),
+                    settings: store.settings,
+                    exams: dedupById(store.exams),
+                    learningAreas: dedupById(store.learningAreas),
+                    notes: dedupById(store.notes),
+                    timetable: dedupById(store.timetable),
+                    examSchedules: dedupById(store.examSchedules)
+                })
+            });
+
+            if (syncResult.ok) {
+                console.log('[SYNC] Data synced to server successfully.');
+                showToast('Data synced to cloud!', 'success');
+                localStorage.setItem('elimutrack_sync_source', 'server');
+            } else {
+                console.warn('[SYNC] Push failed:', syncResult.status, syncResult.data);
+                showToast('Cloud sync failed. Data saved locally.', 'warning');
+                localStorage.setItem('elimutrack_sync_source', 'local');
+            }
+        } else {
+            localStorage.setItem('elimutrack_sync_source', 'server');
+            console.log('[DATA] Loaded from server successfully.');
+        }
+
+    } else {
         const localData = localStorage.getItem('elimutrack_backup');
         if (localData) {
-            const parsed = JSON.parse(localData);
-            Object.assign(store, parsed);
-            // Same first-run safety net for the offline path.
-            seedStaffData();
-            renderDashboard();
-            renderStaff();
-            alert("Warning: Could not connect to server. Loaded previously saved data from browser.");
+            try {
+                const parsed = JSON.parse(localData);
+                Object.assign(store, parsed);
+                seedStaffData();
+                let reason = result.error === 'AbortError' ? 'Server timed out.' : 
+                             result.status === 403 ? 'Session expired.' : 
+                             result.status === 0 ? 'Network error or CORS blocked.' : 
+                             `Server error ${result.status}.`;
+                console.warn('[DATA] Server unavailable —', reason);
+                setTimeout(() => showToast(`Offline mode — ${reason}`, 'warning'), 1000);
+                if (result.status === 403) {
+                    setTimeout(() => { showToast('Session expired. Please log in again.', 'error'); setTimeout(() => logout(), 2000); }, 2500);
+                    return;
+                }
+            } catch (parseErr) { console.error('[DATA] Local backup corrupted:', parseErr); }
         } else {
-            // Last-resort: nothing on server or in localStorage. Seed demo
-            // staff so the user can still see how the section works.
             seedStaffData();
-            renderDashboard();
-            renderStaff();
-            alert("Critical Error: No data found on Server or Browser.");
+            setTimeout(() => showToast('First launch — server waking up.', 'warning'), 1000);
         }
+        localStorage.setItem('elimutrack_sync_source', 'local');
     }
+
+    renderDashboard();
+    renderStaff();
 }
+
 async function saveData() {
     const token = localStorage.getItem('authToken');
     if (!token) {
         showToast('Session expired. Please login again.', 'error');
-        return window.location.href = 'login.html';
+        return setTimeout(() => { window.location.href = 'login.html'; }, 1500);
     }
 
-    // 1. LocalStorage Backup (Stripped of images to prevent crash)
     try {
         const lightweightStore = {
-            ...store,
-            // Remove heavy photos from backup
             students: store.students.map(s => ({ ...s, photo: null })),
             staff: store.staff.map(s => ({ ...s, photo: null })),
-            settings: {
-                ...store.settings,
-                logo: null,
-                stamp: null,
-                hoiSignature: null,
-                ctSignature: null
-            }
+            exams: store.exams,
+            notes: store.notes,
+            timetable: store.timetable,
+            examSchedules: store.examSchedules,
+            settings: { ...store.settings, logo: null, stamp: null, hoiSignature: null, ctSignature: null },
+            learningAreas: store.learningAreas
         };
         localStorage.setItem('elimutrack_backup', JSON.stringify(lightweightStore));
-    } catch (e) {
-        console.warn("Local Storage full. Backup skipped.");
-    }
+    } catch (e) { console.warn("[SAVE] localStorage full."); }
 
-    let _authFailed = false;
     try {
-        // 2. Send to Server (With Auth Headers)
-        // Helper: tolerant POST — returns {ok:true} for missing endpoints or auth failures
-        // so that optional new collections (notes/timetable/examSchedules) don't break the save flow.
-        const tolerantPost = async (path, body) => {
-            try {
-                const res = await fetch(`${API_URL}/${path}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                    body: JSON.stringify(body || [])
-                });
-                return res; // may have ok=false (404/403) — caller decides
-            } catch (e) {
-                return { ok: true, tolerant: true }; // network error → treat as success
-            }
-        };
+        const result = await robustFetch(`${API_URL}/api/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+                students: dedupById(store.students),
+                staff: dedupById(store.staff),
+                settings: store.settings,
+                exams: dedupById(store.exams),
+                learningAreas: dedupById(store.learningAreas),
+                notes: dedupById(store.notes),
+                timetable: dedupById(store.timetable),
+                examSchedules: dedupById(store.examSchedules)
+            })
+        });
 
-        const [studentsRes, staffRes, settingsRes, examsRes, areasRes, notesRes, timetableRes, examSchedulesRes] = await Promise.all([
-            fetch(`${API_URL}/students`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.students)
-            }),
-            fetch(`${API_URL}/staff`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.staff)
-            }),
-            fetch(`${API_URL}/settings`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.settings)
-            }),
-            fetch(`${API_URL}/exams`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(store.exams)
-            }),
-            fetch(`${API_URL}/learningAreas`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(store.learningAreas)
-            }),
-            // Optional endpoints — tolerate 404 (endpoint not deployed yet) silently
-            tolerantPost('notes', store.notes || []),
-            tolerantPost('timetable', store.timetable || []),
-            tolerantPost('examSchedules', store.examSchedules || [])
-        ]);
-
-        // Detect auth failure (403) on core endpoints
-        if (studentsRes.status === 403 || staffRes.status === 403 || settingsRes.status === 403) {
-            _authFailed = true;
+        if (result.status === 403) {
+            showToast('Session expired. Data saved locally.', 'error');
+            localStorage.setItem('elimutrack_sync_source', 'local');
+            return;
         }
 
-        // Core collections must succeed for us to claim "saved". The optional
-        // collections (notes/timetable/examSchedules) are best-effort — if the
-        // server doesn't have those endpoints yet, data still lives in localStorage.
-        const coreOk = studentsRes.ok && staffRes.ok && settingsRes.ok;
-        if (coreOk) {
+        if (result.ok) {
             showToast('All changes saved successfully!');
+            localStorage.setItem('elimutrack_sync_source', 'server');
+            window._syncFailedToastShown = false;
         } else {
-            // Log only core failures. Optional-endpoint 404s are silent.
-            console.warn('Core save failed:', {
-                students: studentsRes.status,
-                staff: staffRes.status,
-                settings: settingsRes.status
-            });
-            throw new Error('Server rejected one or more core saves');
+            throw new Error(`Server returned ${result.status}`);
         }
-
     } catch (err) {
-        // Data is already saved to localStorage (step 1 above), so this is
-        // only a server-sync failure. Don't alarm the user — just log it.
-        console.warn("Server sync skipped (data saved locally):", err.message || err);
-        // Only show the error toast once per session to avoid spam
+        console.warn('[SAVE] Server sync failed:', err.message || err);
+        localStorage.setItem('elimutrack_sync_source', 'local');
         if (!window._syncFailedToastShown) {
             window._syncFailedToastShown = true;
-            if (_authFailed) {
-                showToast('Session expired. Data saved locally — please re-login to sync.', 'error');
-            } else {
-                showToast('Saved locally. Server sync will retry.', 'success');
-            }
+            showToast('Saved locally. Server sync will retry.', 'warning');
         }
     }
 }
@@ -402,17 +475,19 @@ function applyRoleRestrictions(role) {
         const adminPages = ['intake', 'staff', 'settings', 'reports'];
         adminPages.forEach(page => {
             const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
-            if(navItem) navItem.style.display = 'none';
+            if (navItem) navItem.style.display = 'none';
         });
     }
-    
+
     const profileName = document.querySelector('.user-profile .user-info span');
     const profileRole = document.querySelector('.user-profile .user-info small');
-    if(CURRENT_USER) {
-        if(profileName) profileName.innerText = CURRENT_USER.name;
-        if(profileRole) profileRole.innerText = CURRENT_USER.role === 'admin' ? 'School Admin' : 'Teacher';
+    if (CURRENT_USER) {
+        if (profileName) profileName.innerText = CURRENT_USER.name;
+        if (profileRole) profileRole.innerText = CURRENT_USER.role === 'admin' ? 'School Admin' : 'Teacher';
     }
 }
+
+
 
 // ==========================================================================
 //   GENERIC REPOSITORY
@@ -432,6 +507,7 @@ function createRepository(entityKey) {
 
 const StudentRepo = createRepository('students');
 const StaffRepo = createRepository('staff');
+const ExamRepo = createRepository('exams');  // ← ADD THIS
 
 // ==========================================================================
 //   INITIALIZATION
@@ -528,6 +604,8 @@ function initGlobalListeners() {
             if (item) item.classList.toggle('open');
             return;
         }
+
+        
         // ----------------------------------------------
 
         const viewBtn = target.closest('[data-view]'); 
@@ -598,7 +676,10 @@ function initGlobalListeners() {
         if (target.closest('#btnStaffReport')) generateStaffListPDF();
         if (target.closest('#btnProfileReport')) generateSchoolProfile();
         if (target.closest('#btnPrintStaffList')) generateStaffListPDF();
-
+        if (target.closest('#btnForceSync')) {
+             forceSyncToServer();
+            return;
+            }
         const unitCard = target.closest('.cbet-unit-card');
         if (unitCard) { 
             const code = unitCard.dataset.unitCode; 
@@ -863,77 +944,87 @@ function resetIntakeForm() { $('newStudentForm')?.reset(); if ($('editModeId')) 
 // 3. ENHANCED SUBMISSION
 function submitRegistration(e) {
     e.preventDefault();
-    
-    // Final validation (Double Check)
+
     const requiredIds = ['surname', 'firstName', 'gender', 'dob', 'idNumber', 'regTrade', 'level', 'guardianName', 'guardianPhone'];
-    for(let id of requiredIds) {
-        if(!$(id).value.trim()) {
+    for (let id of requiredIds) {
+        const el = $(id);
+        if (!el || !el.value.trim()) {
             showToast('Please fill all required fields.', 'error');
-            // Find step and go there
-            // (Simple logic: just alert and return for now)
+            const stepDiv = el?.closest('.form-step');
+            if (stepDiv) {
+                const stepNum = parseInt(stepDiv.id.replace('form-step-', ''));
+                if (!isNaN(stepNum) && stepNum > 1) prevStep(stepNum, stepNum - 1);
+            }
+            el?.focus();
             return;
         }
     }
 
-    // Check ID one last time
-    const idVal = $('idNumber').value;
+    const idVal = $('idNumber').value.trim();
     const editId = $('editModeId')?.value;
-    if (StudentRepo.getAll().some(s => s.idNumber === idVal && s.id !== editId)) {
+    if (store.students.some(s => s.idNumber === idVal && s.id !== editId)) {
         showToast('Duplicate ID Number detected!', 'error');
+        $('idNumber')?.focus();
         return;
     }
 
-    // ... [Rest of original logic for data gathering] ...
     const grade = getVal('regTrade');
-    const names = [getVal('surname'), getVal('firstName'), getVal('otherNames')].filter(Boolean).join(' ');
-    
-    // (Keep existing logic for Photo, Data Object, etc.)
-    
-    const studentData = { 
-        name: names, 
-        gender: getVal('gender'), 
-        dob: getVal('dob'), 
-        idNumber: idVal, 
-        phone: getVal('phone'), 
+    const names = [getVal('surname'), getVal('firstName'), getVal('otherNames')].filter(n => n).join(' ');
+    const reg = getVal('assessmentNo') || generateRegNumber(grade);
+    const gender = getVal('gender');
+
+    const studentData = {
+        name: names,
+        surname: getVal('surname'),
+        firstName: getVal('firstName'),
+        otherNames: getVal('otherNames'),
+        gender: gender,
+        dob: getVal('dob'),
+        idNumber: idVal,
+        phone: getVal('phone'),
+        email: getVal('email'),
         grade: grade,
-        stream: getVal('level'), 
-        photo: $('studentPhotoPreview').src,
-        upiNumber: getVal('upiNumber'),
-        prevSchool: getVal('prevSchool'),
+        stream: getVal('level'),
+        reg: reg,
+        assessmentNo: getVal('assessmentNo'),
         entryLevel: getVal('entryLevel'),
-        yearCompleted: getVal('yearCompleted'),
-        nemisNumber: getVal('assessmentNo'),
-        disability: getVal('disability'),
+        admissionDate: getVal('admissionDate') || new Date().toISOString().split('T')[0],
         guardianName: getVal('guardianName'),
         guardianPhone: getVal('guardianPhone'),
-        guardianRel: getVal('guardianRel')
+        guardianEmail: getVal('guardianEmail'),
+        guardianId: getVal('guardianId'),
+        address: getVal('address'),
+        county: getVal('county'),
+        subCounty: getVal('subCounty'),
+        photo: $('studentPhotoPreview')?.src?.includes('data:') ? $('studentPhotoPreview').src : null,
+        status: 'active',
+        cleared: false,
+        updatedAt: new Date().toISOString()
     };
 
-    if (editId) { 
-        StudentRepo.update(editId, studentData); 
-        showToast('Learner details updated successfully!'); 
-    } else { 
-        // Generate ADM No (Existing logic is good)
-        const year = new Date().getFullYear().toString().slice(-2);
-        const count = StudentRepo.findBy('grade', grade).length + 1;
-        const seq = String(count).padStart(3, '0');
-        const gCode = grade.replace(' ', '');
-        studentData.reg = `${gCode}/${year}/${seq}`;
-        
-        StudentRepo.create(studentData); 
-        showToast('Learner Registered Successfully!', 'success');
-        
-        // Add Activity
-        // store.activities.push({ ... });
+    if (editId) {
+        StudentRepo.update(editId, studentData);
+        showToast('Student updated successfully!');
+    } else {
+        studentData.id = generateId();
+        studentData.createdAt = new Date().toISOString();
+        StudentRepo.create(studentData);
+        showToast('Student registered successfully!');
     }
 
-    // Reset and Redirect
-    router('students'); // Go to list to see the new card
     resetIntakeForm();
+    applyFilters();
     renderDashboard();
+    closeModal('studentModal');
 }
-function onGradeChange() { updateLiveCard(); }
 
+
+function onGradeChange() { updateLiveCard(); }
+function generateRegNumber(grade) {
+    const prefix = (grade || 'UNK').replace(/\s/g, '').substring(0, 3).toUpperCase();
+    const count = store.students.filter(s => s.grade === grade).length + 1;
+    return `${prefix}/${String(count).padStart(3, '0')}/${store.settings.academicYear || '2024'}`;
+}
 function updateLiveCard() { 
     const sn = getVal('surname') || ''; 
     const fn = getVal('firstName') || ''; 
@@ -957,41 +1048,40 @@ function updateLiveCard() {
 
 function previewStudentPhoto(input) { if (input.files && input.files[0]) { const file = input.files[0]; if (!file.type.startsWith('image/')) { showToast('Please select a valid image file (JPG, PNG).', 'error'); input.value = ''; return; } const reader = new FileReader(); reader.onload = function(e) { if ($('studentPhotoPreview')) $('studentPhotoPreview').src = e.target.result; if ($('liveCardPhoto')) $('liveCardPhoto').src = e.target.result; }; reader.readAsDataURL(file); } }
 
-function editStudent(id) { 
-    const s = StudentRepo.getById(id); 
-    if (!s) return; 
-    router('intake'); 
-    if ($('intakeFormTitle').innerText = "Edit Learner Details"); 
-    $('editModeId').value = id; 
-    if ($('studentPhotoPreview')) $('studentPhotoPreview').src = s.photo; 
-    if ($('liveCardPhoto')) $('liveCardPhoto').src = s.photo; 
+function editStudent(id) {
+    const student = StudentRepo.getById(id);
+    if (!student) return showToast('Student not found.', 'error');
     
-    setVal('surname', s.name.split(' ')[0]); 
-    setVal('firstName', s.name.split(' ')[1] || ''); 
-    setVal('otherNames', s.name.split(' ').slice(2).join(' ')); 
-    setVal('gender', s.gender); 
-    setVal('dob', s.dob); 
-    setVal('idNumber', s.idNumber); 
-    setVal('phone', s.phone); 
-    setVal('upiNumber', s.upiNumber || '');
-    setVal('prevSchool', s.prevSchool || '');
-    setVal('entryLevel', s.entryLevel || '');
-    setVal('yearCompleted', s.yearCompleted || '');
-    setVal('assessmentNo', s.nemisNumber || '');
-    setVal('regTrade', s.grade);
+    resetIntakeForm();
+    setVal('editModeId', student.id);
+    setVal('surname', student.surname);
+    setVal('firstName', student.firstName);
+    setVal('otherNames', student.otherNames);
+    setVal('gender', student.gender);
+    setVal('dob', student.dob);
+    setVal('idNumber', student.idNumber);
+    setVal('phone', student.phone);
+    setVal('email', student.email);
+    setVal('regTrade', student.grade);
+    setVal('level', student.stream);
+    setVal('assessmentNo', student.assessmentNo);
+    setVal('entryLevel', student.entryLevel);
+    setVal('admissionDate', student.admissionDate);
+    setVal('guardianName', student.guardianName);
+    setVal('guardianPhone', student.guardianPhone);
+    setVal('guardianEmail', student.guardianEmail);
+    setVal('guardianId', student.guardianId);
+    setVal('address', student.address);
+    setVal('county', student.county);
+    setVal('subCounty', student.subCounty);
     
-    onGradeChange(); 
-    setTimeout(() => { 
-        setVal('level', s.stream); 
-        setVal('disability', s.disability || 'None');
-        setVal('guardianName', s.guardianName || ''); 
-        setVal('guardianPhone', s.guardianPhone || ''); 
-        setVal('guardianRel', s.guardianRel || 'Parent');
-        updateLiveCard(); 
-    }, 100);
+    if (student.photo) {
+        $('studentPhotoPreview').src = student.photo;
+        $('liveCardPhoto').src = student.photo;
+    }
     
-    closeModal('viewStudentModal'); 
-    showToast('Editing mode active.', 'info'); 
+    updateLiveCard();
+    openModal('studentModal');
 }
 
 // ==========================================================================
@@ -1012,953 +1102,14 @@ const LearnerState = {
     sortDir: 'asc'
 };
 
-/// ==========================================================================
-//   EXAM PORTAL — COMPLETE CBC ASSESSMENT ENGINE
-// ==========================================================================
-
-// Fix the truncated line from the original file
+// Compat shim: legacy code references currentStudentFilter
 let currentStudentFilter = {
-    search: '',
-    grade: 'all',
-    gender: 'all'
-};
-
-// --- CBC UNITS DATABASE (per subject per grade) ---
-// In a real system these come from the curriculum/KICD database.
-// Here we auto-generate sensible units from the learning area name.
-function getUnitsForSubject(subjectId, grade) {
-    const subject = store.learningAreas.find(la => la.id === subjectId);
-    if (!subject) return [];
-
-    const name = subject.name;
-    const units = [];
-
-    // Generate 4-6 contextually relevant sub-strands per subject
-    const unitTemplates = {
-        'English': ['Listening & Speaking', 'Reading', 'Writing', 'Grammar in Context', 'Literature & Appreciation'],
-        'Kiswahili': ['Kusikiliza na Kuzungumza', 'Kusoma', 'Kuandika', 'Lugha kwa Matumizi', 'Fasihi'],
-        'Mathematics': ['Numbers', 'Algebra', 'Geometry', 'Measurement', 'Data Handling'],
-        'Integrated Science': ['Scientific Investigation', 'Living Things', 'Matter', 'Force & Energy', 'Earth & Space'],
-        'Science & Technology': ['Scientific Skills', 'Living Things', 'Matter', 'Force & Energy', 'Environment'],
-        'Social Studies': ['Citizenship', 'Culture', 'Government', 'Resources & Economic Activities', 'Physical Environment'],
-        'Religious Education': ['Creation', 'Faith & Commandments', 'Worship', 'Festivals & Celebrations', 'Moral Teachings'],
-        'CRE / IRE': ['Creation', 'Faith & Commandments', 'Worship', 'Festivals', 'Moral Teachings'],
-        'Religious Education (CRE/IRE)': ['Creation', 'Faith & Commandments', 'Worship', 'Festivals', 'Moral Teachings'],
-        'Creative Arts': ['Visual Arts', 'Performing Arts', 'Music', 'Theatre & Drama'],
-        'Creative Arts & Sports Science': ['Visual Arts', 'Performing Arts', 'Sports Science', 'Physical Fitness'],
-        'Creative Activities': ['Visual Arts', 'Music', 'Movement & Dance', 'Drama'],
-        'Creative Activities (Art/Craft)': ['Drawing & Painting', 'Craft & Clay', 'Printmaking', 'Textile'],
-        'Pre-Technical Studies': ['Technology & Life', 'Materials & Tools', 'Drawing & Design', 'Processes & Products'],
-        'Agriculture': ['Soil & Water', 'Crop Production', 'Animal Production', 'Agribusiness'],
-        'Computer Science': ['Digital Literacy', 'Programming Concepts', 'Internet & Networks', 'Data & Security'],
-        'Physical & Health Education': ['Games & Sports', 'Gymnastics', 'Health & Safety', 'First Aid'],
-        'Movement & Creative Activities (PE)': ['Movement', 'Games', 'Health & Safety'],
-        'Home Science': ['Food & Nutrition', 'Clothing & Textiles', 'Home Management', 'Consumer Education'],
-        'Foreign Language': ['Listening & Speaking', 'Reading', 'Writing', 'Grammar'],
-        'Foreign Language (French/German)': ['Listening & Speaking', 'Reading', 'Writing', 'Grammar'],
-        'Life Skills Education': ['Self-Awareness', 'Communication', 'Decision Making', 'Conflict Resolution'],
-        'Health Education': ['Personal Hygiene', 'Nutrition', 'Disease Prevention', 'Mental Health'],
-        'Business Studies': ['Entrepreneurship', 'Marketing', 'Accounting Basics', 'Office Practice'],
-        'Sports': ['Games & Sports', 'Athletics', 'Fitness Training', 'Sports Ethics'],
-        'Language Activities': ['Listening & Speaking', 'Reading', 'Writing', 'Pre-Reading'],
-        'Mathematical Activities': ['Numbers', 'Patterns', 'Shapes', 'Measurement'],
-        'Environmental Activities': ['My Environment', 'Living Things', 'Water & Weather', 'Soil & Plants'],
-        'Psychomotor Activities': ['Movement', 'Coordination', 'Balance', 'Games'],
-        'Religious Education Activities': ['God\'s Creation', 'Prayer', 'Kindness', 'Community'],
-        'Literacy Activities (English)': ['Listening & Speaking', 'Reading', 'Writing', 'Phonics'],
-        'Literacy Activities (Kiswahili)': ['Kusikiliza', 'Kusoma', 'Kuandika', 'Herufi na Silabi'],
-        'Environmental Activities': ['My Surroundings', 'Living Things', 'Water', 'Plants & Animals']
-    };
-
-    // Match by longest key first
-    let matched = null;
-    const keys = Object.keys(unitTemplates).sort((a, b) => b.length - a.length);
-    for (const key of keys) {
-        if (name.includes(key) || key.includes(name)) {
-            matched = unitTemplates[key];
-            break;
-        }
-    }
-
-    // Fallback generic units
-    if (!matched) {
-        matched = ['Strand 1: Introduction', 'Strand 2: Development', 'Strand 3: Application', 'Strand 4: Evaluation'];
-    }
-
-    matched.forEach((unitName, i) => {
-        units.push({
-            code: `${subject.code}-${String(i + 1).padStart(2, '0')}`,
-            name: unitName,
-            criteria: [
-                'Demonstrates understanding of key concepts',
-                'Applies knowledge in practical contexts',
-                'Communicates ideas effectively'
-            ]
-        });
-    });
-
-    return units;
-}
-
-// --- COMPETENCY LEVEL HELPER ---
-function getCompetencyLevel(score) {
-    if (score >= 80) return 'EE';
-    if (score >= 50) return 'ME';
-    if (score >= 30) return 'AE';
-    return 'BE';
-}
-
-function getCompetencyLabel(level) {
-    const map = { EE: 'Exceeding Expectation', ME: 'Meeting Expectation', AE: 'Approaching Expectation', BE: 'Below Expectation' };
-    return map[level] || '—';
-}
-
-function getCompetencyColor(level) {
-    const map = { EE: '#22c55e', ME: '#3b82f6', AE: '#f59e0b', BE: '#ef4444' };
-    return map[level] || '#94a3b8';
-}
-
-// --- DEBOUNCED EXAM SAVE (prevents API spam on every keystroke) ---
-let _examSaveTimer = null;
-function debouncedExamSave() {
-    if (_examSaveTimer) clearTimeout(_examSaveTimer);
-    _examSaveTimer = setTimeout(() => {
-        saveData();
-    }, 1500); // Save 1.5s after last score change
-}
-
-// Called when the grading modal closes — forces immediate save
-function flushExamSaves() {
-    if (_examSaveTimer) {
-        clearTimeout(_examSaveTimer);
-        _examSaveTimer = null;
-    }
-    saveData();
-}
-
-// --- POPULATE GRADE DROPDOWN ---
-function populateExamGrades() {
-    const select = $('examTradeSelect');
-    if (!select) return;
-    select.innerHTML = '<option value="">Select Grade...</option>';
-    Object.keys(CBC_LEVELS).forEach(grade => {
-        const opt = document.createElement('option');
-        opt.value = grade;
-        opt.textContent = CBC_LEVELS[grade].name;
-        select.appendChild(opt);
-    });
-}
-
-// --- LOAD SUBJECTS FOR SELECTED GRADE ---
-function loadExamSubjects(grade) {
-    const select = $('examSubjectSelect');
-    if (!select) return;
-    select.innerHTML = '<option value="">Select Subject...</option>';
-
-    const subjects = store.learningAreas.filter(la => la.applicableLevels && la.applicableLevels.includes(grade));
-    subjects.forEach(subj => {
-        const opt = document.createElement('option');
-        opt.value = subj.id;
-        opt.textContent = `${subj.name} (${subj.code})`;
-        select.appendChild(opt);
-    });
-
-    select.disabled = subjects.length === 0;
-    if (subjects.length === 0) {
-        select.innerHTML = '<option value="">No subjects for this grade</option>';
-    }
-}
-
-// --- LOAD STUDENTS FOR SELECTED SUBJECT/GRADE ---
-function loadExamStudents() {
-    const select = $('examStudentSelect');
-    if (!select) return;
-    select.innerHTML = '<option value="">Select Learner...</option>';
-
-    const grade = currentExamContext.tradeId;
-    if (!grade) { select.disabled = true; return; }
-
-    const students = StudentRepo.findBy('grade', grade);
-    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-    students.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = `${s.reg || '—'} — ${s.name}`;
-        select.appendChild(opt);
-    });
-
-    select.disabled = students.length === 0;
-    if (students.length === 0) {
-        select.innerHTML = '<option value="">No learners in this grade</option>';
-    }
-
-    // Enable summary button
-    const summaryBtn = $('btnViewExamSummary');
-    if (summaryBtn) summaryBtn.disabled = false;
-
-    // Show quick stats
-    updateExamQuickStats();
-}
-
-// --- LOAD CBET UNITS FOR ASSESSMENT ---
-function loadCBETUnits() {
-    const { studentId, subjectId, tradeId: grade } = currentExamContext;
-    if (!studentId || !subjectId || !grade) return;
-
-    const student = StudentRepo.getById(studentId);
-    const subject = store.learningAreas.find(la => la.id === subjectId);
-    if (!student || !subject) return;
-
-    // Show the interface, hide empty state
-    if ($('examInterface')) $('examInterface').style.display = 'block';
-    if ($('examEmptyState')) $('examEmptyState').style.display = 'none';
-
-    // Populate student banner
-    if ($('examStudentPhoto')) $('examStudentPhoto').src = student.photo || DEFAULT_AVATAR;
-    if ($('examStudentName')) $('examStudentName').textContent = student.name;
-    if ($('examStudentReg')) $('examStudentReg').innerHTML = `<i class="fa-solid fa-id-card"></i> ${student.reg || '—'}`;
-    if ($('examStudentGrade')) $('examStudentGrade').innerHTML = `<i class="fa-solid fa-graduation-cap"></i> ${grade}`;
-    if ($('examStudentSubject')) $('examStudentSubject').innerHTML = `<i class="fa-solid fa-book"></i> ${subject.name}`;
-
-    // Get units
-    const units = getUnitsForSubject(subjectId, grade);
-
-    // Get existing exam record for this student+subject+term+year
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-    const examRecord = findExamRecord(studentId, subjectId, grade, term, year);
-
-    // Render unit cards
-    const grid = $('examUnitsGrid');
-    if (!grid) return;
-    grid.innerHTML = '';
-
-    units.forEach(unit => {
-        const existingScore = examRecord ? (examRecord.scores || {})[unit.code] : null;
-        const score = existingScore ? existingScore.score : null;
-        const level = score !== null ? getCompetencyLevel(score) : null;
-        const isLocked = score !== null;
-
-        const card = document.createElement('div');
-        card.className = `cbet-unit-card${isLocked ? ' assessed locked' : ''}`;
-        card.dataset.unitCode = unit.code;
-        card.dataset.unitName = unit.name;
-        card.dataset.locked = isLocked ? 'true' : 'false';
-
-        card.innerHTML = `
-            <div class="cuc-code">${unit.code}</div>
-            <div class="cuc-name">${escapeHtml(unit.name)}</div>
-            <div class="cuc-score-bar">
-                <div class="cuc-score-fill ${level || ''}" style="width:${score !== null ? score : 0}%"></div>
-            </div>
-            <div class="cuc-status">
-                <span class="cuc-score-text">${score !== null ? score + '%' : '—'}</span>
-                <span class="cuc-badge ${level || 'pending'}">${level || 'Pending'}</span>
-            </div>
-        `;
-
-        grid.appendChild(card);
-    });
-
-    // Update overall bar
-    updateOverallBar(examRecord, units);
-}
-
-// --- FIND EXISTING EXAM RECORD ---
-function findExamRecord(studentId, subjectId, grade, term, year) {
-    return store.exams.find(e =>
-        e.studentId === studentId &&
-        e.subjectId === subjectId &&
-        e.grade === grade &&
-        e.term === term &&
-        e.year === year
-    );
-}
-
-// --- OPEN ASSESSMENT MODAL FOR A UNIT ---
-function openAssessmentModal(unitCode, unitName, studentId) {
-    const { subjectId, tradeId: grade } = currentExamContext;
-    const student = StudentRepo.getById(studentId);
-    const subject = store.learningAreas.find(la => la.id === subjectId);
-    if (!student || !subject) return;
-
-    // Set hidden fields
-    if ($('gradingUnitCode')) $('gradingUnitCode').value = unitCode;
-    if ($('gradingUnitName')) $('gradingUnitName').value = unitName;
-    if ($('gradingStudentId')) $('gradingStudentId').value = studentId;
-    if ($('gradingSubjectId')) $('gradingSubjectId').value = subjectId;
-    if ($('gradingGrade')) $('gradingGrade').value = grade;
-
-    // Student info
-    if ($('gradingStudentInfo')) {
-        $('gradingStudentInfo').innerHTML = `
-            <img src="${student.photo || DEFAULT_AVATAR}" alt="${escapeHtml(student.name)}">
-            <div>
-                <strong>${escapeHtml(student.name)}</strong>
-                <span style="color:var(--text-muted); margin-left:8px;">${student.reg || ''} — ${subject.name} — ${unitCode}</span>
-            </div>
-        `;
-    }
-
-    // Modal title
-    if ($('gradingModalTitle')) {
-        $('gradingModalTitle').textContent = `Assess: ${unitName}`;
-    }
-
-    // Criteria checklist
-    const criteriaList = $('gradingCriteriaList');
-    if (criteriaList) {
-        const units = getUnitsForSubject(subjectId, grade);
-        const unit = units.find(u => u.code === unitCode);
-        const criteria = unit ? unit.criteria : ['Demonstrates understanding', 'Applies knowledge', 'Communicates effectively'];
-
-        criteriaList.innerHTML = criteria.map((c, i) => `
-            <div class="grading-criteria-item">
-                <input type="checkbox" id="gc_${i}" data-criteria="${escapeHtml(c)}">
-                <label for="gc_${i}">${escapeHtml(c)}</label>
-            </div>
-        `).join('');
-    }
-
-    // Load existing score if any
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-    const examRecord = findExamRecord(studentId, subjectId, grade, term, year);
-    const existingScore = examRecord ? (examRecord.scores || {})[unitCode] : null;
-
-    const scoreVal = existingScore ? existingScore.score : 0;
-    syncScoreInputs(scoreVal);
-
-    if ($('gradingRemarks')) $('gradingRemarks').value = existingScore ? (existingScore.remarks || '') : '';
-
-    // Check existing criteria
-    if (existingScore && existingScore.criteriaMet) {
-        existingScore.criteriaMet.forEach(c => {
-            const cb = criteriaList.querySelector(`[data-criteria="${c}"]`);
-            if (cb) cb.checked = true;
-        });
-    }
-
-    openModal('examGradingModal');
-}
-
-// --- SYNC SCORE INPUTS (range + number) ---
-function syncScoreInputs(val) {
-    val = Math.max(0, Math.min(100, parseInt(val) || 0));
-    if ($('gradingScoreRange')) $('gradingScoreRange').value = val;
-    if ($('gradingScoreInput')) $('gradingScoreInput').value = val;
-
-    const level = getCompetencyLevel(val);
-    const gcdVal = $('gradingCompetencyValue');
-    if (gcdVal) {
-        gcdVal.textContent = `${level} — ${getCompetencyLabel(level)}`;
-        gcdVal.style.background = getCompetencyColor(level) + '22';
-        gcdVal.style.color = getCompetencyColor(level);
-    }
-}
-
-// --- SAVE UNIT ASSESSMENT ---
-function saveUnitAssessment() {
-    const studentId = $('gradingStudentId')?.value;
-    const subjectId = $('gradingSubjectId')?.value;
-    const grade = $('gradingGrade')?.value;
-    const unitCode = $('gradingUnitCode')?.value;
-    const unitName = $('gradingUnitName')?.value;
-    const score = parseInt($('gradingScoreInput')?.value) || 0;
-    const remarks = $('gradingRemarks')?.value?.trim() || '';
-
-    if (!studentId || !subjectId || !grade || !unitCode) {
-        showToast('Missing assessment context.', 'error');
-        return false;
-    }
-
-    // Gather criteria met
-    const criteriaMet = [];
-    document.querySelectorAll('#gradingCriteriaList input[type="checkbox"]:checked').forEach(cb => {
-        criteriaMet.push(cb.dataset.criteria);
-    });
-
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-
-    // Find or create exam record
-    let examRecord = findExamRecord(studentId, subjectId, grade, term, year);
-    if (!examRecord) {
-        examRecord = {
-            id: generateId(),
-            studentId,
-            subjectId,
-            grade,
-            term,
-            year,
-            scores: {},
-            dateCreated: new Date().toISOString(),
-            dateUpdated: new Date().toISOString()
-        };
-        store.exams.push(examRecord);
-    }
-
-    // Save the unit score
-    if (!examRecord.scores) examRecord.scores = {};
-    examRecord.scores[unitCode] = {
-        score: Math.max(0, Math.min(100, score)),
-        level: getCompetencyLevel(score),
-        unitName,
-        remarks,
-        criteriaMet,
-        dateAssessed: new Date().toISOString()
-    };
-    examRecord.dateUpdated = new Date().toISOString();
-
-    // Persist immediately — no debouncing for explicit save button
-    saveData();
-
-    // Refresh the unit cards
-    loadCBETUnits();
-
-    // Refresh recent entries & quick stats
-    updateExamRecentEntries();
-    updateExamQuickStats();
-
-    closeModal('examGradingModal');
-    showToast(`Saved: ${unitName} — ${score}% (${getCompetencyLevel(score)})`);
-    return false; // prevent form submission
-}
-
-// Hook the grading form submit
-document.addEventListener('DOMContentLoaded', () => {
-    const gradingForm = $('unitGradingForm');
-    if (gradingForm) {
-        gradingForm.addEventListener('submit', e => {
-            e.preventDefault();
-            saveUnitAssessment();
-        });
-    }
-});
-
-// --- UPDATE OVERALL BAR ---
-function updateOverallBar(examRecord, units) {
-    const scores = examRecord ? examRecord.scores || {} : {};
-    const unitScores = units.map(u => scores[u.code] ? scores[u.code].score : null).filter(s => s !== null);
-
-    let avg = 0;
-    if (unitScores.length > 0) {
-        avg = Math.round(unitScores.reduce((a, b) => a + b, 0) / unitScores.length);
-    }
-
-    const level = getCompetencyLevel(avg);
-
-    if ($('examOverallValue')) $('examOverallValue').textContent = avg + '%';
-    if ($('examOverallFill')) $('examOverallFill').style.width = avg + '%';
-    if ($('examOverallCompetency')) {
-        $('examOverallCompetency').textContent = level;
-        $('examOverallCompetency').className = 'eob-competency ' + level;
-    }
-}
-
-// --- CLEAR ALL SCORES FOR CURRENT STUDENT+SUBJECT ---
-function clearStudentAssessment() {
-    const { studentId, subjectId, tradeId: grade } = currentExamContext;
-    if (!studentId || !subjectId || !grade) return;
-
-    if (!confirm('Are you sure you want to clear ALL scores for this learner in this subject? This cannot be undone.')) return;
-
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-
-    const idx = store.exams.findIndex(e =>
-        e.studentId === studentId &&
-        e.subjectId === subjectId &&
-        e.grade === grade &&
-        e.term === term &&
-        e.year === year
-    );
-
-    if (idx !== -1) {
-        store.exams.splice(idx, 1);
-        saveData();
-    }
-
-    loadCBETUnits();
-    updateExamRecentEntries();
-    updateExamQuickStats();
-    showToast('Assessment scores cleared.', 'info');
-}
-
-// --- UPDATE QUICK STATS ---
-function updateExamQuickStats() {
-    const grade = currentExamContext.tradeId;
-    const subjectId = currentExamContext.subjectId;
-    if (!grade) return;
-
-    const statsEl = $('examQuickStats');
-    if (statsEl) statsEl.style.display = 'block';
-
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-
-    const studentsInGrade = StudentRepo.findBy('grade', grade);
-    const totalStudents = studentsInGrade.length;
-
-    let assessed = 0;
-    let totalScore = 0;
-    let scoreCount = 0;
-
-    if (subjectId) {
-        // Per-subject stats
-        studentsInGrade.forEach(s => {
-            const record = findExamRecord(s.id, subjectId, grade, term, year);
-            if (record && record.scores) {
-                const vals = Object.values(record.scores).map(sc => sc.score).filter(v => v !== null);
-                if (vals.length > 0) {
-                    assessed++;
-                    totalScore += vals.reduce((a, b) => a + b, 0) / vals.length;
-                    scoreCount++;
-                }
-            }
-        });
-    } else {
-        // All-subject stats for grade
-        studentsInGrade.forEach(s => {
-            const records = store.exams.filter(e => e.studentId === s.id && e.grade === grade && e.term === term && e.year === year);
-            if (records.length > 0) {
-                assessed++;
-                records.forEach(r => {
-                    if (r.scores) {
-                        const vals = Object.values(r.scores).map(sc => sc.score).filter(v => v !== null);
-                        if (vals.length > 0) {
-                            totalScore += vals.reduce((a, b) => a + b, 0) / vals.length;
-                            scoreCount++;
-                        }
-                    }
-                });
-            }
-        });
-    }
-
-    const pending = totalStudents - assessed;
-    const avgScore = scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0;
-
-    if ($('eqsAssessed')) $('eqsAssessed').textContent = assessed;
-    if ($('eqsPending')) $('eqsPending').textContent = pending;
-    if ($('eqsAvgScore')) $('eqsAvgScore').textContent = avgScore + '%';
-}
-
-// --- UPDATE RECENT ENTRIES ---
-function updateExamRecentEntries() {
-    const list = $('examRecentEntries');
-    if (!list) return;
-
-    // Get the 10 most recent exam records
-    const recent = [...store.exams]
-        .sort((a, b) => new Date(b.dateUpdated || b.dateCreated) - new Date(a.dateUpdated || a.dateCreated))
-        .slice(0, 10);
-
-    if (recent.length === 0) {
-        list.innerHTML = '<div class="ere-empty">No entries yet.</div>';
-        return;
-    }
-
-    list.innerHTML = recent.map(record => {
-        const student = StudentRepo.getById(record.studentId);
-        const subject = store.learningAreas.find(la => la.id === record.subjectId);
-        const scores = record.scores || {};
-        const scoreVals = Object.values(scores).map(s => s.score).filter(v => v !== null);
-        const avg = scoreVals.length > 0 ? Math.round(scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length) : 0;
-        const level = getCompetencyLevel(avg).toLowerCase();
-
-        return `
-            <div class="ere-item" onclick="jumpToExamRecord('${record.studentId}','${record.subjectId}','${record.grade}')">
-                <div>
-                    <div style="font-weight:600; color:var(--text)">${escapeHtml(student ? student.name : 'Unknown')}</div>
-                    <div style="font-size:0.7rem; color:var(--text-muted)">${subject ? subject.name : ''} · ${record.term} ${record.year}</div>
-                </div>
-                <span class="ere-item-score ${level}">${avg}%</span>
-            </div>
-        `;
-    }).join('');
-}
-
-// --- JUMP TO A SPECIFIC EXAM RECORD ---
-function jumpToExamRecord(studentId, subjectId, grade) {
-    // Set the selectors
-    if ($('examTradeSelect')) {
-        $('examTradeSelect').value = grade;
-        currentExamContext.tradeId = grade;
-    }
-
-    // Load subjects then set
-    loadExamSubjects(grade);
-    setTimeout(() => {
-        if ($('examSubjectSelect')) {
-            $('examSubjectSelect').value = subjectId;
-            currentExamContext.subjectId = subjectId;
-        }
-
-        // Load students then set
-        loadExamStudents();
-        setTimeout(() => {
-            if ($('examStudentSelect')) {
-                $('examStudentSelect').value = studentId;
-                currentExamContext.studentId = studentId;
-            }
-            loadCBETUnits();
-        }, 50);
-    }, 50);
-}
-
-// --- BATCH ASSESSMENT ---
-function openBatchAssessmentModal() {
-    const { tradeId: grade, subjectId } = currentExamContext;
-    if (!grade || !subjectId) {
-        showToast('Please select a grade and subject first.', 'error');
-        return;
-    }
-
-    const subject = store.learningAreas.find(la => la.id === subjectId);
-    const students = StudentRepo.findBy('grade', grade);
-    if (students.length === 0) {
-        showToast('No learners found in this grade.', 'error');
-        return;
-    }
-
-    // Info bar
-    if ($('batchModalTitle')) $('batchModalTitle').textContent = `Batch Assessment — ${subject ? subject.name : ''}`;
-    if ($('batchInfoBar')) {
-        $('batchInfoBar').innerHTML = `
-            <i class="fa-solid fa-info-circle" style="color:var(--primary)"></i>
-            <span><strong>Grade:</strong> ${grade} &nbsp;|&nbsp; <strong>Subject:</strong> ${subject ? subject.name : ''} &nbsp;|&nbsp; <strong>Learners:</strong> ${students.length}</span>
-        `;
-    }
-
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-
-    // Build table rows
-    const tbody = $('batchAssessmentBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-
-    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-    students.forEach((s, i) => {
-        const examRecord = findExamRecord(s.id, subjectId, grade, term, year);
-        const scores = examRecord ? examRecord.scores || {} : {};
-        const scoreVals = Object.values(scores).map(sc => sc.score).filter(v => v !== null);
-        const avg = scoreVals.length > 0 ? Math.round(scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length) : '';
-        const level = avg !== '' ? getCompetencyLevel(avg) : '';
-        const remarks = examRecord ? Object.values(scores).map(sc => sc.remarks || '').filter(Boolean).join('; ') : '';
-
-        const tr = document.createElement('tr');
-        tr.dataset.studentId = s.id;
-        tr.innerHTML = `
-            <td>${i + 1}</td>
-            <td>${escapeHtml(s.reg || '—')}</td>
-            <td><strong>${escapeHtml(s.name)}</strong></td>
-            <td class="score-col">
-                <input type="number" min="0" max="100" value="${avg}" 
-                    data-student-id="${s.id}"
-                    oninput="updateBatchRowCompetency(this)">
-            </td>
-            <td class="comp-col">
-                <span class="batch-competency-badge" id="batchComp_${s.id}"
-                    style="background:${level ? getCompetencyColor(level) + '22' : 'var(--border)'};
-                           color:${level ? getCompetencyColor(level) : 'var(--text-muted)'}">
-                    ${level || '—'}
-                </span>
-            </td>
-            <td class="remarks-col">
-                <textarea data-student-id="${s.id}" placeholder="Optional...">${escapeHtml(remarks)}</textarea>
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
-
-    openModal('batchAssessmentModal');
-}
-
-function updateBatchRowCompetency(input) {
-    const studentId = input.dataset.studentId;
-    const val = parseInt(input.value) || 0;
-    const clamped = Math.max(0, Math.min(100, val));
-    const level = getCompetencyLevel(clamped);
-
-    const badge = $(`batchComp_${studentId}`);
-    if (badge) {
-        badge.textContent = level;
-        badge.style.background = getCompetencyColor(level) + '22';
-        badge.style.color = getCompetencyColor(level);
-    }
-}
-
-function saveBatchAssessments() {
-    const { tradeId: grade, subjectId } = currentExamContext;
-    if (!grade || !subjectId) return;
-
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-
-    const rows = document.querySelectorAll('#batchAssessmentBody tr');
-    let savedCount = 0;
-
-    rows.forEach(row => {
-        const studentId = row.dataset.studentId;
-        const scoreInput = row.querySelector('input[type="number"]');
-        const remarksInput = row.querySelector('textarea');
-        const score = parseInt(scoreInput?.value) || 0;
-        const remarks = remarksInput?.value?.trim() || '';
-
-        if (score < 0 || score > 100) return;
-
-        // Find or create exam record
-        let examRecord = findExamRecord(studentId, subjectId, grade, term, year);
-        if (!examRecord) {
-            examRecord = {
-                id: generateId(),
-                studentId,
-                subjectId,
-                grade,
-                term,
-                year,
-                scores: {},
-                dateCreated: new Date().toISOString(),
-                dateUpdated: new Date().toISOString()
-            };
-            store.exams.push(examRecord);
-        }
-
-        // For batch, we store the overall subject score as a "BATCH" entry
-        if (!examRecord.scores) examRecord.scores = {};
-        examRecord.scores['BATCH-OVERALL'] = {
-            score: Math.max(0, Math.min(100, score)),
-            level: getCompetencyLevel(score),
-            unitName: 'Batch Overall Score',
-            remarks,
-            criteriaMet: [],
-            dateAssessed: new Date().toISOString()
-        };
-        examRecord.dateUpdated = new Date().toISOString();
-        savedCount++;
-    });
-
-    // Save IMMEDIATELY — batch save is explicit, must not be debounced
-    saveData();
-
-    closeModal('batchAssessmentModal');
-    updateExamRecentEntries();
-    updateExamQuickStats();
-
-    // If a student was selected, refresh their view
-    if (currentExamContext.studentId) {
-        loadCBETUnits();
-    }
-
-    showToast(`Batch assessment saved for ${savedCount} learners.`, 'success');
-}
-
-// --- EXAM SUMMARY ---
-function viewExamSummary() {
-    // Populate grade dropdown if empty
-    const gradeSelect = $('summaryGradeSelect');
-    if (gradeSelect && gradeSelect.options.length <= 1) {
-        Object.keys(CBC_LEVELS).forEach(grade => {
-            const opt = document.createElement('option');
-            opt.value = grade;
-            opt.textContent = CBC_LEVELS[grade].name;
-            gradeSelect.appendChild(opt);
-        });
-    }
-
-    // Pre-select current grade
-    if (gradeSelect && currentExamContext.tradeId) {
-        gradeSelect.value = currentExamContext.tradeId;
-        loadSummarySubjects(currentExamContext.tradeId);
-        if ($('summarySubjectSelect') && currentExamContext.subjectId) {
-            $('summarySubjectSelect').value = currentExamContext.subjectId;
-        }
-    }
-
-    openModal('examSummaryModal');
-}
-
-function loadSummarySubjects(grade) {
-    const select = $('summarySubjectSelect');
-    if (!select) return;
-    select.innerHTML = '<option value="">All Subjects</option>';
-
-    const subjects = store.learningAreas.filter(la => la.applicableLevels && la.applicableLevels.includes(grade));
-    subjects.forEach(subj => {
-        const opt = document.createElement('option');
-        opt.value = subj.id;
-        opt.textContent = subj.name;
-        select.appendChild(opt);
-    });
-    select.disabled = false;
-}
-
-// Add listener for summary grade change
-document.addEventListener('DOMContentLoaded', () => {
-    $('summaryGradeSelect')?.addEventListener('change', e => {
-        loadSummarySubjects(e.target.value);
-    });
-});
-
-function loadExamSummary() {
-    const grade = $('summaryGradeSelect')?.value;
-    const subjectId = $('summarySubjectSelect')?.value;
-    const term = $('summaryTermSelect')?.value;
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-
-    if (!grade) {
-        showToast('Please select a grade.', 'error');
-        return;
-    }
-
-    const students = StudentRepo.findBy('grade', grade);
-    const wrapper = $('summaryTableWrapper');
-    if (!wrapper) return;
-
-    if (students.length === 0) {
-        wrapper.innerHTML = '<div class="summary-empty">No learners found in this grade.</div>';
-        return;
-    }
-
-    // Build summary data
-    const rows = students.map(s => {
-        let records = store.exams.filter(e =>
-            e.studentId === s.id &&
-            e.grade === grade &&
-            e.term === term &&
-            e.year === year
-        );
-
-        if (subjectId) {
-            records = records.filter(r => r.subjectId === subjectId);
-        }
-
-        let totalScore = 0;
-        let scoreCount = 0;
-        let subjectsAssessed = 0;
-
-        records.forEach(r => {
-            if (r.scores) {
-                const vals = Object.values(r.scores).map(sc => sc.score).filter(v => v !== null);
-                if (vals.length > 0) {
-                    subjectsAssessed++;
-                    totalScore += vals.reduce((a, b) => a + b, 0) / vals.length;
-                    scoreCount++;
-                }
-            }
-        });
-
-        const avg = scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0;
-        const level = getCompetencyLevel(avg);
-
-        return {
-            reg: s.reg || '—',
-            name: s.name,
-            gender: s.gender || '—',
-            subjectsAssessed,
-            avg,
-            level
-        };
-    });
-
-    // Sort by avg descending
-    rows.sort((a, b) => b.avg - a.avg);
-
-    // Render table
-    wrapper.innerHTML = `
-        <table class="summary-table">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>ADM No</th>
-                    <th>Name</th>
-                    <th>Gender</th>
-                    <th>Subjects Assessed</th>
-                    <th>Avg Score</th>
-                    <th>Competency</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${rows.map((r, i) => `
-                    <tr>
-                        <td>${i + 1}</td>
-                        <td>${escapeHtml(r.reg)}</td>
-                        <td><strong>${escapeHtml(r.name)}</strong></td>
-                        <td>${escapeHtml(r.gender)}</td>
-                        <td style="text-align:center">${r.subjectsAssessed}</td>
-                        <td style="text-align:center; font-weight:700; color:${getCompetencyColor(r.level)}">${r.avg}%</td>
-                        <td style="text-align:center">
-                            <span class="batch-competency-badge" style="background:${getCompetencyColor(r.level)}22; color:${getCompetencyColor(r.level)}">${r.level}</span>
-                        </td>
-                    </tr>
-                `).join('')}
-            </tbody>
-        </table>
-    `;
-}
-
-function exportExamSummaryCSV() {
-    const table = document.querySelector('.summary-table');
-    if (!table) {
-        showToast('Load a summary first.', 'error');
-        return;
-    }
-
-    let csv = [];
-    table.querySelectorAll('tr').forEach(row => {
-        const cols = [];
-        row.querySelectorAll('th, td').forEach(cell => {
-            cols.push('"' + cell.textContent.replace(/"/g, '""').trim() + '"');
-        });
-        csv.push(cols.join(','));
-    });
-
-    const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `exam_summary_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Summary exported as CSV.', 'success');
-}
-
-// ==========================================================================
-//   EXAM PORTAL INITIALIZATION (called from initializeApp)
-// ==========================================================================
-function initExamPortal() {
-    populateExamGrades();
-    updateExamRecentEntries();
-
-    // Set default term/year from settings
-    if ($('examTermSelect') && store.settings.currentTerm) {
-        $('examTermSelect').value = store.settings.currentTerm;
-    }
-    if ($('examYearInput') && store.settings.academicYear) {
-        $('examYearInput').value = store.settings.academicYear;
-    }
-
-    // Listen for term/year changes to refresh stats
-    $('examTermSelect')?.addEventListener('change', () => {
-        updateExamQuickStats();
-        if (currentExamContext.studentId) loadCBETUnits();
-    });
-    $('examYearInput')?.addEventListener('change', () => {
-        updateExamQuickStats();
-        if (currentExamContext.studentId) loadCBETUnits();
-    });
-}
-
-// Make sure initExamPortal is called during app initialization
-// Patch into initializeApp
-const _origInitApp = initializeApp;
-initializeApp = function(user) {
-    _origInitApp(user);
-    initExamPortal();
+    get grade() { return LearnerState.grade; },
+    set grade(v) { LearnerState.grade = v; },
+    get stream() { return LearnerState.stream; },
+    set stream(v) { LearnerState.stream = v; },
+    get search() { return LearnerState.search; },
+    set search(v) { LearnerState.search = v; }
 };
 
 // Grade ordering for sort
@@ -2671,35 +1822,45 @@ function selectStudentSidebar(id) {
 //   notes student name clicks, etc. Falls back to the students page if the
 //   profile renderer is unavailable for any reason.
 // ==========================================================================
-function viewStudent(studentId) {
-    if (!studentId) return;
-    // Try the profile section first
-    if (typeof router === 'function') {
-        router('profile');
+function viewStudent(id) {
+    currentStudentId = id;
+    const student = StudentRepo.getById(id);
+    if (!student) return;
+    
+    // Populate view modal fields
+    const viewContent = $('studentViewContent');
+    if (viewContent) {
+        viewContent.innerHTML = `
+            <div class="student-detail-header">
+                <img src="${student.photo || DEFAULT_AVATAR}" alt="${escapeHtml(student.name)}" class="detail-photo">
+                <div>
+                    <h2>${escapeHtml(student.name)}</h2>
+                    <p>Reg: ${escapeHtml(student.reg)} | Grade: ${escapeHtml(student.grade)}</p>
+                    <span class="badge ${student.status === 'active' ? 'badge-success' : 'badge-warning'}">${student.status}</span>
+                </div>
+            </div>
+            <div class="detail-grid">
+                <div class="detail-item"><label>ID Number</label><span>${escapeHtml(student.idNumber)}</span></div>
+                <div class="detail-item"><label>Gender</label><span>${escapeHtml(student.gender)}</span></div>
+                <div class="detail-item"><label>Date of Birth</label><span>${student.dob}</span></div>
+                <div class="detail-item"><label>Phone</label><span>${escapeHtml(student.phone || '—')}</span></div>
+                <div class="detail-item"><label>Email</label><span>${escapeHtml(student.email || '—')}</span></div>
+                <div class="detail-item"><label>Stream</label><span>${escapeHtml(student.stream)}</span></div>
+                <div class="detail-item"><label>Guardian</label><span>${escapeHtml(student.guardianName)}</span></div>
+                <div class="detail-item"><label>Guardian Phone</label><span>${escapeHtml(student.guardianPhone)}</span></div>
+                <div class="detail-item"><label>Admission Date</label><span>${student.admissionDate || '—'}</span></div>
+            </div>
+        `;
     }
-    // Defer slightly so the profile section is in the DOM before we populate
-    setTimeout(() => {
-        if (typeof populateProfileList === 'function') {
-            try { populateProfileList(); } catch (e) { /* noop */ }
-        }
-        if (typeof renderStudentProfile === 'function') {
-            try { renderStudentProfile(studentId); } catch (e) {
-                // Fallback: open the student view modal on the students page
-                router('students');
-                setTimeout(() => {
-                    const viewBtn = document.querySelector(`[data-action="view"][data-id="${studentId}"]`);
-                    if (viewBtn) viewBtn.click();
-                }, 350);
-            }
-        } else {
-            // Profile renderer unavailable — fall back to students page
-            router('students');
-            setTimeout(() => {
-                const viewBtn = document.querySelector(`[data-action="view"][data-id="${studentId}"]`);
-                if (viewBtn) viewBtn.click();
-            }, 350);
-        }
-    }, 120);
+    openModal('studentViewModal');
+}
+
+function clearStudent(id) {
+    pendingAction = 'clear-student';
+    pendingActionData = id;
+    $('authMessage').textContent = 'Enter admin password to clear this student.';
+    $('adminPassword').value = '';
+    openModal('authModal');
 }
 
 function filterByGrade(grade, element) {
@@ -2914,16 +2075,26 @@ function updateStudentStats(filteredData) {
 // ==========================================================================
 //   AUTH CONFIRMATION (Updated)
 // ==========================================================================
-function confirmAuth() { 
-    const password = $('adminPassword').value; 
-    if (password !== ADMIN_PASSWORD) { showToast('Incorrect password!', 'error'); return; } 
-    closeModal('authModal'); 
+function confirmAuth() {
+    const pwd = $('adminPassword')?.value;
+    if (pwd !== ADMIN_PASSWORD) {
+        showToast('Incorrect password.', 'error');
+        return;
+    }
+    closeModal('authModal');
     
-    if (pendingAction === 'delete') executeDeleteStudent(pendingActionData); 
-    else if (pendingAction === 'reset') executeSystemReset(); 
-    else if (pendingAction === 'update-assessment') executeUpdateAssessment(pendingActionData);
+    if (pendingAction === 'delete-student' && pendingActionData) {
+        StudentRepo.delete(pendingActionData);
+        showToast('Student deleted.', 'success');
+        applyFilters();
+        renderDashboard();
+    } else if (pendingAction === 'reset') {
+        localStorage.clear();
+        showToast('System reset. Reloading...', 'success');
+        setTimeout(() => location.reload(), 1500);
+    }
     
-    pendingAction = null; 
+    pendingAction = null;
     pendingActionData = null;
 }
 
@@ -3018,8 +2189,219 @@ function getCompetenceStatus(score) {
 
 
 function resetExamView() { currentExamContext = { studentId: null, subjectId: null }; if ($('examStudentSelect')) { $('examStudentSelect').innerHTML = "<option value=''>Select Learner...</option>"; $('examStudentSelect').disabled = true; } if ($('examTradeSelect')) $('examTradeSelect').value = ""; if ($('examInterface')) $('examInterface').style.display = 'none'; if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; }
-function loadExamStudents() { const grade = currentExamContext.tradeId; const studentSelect = $('examStudentSelect'); if (!studentSelect) return; studentSelect.innerHTML = "<option value=''>Select Learner...</option>"; currentExamContext.studentId = null; if (!grade) { studentSelect.disabled = true; return; } studentSelect.disabled = false; const filtered = StudentRepo.findBy('grade', grade); if (filtered.length === 0) { studentSelect.innerHTML = "<option value=''>No learners in this grade</option>"; studentSelect.disabled = true; return; } filtered.forEach(s => { studentSelect.innerHTML += `<option value="${s.id}">${s.name} (${s.reg})</option>`; }); if ($('examInterface')) $('examInterface').style.display = 'none'; if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; }
-function loadCBETUnits() { const studentId = currentExamContext.studentId; if (!studentId) return; const student = StudentRepo.getById(studentId); if (!student) return; if ($('examInterface')) $('examInterface').style.display = 'flex'; if ($('examEmptyState')) $('examEmptyState').style.display = 'none'; if ($('sidebarStudentName')) $('sidebarStudentName').innerText = student.name; if ($('sidebarStudentReg')) $('sidebarStudentReg').innerText = student.reg; if ($('sidebarStudentTrade')) $('sidebarStudentTrade').innerText = student.grade; renderCBETUnits(student); }
+
+function loadExamStudents() {
+    const select = $('examStudentSelect');
+    if (!select) return;
+
+    select.innerHTML = "<option value=''>Select Student...</option>";
+
+    const grade = currentExamContext.tradeId;
+    if (!grade) { select.disabled = true; return; }
+
+    const studentsInGrade = (store.students || []).filter(s => s.grade === grade);
+
+    if (studentsInGrade.length === 0) {
+        select.innerHTML = "<option value=''>No students enrolled in this grade</option>";
+        select.disabled = true;
+        return;
+    }
+
+    // Sort alphabetically
+    studentsInGrade.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    studentsInGrade.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name || 'Unknown'} \u2014 ${s.reg || 'No Reg'}`;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
+}
+
+function loadCBETUnits() {
+    const studentId = currentExamContext.studentId;
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+
+    if (!studentId || !subjectId) return;
+
+    const iface = $('examInterface');
+    const empty = $('examEmptyState');
+    if (iface) iface.style.display = 'block';
+    if (empty) empty.style.display = 'none';
+
+    const student = (store.students || []).find(s => s.id === studentId);
+    const subject = (store.learningAreas || []).find(la => la.id === subjectId);
+
+    if (!student || !subject) {
+        if (iface) iface.innerHTML = '<p style="color:var(--danger)">Student or subject not found.</p>';
+        return;
+    }
+
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+
+    // Find any existing scores for this student+subject+term+year
+    const existing = (store.exams || []).filter(e =>
+        e.studentId === studentId && e.subjectId === subjectId && e.term === term && e.year === year
+    );
+
+    // CBC exam structure
+    const examTypes = [
+        { key: 'cat1',     label: 'CAT 1',         max: 20, computed: false },
+        { key: 'cat2',     label: 'CAT 2',         max: 20, computed: false },
+        { key: 'endTerm',  label: 'End Term Exam', max: 60, computed: false },
+        { key: 'total',    label: 'Total Score',   max: 100, computed: true  }
+    ];
+
+    let html = `
+        <div class="exam-student-header">
+            <div>
+                <h3>${escapeHtml(student.name || 'Unknown')}</h3>
+                <p>${escapeHtml(subject.name)} &middot; ${escapeHtml(grade)} &middot; ${escapeHtml(term)} ${escapeHtml(year)}</p>
+                <p><small>Reg: ${escapeHtml(student.reg || 'N/A')}</small></p>
+            </div>
+        </div>
+        <div class="exam-scores-grid">
+    `;
+
+    examTypes.forEach(et => {
+        const rec = existing.find(e => e.examType === et.key);
+        const val = rec ? rec.score : '';
+        html += `
+            <div class="exam-score-card ${et.computed ? 'computed' : ''}">
+                <label>${et.label}</label>
+                <div class="score-input-row">
+                    <input type="number" id="examScore_${et.key}" value="${val}"
+                        min="0" max="${et.max}" placeholder="0"
+                        ${et.computed ? 'readonly' : ''}
+                        class="exam-score-input" data-exam-type="${et.key}" data-max="${et.max}" />
+                    <span class="score-max">/ ${et.max}</span>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `</div>
+        <div class="exam-actions">
+            <button class="btn btn-primary" onclick="saveExamScores()">
+                <i class="fa-solid fa-floppy-disk"></i> Save Scores
+            </button>
+            <button class="btn btn-secondary" onclick="clearExamScores()">
+                <i class="fa-solid fa-eraser"></i> Clear
+            </button>
+        </div>
+    `;
+
+    if (iface) iface.innerHTML = html;
+
+    // Attach live total computation to editable inputs
+    if (iface) {
+        iface.querySelectorAll('.exam-score-input:not([readonly])').forEach(inp => {
+            inp.addEventListener('input', computeExamTotal);
+            // Clamp on blur
+            inp.addEventListener('blur', function() {
+                const max = parseInt(this.dataset.max) || 100;
+                let v = parseFloat(this.value);
+                if (isNaN(v)) { this.value = ''; return; }
+                if (v < 0) v = 0;
+                if (v > max) v = max;
+                this.value = v;
+                computeExamTotal();
+            });
+        });
+    }
+
+    // Compute initial total from any pre-loaded scores
+    computeExamTotal();
+}
+function clearExamScores() {
+    ['cat1', 'cat2', 'endTerm'].forEach(key => {
+        const el = $('examScore_' + key);
+        if (el && !el.readOnly) el.value = '';
+    });
+    computeExamTotal();
+}
+
+function saveExamScores() {
+    const studentId = currentExamContext.studentId;
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+
+    if (!studentId || !subjectId) {
+        return showToast('No student or subject selected.', 'error');
+    }
+
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+
+    const types = [
+        { key: 'cat1',    max: 20 },
+        { key: 'cat2',    max: 20 },
+        { key: 'endTerm', max: 60 }
+    ];
+
+    let saved = 0;
+    const now = new Date().toISOString();
+
+    types.forEach(et => {
+        const input = $('examScore_' + et.key);
+        if (!input) return;
+
+        const raw = parseFloat(input.value);
+        if (isNaN(raw)) return; // Skip empty fields
+
+        // Clamp to valid range
+        const score = Math.max(0, Math.min(et.max, raw));
+
+        // Upsert: find existing record by composite key
+        const idx = store.exams.findIndex(e =>
+            e.studentId === studentId &&
+            e.subjectId === subjectId &&
+            e.examType === et.key &&
+            e.term === term &&
+            e.year === year
+        );
+
+        const record = {
+            id: idx !== -1 ? store.exams[idx].id : generateId(),
+            studentId,
+            subjectId,
+            grade,
+            examType: et.key,
+            term,
+            year,
+            score,
+            maxScore: et.max,
+            updatedAt: now
+        };
+
+        if (idx !== -1) {
+            store.exams[idx] = record;
+        } else {
+            store.exams.push(record);
+        }
+        saved++;
+    });
+
+    if (saved > 0) {
+        // Trigger the app's save pipeline (localStorage + server sync)
+        if (typeof saveData === 'function') saveData();
+        showToast(saved + ' score(s) saved successfully!');
+    } else {
+        showToast('Enter at least one score before saving.', 'error');
+    }
+}
+function computeExamTotal() {
+    const cat1 = parseFloat($('examScore_cat1')?.value) || 0;
+    const cat2 = parseFloat($('examScore_cat2')?.value) || 0;
+    const endTerm = parseFloat($('examScore_endTerm')?.value) || 0;
+    const totalEl = $('examScore_total');
+    if (totalEl) totalEl.value = cat1 + cat2 + endTerm;
+}
+
 function renderCBETUnits(student) { 
     const container = $('cbetUnitsList'); if (!container) return; container.innerHTML = ''; 
     const applicableSubjects = store.learningAreas.filter(sub => !sub.applicableLevels || sub.applicableLevels.includes(student.grade));
@@ -3060,73 +2442,184 @@ function updateExamProgress(studentId) {
     if (circle) { const radius = 70; const circumference = 2 * Math.PI * radius; const offset = circumference - (percent / 100) * circumference; circle.style.strokeDasharray = circumference; circle.style.strokeDashoffset = offset; } 
 }
 function loadExamSubjects(grade) {
-    const subjectSelect = $('examSubjectSelect'); if (!subjectSelect) return;
-    subjectSelect.innerHTML = "<option value=''>Select Subject...</option>"; subjectSelect.disabled = true; if (!grade) return;
-    const applicableSubjects = store.learningAreas.filter(sub => !sub.applicableLevels || sub.applicableLevels.includes(grade));
-    if (applicableSubjects.length === 0) { subjectSelect.innerHTML = "<option value=''>No Subjects Found</option>"; return; }
-    subjectSelect.disabled = false;
-    applicableSubjects.forEach(sub => { subjectSelect.innerHTML += `<option value='${sub.id}'>${sub.name}</option>`; });
+    const select = $('examSubjectSelect');
+    if (!select) return;
+
+    select.innerHTML = "<option value=''>Select Subject...</option>";
+
+    if (!grade) { select.disabled = true; return; }
+
+    // Filter learning areas whose applicableLevels array includes this grade
+    const applicable = store.learningAreas.filter(la =>
+        Array.isArray(la.applicableLevels) && la.applicableLevels.includes(grade)
+    );
+
+    if (applicable.length === 0) {
+        select.innerHTML = "<option value=''>No subjects found for this grade</option>";
+        select.disabled = true;
+        return;
+    }
+
+    // Sort alphabetically by name for consistent ordering
+    applicable.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    applicable.forEach(la => {
+        const opt = document.createElement('option');
+        opt.value = la.id;
+        opt.textContent = `${la.name} (${la.code})`;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
 }
 
-function openAssessmentModal(code, name, studentId) { 
-    $('assessUnitTitle').innerText = name; $('assessUnitId').value = code; 
-    const result = store.exams.find(e => e.studentId === studentId && e.unitCode === code); 
-    if (result) { $('assessScore').value = result.score; $('assessFeedback').value = result.feedback || ''; } 
-    else { $('assessScore').value = ''; $('assessFeedback').value = ''; } 
-    updateAssessmentPreview(); openModal('assessmentModal'); 
+
+function openAssessmentModal(code, name, studentId) {
+    if (!studentId) return showToast('Select a student first.', 'error');
+
+    const existing = (store.exams || []).find(e =>
+        e.studentId === studentId && e.examType === code
+    );
+
+    // Build modal HTML dynamically if it doesn't exist
+    let modal = $('assessmentModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'assessmentModal';
+        modal.className = 'modal-backdrop';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:420px">
+                <div class="modal-header">
+                    <h3 id="assessModalTitle">Assessment</h3>
+                    <button data-dismiss="modal" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="assessUnitCode" />
+                    <input type="hidden" id="assessStudentId" />
+                    <div class="form-group">
+                        <label>Score</label>
+                        <input type="number" id="assessScore" min="0" max="100" placeholder="Enter score" />
+                    </div>
+                    <div id="assessPreview" style="margin-top:10px;padding:10px;border-radius:6px;background:var(--bg);font-size:0.9rem;display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" id="btnSaveAssessment">
+                        <i class="fa-solid fa-check"></i> Save
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind events on the new modal
+        modal.querySelector('#btnSaveAssessment').addEventListener('click', saveUnitAssessment);
+        modal.querySelector('#assessScore').addEventListener('input', updateAssessmentPreview);
+        modal.addEventListener('click', e => {
+            if (e.target.classList.contains('modal-backdrop')) closeModal('assessmentModal');
+        });
+    }
+
+    $('assessModalTitle').textContent = name || 'Assessment';
+    $('assessUnitCode').value = code || '';
+    $('assessStudentId').value = studentId || '';
+    $('assessScore').value = existing ? existing.score : '';
+    $('assessPreview').style.display = 'none';
+
+    openModal('assessmentModal');
 }
 
-function updateAssessmentPreview() { 
-    const score = parseInt($('assessScore').value) || 0; const comp = getCompetenceStatus(score); 
-    const levelBox = $('assessLevelDisplay'); if (levelBox) { levelBox.innerText = comp.level; levelBox.className = `status-display-box ${comp.class}`; }
-    const decisionBox = $('assessDecisionDisplay'); if (decisionBox) { decisionBox.innerText = comp.decision; }
-    const feedbackBox = $('assessFeedback'); if (feedbackBox && !feedbackBox.value) feedbackBox.value = comp.feedback; 
+
+function updateAssessmentPreview() {
+    const score = parseFloat($('assessScore')?.value);
+    const preview = $('assessPreview');
+    if (!preview) return;
+
+    if (isNaN(score)) { preview.style.display = 'none'; return; }
+
+    let grade = '', color = '';
+    if (score >= 80)      { grade = 'Excellent'; color = 'var(--success)'; }
+    else if (score >= 60) { grade = 'Good'; color = 'var(--accent)'; }
+    else if (score >= 40) { grade = 'Fair'; color = 'var(--warning)'; }
+    else                  { grade = 'Needs Improvement'; color = 'var(--danger)'; }
+
+    preview.style.display = 'block';
+    preview.innerHTML = `<strong style="color:${color}">${grade}</strong> &mdash; ${score}/100`;
 }
 
 // ==========================================================================
 //   SAVE UNIT ASSESSMENT (Updated for Password Protection)
 // ==========================================================================
-function saveUnitAssessment() { 
-    const studentId = currentExamContext.studentId; 
-    const unitCode = $('assessUnitId').value; 
-    const score = parseInt($('assessScore').value); 
-    const feedback = $('assessFeedback').value; 
+function saveUnitAssessment() {
+    const code = $('assessUnitCode')?.value;
+    const studentId = $('assessStudentId')?.value;
+    const score = parseFloat($('assessScore')?.value);
 
-    if (isNaN(score) || score < 0 || score > 100) return showToast('Enter a valid score (0-100)', 'error'); 
-    
-    const comp = getCompetenceStatus(score);
-    
-    const data = { 
-        id: generateId(), 
-        studentId, 
-        unitCode, 
-        score, 
-        level: comp.level, 
-        status: comp.decision, 
-        grade: comp.abbr, 
-        feedback: feedback, 
-        date: new Date().toISOString() 
-    }; 
-    
-    const existingIndex = store.exams.findIndex(e => e.studentId === studentId && e.unitCode === unitCode); 
-    
+    if (!code || !studentId) return showToast('Missing context.', 'error');
+    if (isNaN(score) || score < 0) return showToast('Enter a valid score.', 'error');
+
+    const clamped = Math.max(0, Math.min(100, score));
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+    const now = new Date().toISOString();
+
+    const idx = store.exams.findIndex(e =>
+        e.studentId === studentId && e.examType === code && e.term === term && e.year === year
+    );
+
+    const record = {
+        id: idx !== -1 ? store.exams[idx].id : generateId(),
+        studentId,
+        subjectId: currentExamContext.subjectId || '',
+        grade: currentExamContext.tradeId || '',
+        examType: code,
+        term,
+        year,
+        score: clamped,
+        maxScore: 100,
+        updatedAt: now
+    };
+
+    if (idx !== -1) store.exams[idx] = record;
+    else store.exams.push(record);
+
+    if (typeof saveData === 'function') saveData();
+    closeModal('assessmentModal');
+    showToast('Assessment saved!');
+
+    // Refresh the exam interface if visible
+    if (currentExamContext.studentId && currentExamContext.subjectId) loadCBETUnits();
+}
+// CORRECT pattern for saving one exam score
+function saveExamScore(studentId, subjectId, score, term, year, comments = '') {
+    // Find existing record for this student + subject + term + year
+    const existingIndex = store.exams.findIndex(e => 
+        e.studentId === studentId && 
+        e.subjectId === subjectId && 
+        e.term === term && 
+        e.year === year
+    );
+
+    const examData = {
+        studentId,
+        subjectId,
+        score: parseInt(score) || 0,
+        term,
+        year: parseInt(year) || new Date().getFullYear(),
+        comments
+    };
+
     if (existingIndex !== -1) {
-        // --- ASSESSMENT EXISTS: REQUIRE ADMIN PASSWORD TO EDIT ---
-        pendingAction = 'update-assessment';
-        pendingActionData = { index: existingIndex, data: data };
-        
-        $('authMessage').textContent = 'This assessment has already been recorded. Enter Admin Password to UPDATE.'; 
-        $('adminPassword').value = ''; 
-        openModal('authModal');
+        // Update existing
+        store.exams[existingIndex] = { ...store.exams[existingIndex], ...examData };
     } else {
-        // --- NEW ASSESSMENT: SAVE DIRECTLY ---
-        store.exams.push(data); 
-        saveData(); 
-        closeModal('assessmentModal'); 
-        showToast(`Assessment Saved: ${comp.decision}`); 
-        loadCBETUnits(); 
-        renderDashboard(); 
+        // Create new
+        examData.id = generateId();
+        store.exams.push(examData);
     }
+
+    // THIS IS THE CRITICAL LINE — without it, nothing persists
+    saveData();
 }
 
 // ==========================================================================
@@ -3307,6 +2800,14 @@ function submitStaff(e) {
     renderDashboard(); 
 }
 
+
+function secureDelete(id) {
+    pendingAction = 'delete-student';
+    pendingActionData = id;
+    $('authMessage').textContent = 'Enter admin password to delete this student.';
+    $('adminPassword').value = '';
+    openModal('authModal');
+}
 
 // 4. EDIT STAFF (Populate both steps)
 function editStaff(id) { 
@@ -4185,6 +3686,19 @@ function deleteCourse(id) {
         renderStaff(); 
         showToast('Subject Deleted'); 
     } 
+}
+
+/**
+ * Ensures data is loaded before generating reports.
+ * Returns true if data is ready, false if not.
+ */
+function ensureDataLoaded() {
+    // Check if exams exist
+    if (!store.exams || store.exams.length === 0) {
+        showToast('Assessment data not loaded yet. Please wait or check your connection.', 'error');
+        return false;
+    }
+    return true;
 }
 
 // ==========================================================================
@@ -7387,12 +6901,15 @@ function renderExamTimetableCard(exam) {
     const statusClass = status.replace(/\s+/g, '-');
     const startTime = exam.startTime || '08:00';
     const endTime = computeExamEndTime(startTime, exam.duration || 60);
-    const subjects = (exam.subjects || []).map(s => s.name).join(', ');
-    const invigilator = exam.invigilatorId ? StaffRepo.getById(exam.invigilatorId) : null;
-    const invigName = invigilator ? invigilator.name : 'Unassigned';
-    const asstInvig = exam.assistantInvigilatorId ? StaffRepo.getById(exam.assistantInvigilatorId) : null;
-
-    const sessionIcon = exam.session === 'Morning' ? 'fa-sun' : (exam.session === 'Afternoon' ? 'fa-cloud-sun' : 'fa-moon');
+    
+    const subjects = safeArray(exam.subjects).map(sub => {
+        const invigilator = exam.invigilatorId ? StaffById(exam.invigilatorId) : null;
+        const invigName = invigilator ? invigilator.name : 'Unassigned';
+        const asstInvig = exam.assistantInvigilatorId ? StaffRepo.getById(exam.assistantInvigilatorId) : null;
+        const sessionIcon = exam.session === 'Morning' ? 'fa-sun' : (exam.session === 'Afternoon' ? 'fa-cloud-sun' : 'fa-moon');
+        
+        return `<span class="ett-subject-tag">${escapeHtml(sub)}</span>`;
+    }).join(' ');
 
     return `
         <div class="exam-tt-card" data-status="${escapeHtml(status)}" onclick="openExamGradingModal('${exam.id}')">
@@ -7411,17 +6928,15 @@ function renderExamTimetableCard(exam) {
                     <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(exam.venue || 'TBD')}</span>
                     <span><i class="fa-solid fa-clock"></i> ${exam.duration || 60} min</span>
                 </div>
-                <div class="ett-subjects">${escapeHtml(subjects || 'No subjects')}</div>
+                <div class="ett-subjects">${subjects || 'No subjects'}</div>
                 <div class="ett-invigilator">
                     <i class="fa-solid fa-user-shield"></i>
-                    <strong>${escapeHtml(invigName)}</strong>
-                    ${asstInvig ? `<span style="color:var(--text-muted);">· Asst: ${escapeHtml(asstInvig.name)}</span>` : ''}
+                    <strong>Unassigned</strong>
                 </div>
             </div>
         </div>
     `;
 }
-
 function computeExamEndTime(startTime, durationMinutes) {
     if (!startTime) return '';
     const [h, m] = startTime.split(':').map(Number);
@@ -8067,7 +7582,7 @@ function renderExamListGrid() {
 
     container.innerHTML = filtered.map(exam => {
         const status = exam.status || 'Scheduled';
-        const subjects = (exam.subjects || []).map(s => s.name || s);
+        const subjects = safeArray(exam.subjects);
         const grade = exam.grade || '—';
         const dateStr = exam.date ? new Date(exam.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
         const term = exam.term || '—';
@@ -8077,7 +7592,7 @@ function renderExamListGrid() {
         // Grading progress — use countGradedSubjects for accurate per-subject progress
         const results = exam.results || [];
         const gradedCount = results.filter(r => countGradedSubjects(r, exam) > 0).length;
-        const fullyGradedCount = results.filter(r => countGradedSubjects(r, exam) === (exam.subjects || []).length).length;
+        const fullyGradedCount = results.filter(r => countGradedSubjects(r, exam) === subjects.length).length;
         const totalStudents = results.length;
         const progressPct = totalStudents > 0 ? Math.round(fullyGradedCount / totalStudents * 100) : 0;
 
@@ -8093,7 +7608,7 @@ function renderExamListGrid() {
                     <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(grade)}</span>
                     <span><i class="fa-solid fa-calendar"></i> ${dateStr}</span>
                     <span><i class="fa-solid fa-clock"></i> ${duration} min</span>
-                    <span><i class="fa-solid fa-book"></i> ${type}</span>
+                    <span><i class="fa-solid fa-book"></i> ${escapeHtml(type)}</span>
                     <span><i class="fa-solid fa-folder"></i> ${escapeHtml(term)}</span>
                 </div>
                 <div class="exam-card-subjects">
@@ -8168,13 +7683,13 @@ function openExamFormModal(examId) {
             if ($('examInvigilator')) $('examInvigilator').value = exam.invigilatorId || '';
             if ($('examAssistantInvigilator')) $('examAssistantInvigilator').value = exam.assistantInvigilatorId || '';
             if ($('examSeatingCapacity')) $('examSeatingCapacity').value = exam.seatingCapacity || '';
-            // Deadlines
             if ($('examRegDeadline')) $('examRegDeadline').value = exam.registrationDeadline || '';
             if ($('examScoreDeadline')) $('examScoreDeadline').value = exam.scoreSubmissionDeadline || '';
             if ($('examPublishDate')) $('examPublishDate').value = exam.resultsPublishDate || '';
             $('examNotes').value = exam.notes || '';
-            // Mark selected subjects
-            const selectedCodes = (exam.subjects || []).map(s => s.code);
+            
+            // FIX: Safely parse subjects and check checkboxes separately
+            const selectedCodes = safeArray(exam.subjects);
             document.querySelectorAll('input[name="examSubject"]').forEach(cb => {
                 if (selectedCodes.includes(cb.value)) cb.checked = true;
             });
@@ -10347,11 +9862,6 @@ function router(viewId, navEl) {
         case 'profile': renderProfileTab(); if ($('profileStudentList')) populateProfileList(); break; 
         case 'notes': renderNotesTab(); break; 
         case 'Inbox': renderInboxTab(); break;
-        case 'exams':
-    // Refresh recent entries and stats when navigating to exams
-    updateExamRecentEntries();
-    updateExamQuickStats();
-    break;
     }
     if (window.innerWidth < 768) $('sidebar')?.classList.remove('open');
 }
@@ -10978,35 +10488,19 @@ function renderInboxTab() {
 // ==========================================================================
 function downloadAdmissionTemplate() {
     if (!window.XLSX) return showToast('Excel library required.', 'error');
-    
-    // 1. Updated Headers: Merged Surname, First Name, and Other Names into 'Full Name'
-    const headers = ['Full Name', 'Gender', 'DOB', 'Birth Cert No', 'Phone', 'Grade', 'Stream'];
-    
-    // 2. Updated Sample Data showing concatenated names
+    const headers = ['Surname', 'First Name', 'Gender', 'DOB', 'Birth Cert No', 'Phone', 'Grade', 'Stream'];
     const sample = [
-        ['Wanjiru Amani', 'Female', '2012-03-15', '12345678', '0712345678', 'Grade 7', 'Blue'],
-        ['Otieno Brian', 'Male', '2011-08-22', '22345678', '0722345678', 'Grade 7', 'Blue'],
-        ['Njeri Keziah Wambui', 'Female', '2012-11-09', '32345678', '0732345678', 'Grade 7', 'Yellow'] // Example with 3 names
+        ['Wanjiru', 'Amani', 'Female', '2012-03-15', '12345678', '0712345678', 'Grade 7', 'Blue'],
+        ['Otieno', 'Brian', 'Male', '2011-08-22', '22345678', '0722345678', 'Grade 7', 'Blue'],
+        ['Njeri', 'Keziah', 'Female', '2012-11-09', '32345678', '0732345678', 'Grade 7', 'Yellow']
     ];
-    
     const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
-    
-    // 3. Updated Column Widths (Reduced from 8 to 7 columns, widened 'Full Name')
-    ws['!cols'] = [
-        {wch: 28}, // Full Name
-        {wch: 10}, // Gender
-        {wch: 12}, // DOB
-        {wch: 14}, // Birth Cert No
-        {wch: 14}, // Phone
-        {wch: 10}, // Grade
-        {wch: 10}  // Stream
-    ];
-    
+    // Set column widths
+    ws['!cols'] = [{wch:14}, {wch:14}, {wch:10}, {wch:12}, {wch:14}, {wch:14}, {wch:10}, {wch:10}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Admissions');
     XLSX.writeFile(wb, 'Admission_Template.xlsx');
-    
-    showToast('Template Downloaded - Use "Full Name" column for Surname, First & Other names.');
+    showToast('Template Downloaded - columns: Surname, First Name, Gender, DOB, Birth Cert No, Phone, Grade, Stream');
 }
 
 // ==========================================================================
@@ -11422,11 +10916,9 @@ function getBatchData() {
 function confirmBatchAdmission() {
     const defaultGrade = $('batchGrade')?.value;
     const defaultStream = $('batchStream')?.value;
-    
     if (!defaultGrade || !defaultStream) {
         return showToast('Please set Default Grade and Default Stream', 'error');
     }
-    
     const data = getBatchData();
     if (data.length === 0) {
         return showToast('No valid rows to import. Please fix errors first.', 'error');
@@ -11438,13 +10930,11 @@ function confirmBatchAdmission() {
     const year = new Date().getFullYear().toString().slice(-2);
 
     data.forEach((row, index) => {
-        // 1. Extract the concatenated Full Name directly
-        const fullName = row.fullName || row["Full Name"]; // Handles both exact key and header-mapped key
-        if (!fullName || fullName.toString().trim() === '') { 
-            skipped++; 
-            return; 
-        }
+        const surname = row.surname;
+        const firstName = row.firstName;
+        if (!surname || !firstName) { skipped++; return; }
 
+        const name = `${surname} ${firstName}`.trim();
         const grade = row.grade || defaultGrade;
         const stream = row.stream || defaultStream;
 
@@ -11455,7 +10945,7 @@ function confirmBatchAdmission() {
         }
 
         const studentData = {
-            name: fullName.toString().trim(), // 2. Save the concatenated name directly
+            name: name,
             gender: row.gender || 'Male',
             dob: row.dob || '2010-01-01',
             idNumber: row.idNumber || generateId().slice(0, 8),
@@ -11481,18 +10971,16 @@ function confirmBatchAdmission() {
         renderDashboard();
         showToast(`${count} learner${count !== 1 ? 's' : ''} imported successfully!${skipped ? ` (${skipped} skipped)` : ''}`, 'success');
         closeModal('batchAdmissionModal');
-        
         // Reset batch state
-        if (typeof clearBatchManualRows === 'function') clearBatchManualRows();
-        if (typeof clearExcelUpload === 'function') clearExcelUpload();
-        
+        clearBatchManualRows();
+        clearExcelUpload();
         router('students');
     } else {
-        showToast('No new learners imported (all rows were empty or duplicates)', 'error');
+        showToast('No new learners imported (all rows were duplicates)', 'error');
     }
 }
+
 // ---------- Drag & drop ----------
-// 1. Your Drop Handler (No changes needed, works perfectly)
 function handleBatchFileDrop(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -11504,60 +10992,6 @@ function handleBatchFileDrop(e) {
     }
 }
 
-// 2. Temporary storage for parsed rows
-let batchParsedRows = [];
-
-// 3. File Reader - Maps "Full Name" template to your DB schema properties
-function handleBatchAdmissionFile(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = function(evt) {
-        try {
-            const data = new Uint8Array(evt.target.result);
-            const workbook = XLSX.read(data, { type: 'array' });
-            const sheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[sheetName];
-            
-            // Read raw data from Excel
-            const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
-            
-            if (rawRows.length === 0) {
-                return showToast('The uploaded file is empty.', 'error');
-            }
-
-            // MAP EXACTLY TO WHAT confirmBatchAdmission EXPECTS
-            batchParsedRows = rawRows.map(row => ({
-                fullName: row["Full Name"] || "",          // Mapped from new template
-                gender: row["Gender"] || "",
-                dob: row["DOB"] || "",
-                idNumber: String(row["Birth Cert No"] || ""), // Force string to prevent JS number glitches
-                phone: String(row["Phone"] || ""),
-                grade: row["Grade"] || "",
-                stream: row["Stream"] || ""
-            })).filter(row => row.fullName.trim() !== ""); // Ignore completely empty rows
-
-            showToast(`Parsed ${batchParsedRows.length} learners. Click 'Confirm Import' to proceed.`, 'success');
-            
-            // Enable the confirm button
-            const confirmBtn = $('btnConfirmBatchAdmission');
-            if (confirmBtn) confirmBtn.disabled = false;
-
-            // If you have a UI preview table function, trigger it here:
-            // if (typeof renderBatchPreviewTable === 'function') renderBatchPreviewTable(batchParsedRows);
-
-        } catch (error) {
-            console.error("Error parsing file:", error);
-            showToast('Failed to read file. Ensure it is a valid .xlsx file.', 'error');
-        }
-    };
-    reader.readAsArrayBuffer(file);
-}
-// 4. The getter function your confirmBatchAdmission relies on
-function getBatchData() {
-    return batchParsedRows;
-}
 // ==========================================================================
 //   ADMISSIONS WIZARD - Enhanced progress + summary
 // ==========================================================================
@@ -11758,55 +11192,84 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================================================
 //   BATCH ASSESSMENT (UPDATED)
 // ==========================================================================
-function openBatchAssessmentModal() { 
-    const subjectId = currentExamContext.subjectId; 
-    const gradeId = currentExamContext.tradeId; 
-    if (!subjectId || !gradeId) return showToast('Select Grade and Subject first', 'error'); 
-    
-    const subject = store.learningAreas.find(s => s.id === subjectId); 
-    if (!subject) return; 
-    
-    $('batchSubjectName').innerText = subject.name; 
-    $('batchGradeName').innerText = gradeId; 
-    
-    const students = StudentRepo.findBy('grade', gradeId); 
-    const tbody = $('batchAssessmentBody'); 
-    tbody.innerHTML = ''; 
-    
-    if (students.length === 0) { 
-        tbody.innerHTML = `<tr><td colspan="5">No learners found.</td></tr>`; 
-        return openModal('batchAssessmentModal'); 
-    } 
-    
-    students.forEach(s => { 
-        const result = store.exams.find(e => e.studentId === s.id && e.unitCode === subject.code); 
-        const score = result ? result.score : '';
-        
-        let levelDisplay = '-';
-        let decisionDisplay = '-';
-        
-        if(result) {
-            const comp = getCompetenceStatus(result.score);
-            levelDisplay = comp.abbr; 
-            decisionDisplay = comp.decision; 
-        }
-        
-        tbody.innerHTML += `
-            <tr data-student-id="${s.id}">
-                <td>${s.reg}</td>
-                <td>${s.name}</td>
-                <td>
-                    <input type="number" class="form-control batch-score" min="0" max="100" value="${score}" style="width:80px; text-align:center;">
-                </td>
-                <td class="batch-level-display">${levelDisplay}</td>
-                <td class="batch-decision-display">${decisionDisplay}</td>
-            </tr>`; 
-    }); 
-    
-    tbody.removeEventListener('input', handleBatchScoreInput); 
-    tbody.addEventListener('input', handleBatchScoreInput); 
-    openModal('batchAssessmentModal'); 
+function openBatchAssessmentModal() {
+    const grade = currentExamContext.tradeId;
+    const subjectId = currentExamContext.subjectId;
+
+    if (!grade || !subjectId) return showToast('Select grade and subject first.', 'error');
+
+    const students = (store.students || []).filter(s => s.grade === grade).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (students.length === 0) return showToast('No students in this grade.', 'error');
+
+    const subject = (store.learningAreas || []).find(la => la.id === subjectId);
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+
+    let modal = $('batchAssessmentModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'batchAssessmentModal';
+        modal.className = 'modal-backdrop';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:700px;max-height:85vh;overflow-y:auto">
+                <div class="modal-header">
+                    <h3>Batch Assessment — <span id="batchAssessTitle"></span></h3>
+                    <button data-dismiss="modal" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body" id="batchAssessBody"></div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" id="btnSaveBatchAssessment">
+                        <i class="fa-solid fa-floppy-disk"></i> Save All
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        modal.querySelector('#btnSaveBatchAssessment').addEventListener('click', saveBatchAssessments);
+        modal.addEventListener('click', e => {
+            if (e.target.classList.contains('modal-backdrop')) closeModal('batchAssessmentModal');
+        });
+    }
+
+    $('batchAssessTitle').textContent = (subject ? subject.name : '') + ' — ' + grade;
+
+    let tableHtml = `
+        <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+            <thead>
+                <tr style="background:var(--bg);text-align:left">
+                    <th style="padding:10px;border-bottom:2px solid var(--border)">Student</th>
+                    <th style="padding:10px;border-bottom:2px solid var(--border);width:100px">CAT 1 /20</th>
+                    <th style="padding:10px;border-bottom:2px solid var(--border);width:100px">CAT 2 /20</th>
+                    <th style="padding:10px;border-bottom:2px solid var(--border);width:120px">End Term /60</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    students.forEach(s => {
+        const exams = (store.exams || []).filter(e =>
+            e.studentId === s.id && e.subjectId === subjectId && e.term === term && e.year === year
+        );
+        const cat1 = exams.find(e => e.examType === 'cat1');
+        const cat2 = exams.find(e => e.examType === 'cat2');
+        const endT = exams.find(e => e.examType === 'endTerm');
+
+        tableHtml += `
+            <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:8px">${escapeHtml(s.name || '')}<br><small style="color:var(--muted)">${escapeHtml(s.reg || '')}</small></td>
+                <td style="padding:8px"><input type="number" class="batch-score" data-sid="${s.id}" data-type="cat1" min="0" max="20" value="${cat1 ? cat1.score : ''}" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:center" /></td>
+                <td style="padding:8px"><input type="number" class="batch-score" data-sid="${s.id}" data-type="cat2" min="0" max="20" value="${cat2 ? cat2.score : ''}" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:center" /></td>
+                <td style="padding:8px"><input type="number" class="batch-score" data-sid="${s.id}" data-type="endTerm" min="0" max="60" value="${endT ? endT.score : ''}" style="width:80px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:center" /></td>
+            </tr>
+        `;
+    });
+
+    tableHtml += '</tbody></table>';
+    $('batchAssessBody').innerHTML = tableHtml;
+    openModal('batchAssessmentModal');
 }
+
 
 function handleBatchScoreInput(e) { 
     if (e.target.classList.contains('batch-score')) { 
@@ -11819,45 +11282,58 @@ function handleBatchScoreInput(e) {
     } 
 }
 
-function saveBatchAssessments() { 
-    const subjectId = currentExamContext.subjectId; 
-    const subject = store.learningAreas.find(s => s.id === subjectId); 
-    if (!subject) return; 
-    
-    const rows = $('batchAssessmentBody').querySelectorAll('tr[data-student-id]'); 
-    let count = 0; 
-    
-    rows.forEach(row => { 
-        const studentId = row.dataset.studentId; 
-        const scoreInput = row.querySelector('.batch-score'); 
-        const score = parseInt(scoreInput.value); 
-        
-        if (!isNaN(score) && score >= 0 && score <= 100) { 
-            const comp = getCompetenceStatus(score); 
-            
-            const data = { 
-                id: generateId(), 
-                studentId, 
-                unitCode: subject.code, 
-                score, 
-                level: comp.level, 
-                status: comp.decision, 
-                grade: comp.abbr, 
-                date: new Date().toISOString() 
-            }; 
-            
-            const existingIndex = store.exams.findIndex(e => e.studentId === studentId && e.unitCode === subject.code); 
-            if (existingIndex !== -1) store.exams[existingIndex] = data; 
-            else store.exams.push(data); 
-            count++; 
-        } 
-    }); 
-    
-    saveData(); 
-    closeModal('batchAssessmentModal'); 
-    renderDashboard(); 
-    showToast(`${count} assessments saved.`); 
-}
+function saveBatchAssessments() {
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+    const term = (store.settings && store.settings.currentTerm) || 'Term 1';
+    const year = (store.settings && store.settings.academicYear) || '2024';
+    const now = new Date().toISOString();
+
+    const maxMap = { cat1: 20, cat2: 20, endTerm: 60 };
+    const inputs = document.querySelectorAll('.batch-score');
+    let saved = 0;
+
+    inputs.forEach(inp => {
+        const raw = parseFloat(inp.value);
+        if (isNaN(raw)) return; // Skip blanks
+
+        const sid = inp.dataset.sid;
+        const type = inp.dataset.type;
+        const max = maxMap[type] || 100;
+        const score = Math.max(0, Math.min(max, raw));
+
+        const idx = store.exams.findIndex(e =>
+            e.studentId === sid && e.subjectId === subjectId && e.examType === type && e.term === term && e.year === year
+        );
+
+        const record = {
+            id: idx !== -1 ? store.exams[idx].id : generateId(),
+            studentId: sid,
+            subjectId,
+            grade,
+            examType: type,
+            term,
+            year,
+            score,
+            maxScore: max,
+            updatedAt: now
+        };
+
+        if (idx !== -1) store.exams[idx] = record;
+        else store.exams.push(record);
+        saved++;
+    });
+
+    if (saved > 0) {
+        if (typeof saveData === 'function') saveData();
+        closeModal('batchAssessmentModal');
+        showToast(saved + ' batch score(s) saved!');
+        // Refresh individual view if open
+        if (currentExamContext.studentId) loadCBETUnits();
+    } else {
+        showToast('Enter at least one score.', 'error');
+    }
+
 
 // ==========================================================================
 //   SIDEBAR TOGGLE LOGIC
@@ -13393,4 +12869,6 @@ try {
     // Bulk progress
     if (typeof generateBulkProgressReports === 'function') window.generateBulkProgressReports = generateBulkProgressReports;
     if (typeof initBulkProgressModal === 'function') window.initBulkProgressModal = initBulkProgressModal;
-} catch(e) { console.warn('Global export failed:', e); }
+} catch(e) { console.warn('Global export failed:', e);}
+// ═══ FILE INTEGRITY CHECK ═══
+console.log(`[INTEGRITY] script.js loaded — ${document.currentScript.src.split('/').pop()} @ ${new Date().toLocaleTimeString()}`);
