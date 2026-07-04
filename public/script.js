@@ -2,7 +2,7 @@
 // Define your backend API URL
 // SMART URL: Automatically uses localhost if testing, or the live site if deployed
 // Force both Localhost and Render to use the Cloud Database
-const API_URL = "https://tvet-json-db.onrender.com";
+const API_URL = "";
     
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
