@@ -1,23 +1,9 @@
-# Dependencies
-node_modules
-
-# Environment Variables
+node_modules/
+node_modules/
 .env
-
-# Database
-school.db
-*.db
-*.sqlite
-
-# Logs
-logs
-*.log
-npm-debug.log*
-
-# OS Files
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
+*.local
 
-# Optional: Build
-dist
-build
