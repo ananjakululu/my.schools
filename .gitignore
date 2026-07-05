@@ -7,3 +7,6 @@ Thumbs.db
 .idea/
 *.local
 
+school.db 
+exams-backup.json 
+rescue-exams.js 
