@@ -1,4 +1,6 @@
 require('dotenv').config({ override: true });
+// Add this constant at the top of server.js
+const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23e2e8f0' width='150' height='150'/%3E%3Ctext fill='%2394a3b8' font-family='sans-serif' font-size='14' x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle'%3ENo Photo%3C/text%3E%3C/svg%3E";
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -501,6 +503,72 @@ app.post('/api/users/:id/activate', authenticateToken, requireRole('admin'), asy
     r.rowCount > 0 ? (await logAction(req.user.id, req.user.name, 'ACTIVATE_USER', req.params.id), res.json({ success: true })) : res.status(404).json({ success: false });
 });
 
+// ==========================================================================
+//   DATA REPAIR ENDPOINT
+// ==========================================================================
+app.post('/api/repair-data', authenticateToken, requireRole('admin'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        // 1. Fix empty strings → NULL
+        await client.query(`
+            UPDATE students SET 
+                grade = NULLIF(grade, ''),
+                stream = NULLIF(stream, ''),
+                gender = NULLIF(gender, ''),
+                "idNumber" = NULLIF("idNumber", ''),
+                phone = NULLIF(phone, ''),
+                reg = NULLIF(reg, ''),
+                "guardianName" = NULLIF("guardianName", ''),
+                "guardianPhone" = NULLIF("guardianPhone", ''),
+                "nemisNumber" = NULLIF("nemisNumber", ''),
+                "upiNumber" = NULLIF("upiNumber", '')
+        `);
+        
+        // 2. Generate missing reg numbers
+        const missingReg = await client.query(`
+            SELECT id, grade FROM students 
+            WHERE (reg IS NULL OR reg = '') AND grade IS NOT NULL AND grade != ''
+        `);
+        
+        for (const s of missingReg.rows) {
+            const year = new Date().getFullYear().toString().slice(-2);
+            const gCode = s.grade.replace(/\s/g, '');
+            const countRes = await client.query(
+                'SELECT COUNT(*) as c FROM students WHERE grade = $1', [s.grade]
+            );
+            const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
+            await client.query(
+                'UPDATE students SET reg = $1 WHERE id = $2',
+                [`${gCode}/${year}/${seq}`, s.id]
+            );
+        }
+        
+        // 3. Delete orphan exams
+        const orphanResult = await client.query(`
+            DELETE FROM exams WHERE "studentId" NOT IN (SELECT id FROM students)
+        `);
+        
+        await client.query('COMMIT');
+        
+        await logAction(req.user.id, req.user.name, 'REPAIR_DATA', 
+            `Reg: ${missingReg.rowCount}, Orphans: ${orphanResult.rowCount}`);
+        
+        res.json({ 
+            success: true, 
+            generatedRegNumbers: missingReg.rowCount,
+            deletedOrphanExams: orphanResult.rowCount
+        });
+        
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: 'Repair failed', details: err.message });
+    } finally {
+        client.release();
+    }
+});
+
 app.get('/api/logs', authenticateToken, requireRole('admin'), async (req, res) => {
     res.json((await pool.query('SELECT * FROM "auditLogs" ORDER BY "timestamp" DESC LIMIT 100')).rows);
 });
@@ -545,3 +613,307 @@ initDatabase().then(() => {
     console.error('[FATAL] Database connection failed:', err);
     process.exit(1);
 });
+
+// ==========================================================================
+//   ADD THESE NEW ENDPOINTS - Individual CRUD (Add before existing POST routes)
+// ==========================================================================
+
+// --- INDIVIDUAL STUDENT OPERATIONS ---
+app.post('/api/student', authenticateToken, requireRole('hoi', 'admin'), async (req, res) => {
+    const s = req.body;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        // Generate reg number if missing
+        if (!s.reg || s.reg.trim() === '') {
+            const year = new Date().getFullYear().toString().slice(-2);
+            const grade = s.grade || 'UNKNOWN';
+            const gCode = grade.replace(/\s/g, '');
+            const countRes = await client.query(
+                'SELECT COUNT(*) as c FROM students WHERE grade = $1', [grade]
+            );
+            const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
+            s.reg = `${gCode}/${year}/${seq}`;
+        }
+        
+        // Ensure ID exists
+        if (!s.id) s.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        
+        const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo',
+                      'guardianName','guardianPhone','guardianRel','upiNumber','prevSchool',
+                      'entryLevel','yearCompleted','nemisNumber','disability'];
+        
+        const values = cols.map(c => {
+            const val = s[c];
+            // CRITICAL FIX: Keep NULL as NULL, only convert undefined to NULL
+            if (val === undefined) return null;
+            if (val === null) return null;
+            if (typeof val === 'object') return JSON.stringify(val);
+            return val;
+        });
+        
+        const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
+        const updateSet = cols.slice(1).map((c, i) => `"${c}" = EXCLUDED."${c}"`).join(', ');
+        
+        await client.query(
+            `INSERT INTO students ("${cols.join('","')}") VALUES (${placeholders}) 
+             ON CONFLICT (id) DO UPDATE SET ${updateSet}`,
+            values
+        );
+        
+        await client.query('COMMIT');
+        res.json(s);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[STUDENT SAVE ERROR]', err);
+        res.status(500).json({ error: 'Failed to save student', details: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// --- BATCH STUDENT UPSERT (Replaces the destructive POST /students) ---
+app.post('/api/students/sync', authenticateToken, requireRole('hoi', 'admin'), async (req, res) => {
+    const students = req.body;
+    if (!Array.isArray(students)) return res.status(400).json({ error: 'Expected array' });
+    
+    const client = await pool.connect();
+    let saved = 0, updated = 0;
+    
+    try {
+        await client.query('BEGIN');
+        
+        const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo',
+                      'guardianName','guardianPhone','guardianRel','upiNumber','prevSchool',
+                      'entryLevel','yearCompleted','nemisNumber','disability'];
+        
+        for (const s of students) {
+            if (!s.id) continue; // Skip invalid records
+            
+            // CRITICAL FIX: Validate required fields
+            if (!s.name || (!s.grade && !s.stream)) {
+                console.warn(`[SYNC] Skipping invalid student: ${s.id} - missing name/grade`);
+                continue;
+            }
+            
+            // Auto-generate reg if missing
+            if (!s.reg || s.reg.trim() === '') {
+                const year = new Date().getFullYear().toString().slice(-2);
+                const grade = s.grade || 'UNKNOWN';
+                const gCode = grade.replace(/\s/g, '');
+                const countRes = await client.query(
+                    'SELECT COUNT(*) as c FROM students WHERE grade = $1', [grade]
+                );
+                const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
+                s.reg = `${gCode}/${year}/${seq}`;
+            }
+            
+            const values = cols.map(c => {
+                const val = s[c];
+                if (val === undefined || val === '') return null; // CRITICAL: Empty string → NULL
+                if (val === null) return null;
+                if (typeof val === 'object') return JSON.stringify(val);
+                return val;
+            });
+            
+            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
+            const updateSet = cols.slice(1).map((c, i) => `"${c}" = EXCLUDED."${c}"`).join(', ');
+            
+            const result = await client.query(
+                `INSERT INTO students ("${cols.join('","')}") VALUES (${placeholders}) 
+                 ON CONFLICT (id) DO UPDATE SET ${updateSet}`,
+                values
+            );
+            
+            if (result.rowCount > 0) {
+                // Check if it was an insert or update
+                const exists = await client.query('SELECT 1 FROM students WHERE id = $1', [s.id]);
+                if (exists.rows.length > 0) updated++;
+                else saved++;
+            }
+            saved++;
+        }
+        
+        await client.query('COMMIT');
+        await logAction(req.user.id, req.user.name, 'SYNC_STUDENTS', `${saved} saved, ${updated} updated`);
+        res.json({ success: true, saved, updated, total: students.length });
+        
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[SYNC ERROR]', err);
+        res.status(500).json({ error: 'Sync failed', details: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// --- INDIVIDUAL EXAM UPSERT ---
+app.post('/api/exam', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
+    const exam = req.body;
+    if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    
+    try {
+        await pool.query(`
+            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (id) DO UPDATE SET 
+                "studentId" = EXCLUDED."studentId",
+                "subjectId" = EXCLUDED."subjectId",
+                score = EXCLUDED.score,
+                term = EXCLUDED.term,
+                year = EXCLUDED.year,
+                comments = EXCLUDED.comments
+        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments]);
+        
+        res.json(exam);
+    } catch (err) {
+        console.error('[EXAM SAVE ERROR]', err);
+        res.status(500).json({ error: 'Failed to save exam' });
+    }
+});
+
+// --- BATCH EXAM SYNC ---
+app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
+    const exams = req.body;
+    if (!Array.isArray(exams)) return res.status(400).json({ error: 'Expected array' });
+    
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        for (const exam of exams) {
+            if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+            if (!exam.studentId || !exam.subjectId) continue; // Skip invalid
+            
+            await client.query(`
+                INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (id) DO UPDATE SET 
+                    score = EXCLUDED.score,
+                    term = EXCLUDED.term,
+                    comments = EXCLUDED.comments
+            `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments || null]);
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, total: exams.length });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: 'Exam sync failed' });
+    } finally {
+        client.release();
+    }
+});
+
+// --- DATA REPAIR ENDPOINT (Run once to fix existing corrupted data) ---
+app.post('/api/repair-data', authenticateToken, requireRole('admin'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        // 1. Fix empty strings → NULL for important fields
+        await client.query(`
+            UPDATE students SET 
+                grade = NULLIF(grade, ''),
+                stream = NULLIF(stream, ''),
+                gender = NULLIF(gender, ''),
+                "idNumber" = NULLIF("idNumber", ''),
+                phone = NULLIF(phone, ''),
+                reg = NULLIF(reg, ''),
+                "guardianName" = NULLIF("guardianName", ''),
+                "guardianPhone" = NULLIF("guardianPhone", ''),
+                "nemisNumber" = NULLIF("nemisNumber", ''),
+                "upiNumber" = NULLIF("upiNumber", '')
+            WHERE grade = '' OR stream = '' OR gender = '' OR reg = ''
+        `);
+        
+        // 2. Generate missing reg numbers
+        const missingReg = await client.query(`
+            SELECT id, grade FROM students 
+            WHERE (reg IS NULL OR reg = '') AND grade IS NOT NULL
+        `);
+        
+        for (const s of missingReg.rows) {
+            const year = new Date().getFullYear().toString().slice(-2);
+            const gCode = s.grade.replace(/\s/g, '');
+            const countRes = await client.query(
+                'SELECT COUNT(*) as c FROM students WHERE grade = $1', [s.grade]
+            );
+            const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
+            await client.query(
+                'UPDATE students SET reg = $1 WHERE id = $2',
+                [`${gCode}/${year}/${seq}`, s.id]
+            );
+        }
+        
+        // 3. Fix exams with missing student references
+        const orphanExams = await client.query(`
+            DELETE FROM exams WHERE "studentId" NOT IN (SELECT id FROM students)
+        `);
+        
+        // 4. Fix exams with empty score
+        await client.query(`
+            UPDATE exams SET score = NULL WHERE score = '' OR score = 0
+        `);
+        
+        await client.query('COMMIT');
+        
+        const stats = {
+            fixedEmptyStrings: 'Done',
+            generatedRegNumbers: missingReg.rowCount,
+            deletedOrphanExams: orphanExams.rowCount
+        };
+        
+        await logAction(req.user.id, req.user.name, 'REPAIR_DATA', JSON.stringify(stats));
+        res.json({ success: true, ...stats });
+        
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: 'Repair failed', details: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// --- GET STUDENTS WITH PROPER NULL HANDLING ---
+app.get('/api/students/clean', authenticateToken, async (req, res) => {
+    try {
+        const { grade, stream, search } = req.query;
+        let sql = 'SELECT * FROM students WHERE 1=1';
+        const params = [];
+        let paramIndex = 1;
+        
+        if (grade && grade !== 'all') {
+            sql += ` AND grade = $${paramIndex++}`;
+            params.push(grade);
+        }
+        if (stream && stream !== 'all') {
+            sql += ` AND stream = $${paramIndex++}`;
+            params.push(stream);
+        }
+        if (search) {
+            sql += ` AND (name ILIKE $${paramIndex} OR reg ILIKE $${paramIndex} OR "idNumber" ILIKE $${paramIndex})`;
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+        
+        sql += ' ORDER BY grade, name';
+        const result = await pool.query(sql, params);
+        
+        // Convert NULL to appropriate defaults for frontend
+        const students = result.rows.map(s => ({
+            ...s,
+            photo: s.photo || DEFAULT_AVATAR,
+            grade: s.grade || '',
+            stream: s.stream || '',
+            reg: s.reg || ''
+        }));
+        
+        res.json(students);
+    } catch (err) {
+        console.error('[STUDENTS QUERY ERROR]', err);
+        res.status(500).json({ error: 'Failed to fetch students' });
+    }
+});
+
