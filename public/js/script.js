@@ -2,7 +2,13 @@
 // Define your backend API URL
 // SMART URL: Automatically uses localhost if testing, or the live site if deployed
 // Force both Localhost and Render to use the Cloud Database
-const API_URL = "";
+const API_URL = (() => {
+    const port = window.location.port;
+    if (port === '8000' || port === '3000' || port === '5000') return '';
+    const DEPLOYED_BACKEND = 'https://cbeguru.onrender.com';
+    if (window.location.origin === DEPLOYED_BACKEND) return '';
+    return DEPLOYED_BACKEND;
+})();
     
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
