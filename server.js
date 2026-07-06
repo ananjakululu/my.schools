@@ -2,7 +2,7 @@ require('dotenv').config({ override: true });
 // Add this constant at the top of server.js
 const DEFAULT_AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23e2e8f0' width='150' height='150'/%3E%3Ctext fill='%2394a3b8' font-family='sans-serif' font-size='14' x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle'%3ENo Photo%3C/text%3E%3C/svg%3E";
 const express = require('express');
-const cors = require('cors');
+
 const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
@@ -152,15 +152,43 @@ const seedDatabase = async () => {
 // ==========================================================================
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan('dev'));
-app.use(cors({
-    origin: function(origin, callback) {
-        if (!origin) return callback(null, true);
-        const allowedOrigins = ['http://localhost:8000','http://localhost:3000','http://localhost:5000','http://127.0.0.1:5500','http://127.0.0.1:8000', process.env.ALLOWED_ORIGIN].filter(Boolean);
-        if (allowedOrigins.includes(origin)) { callback(null, true); } 
-        else { console.warn('[CORS] Unknown origin:', origin); callback(null, true); }
-    },
-    credentials: true
-}));
+// ==========================================================================
+//   CORS — NUCLEAR OPTION: Allow everything during development
+// ==========================================================================
+app.use((req, res, next) => {
+    const origin = req.headers.origin || 'no-origin';
+
+    // Allow ALL origins
+    res.header('Access-Control-Allow-Origin', origin);
+
+    // Allow credentials (cookies, Authorization header)
+    res.header('Access-Control-Allow-Credentials', 'true');
+
+    // Allow these headers from the browser
+    res.header('Access-Control-Allow-Headers',
+        'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+
+    // Allow these HTTP methods
+    res.header('Access-Control-Allow-Methods',
+        'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+
+    // How long browser can cache the preflight result (1 hour)
+    res.header('Access-Control-Max-Age', '3600');
+
+    // IMPORTANT: Respond to preflight OPTIONS requests immediately
+    // Browsers send OPTIONS before the real request for cross-origin calls
+    if (req.method === 'OPTIONS') {
+        console.log(`[CORS] Preflight from ${origin} → 204`);
+        return res.status(204).end();
+    }
+
+    // Log non-preflight cross-origin requests for debugging
+    if (origin !== 'no-origin' && origin !== `http://localhost:${PORT}` && origin !== `http://127.0.0.1:${PORT}`) {
+        console.log(`[CORS] ${req.method} from ${origin} → ${req.path}`);
+    }
+
+    next();
+});
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -608,12 +636,22 @@ app.get('/api/reset-admin', async (req, res) => {
 //   START SERVER
 // ==========================================================================
 initDatabase().then(() => {
-    app.listen(PORT, () => console.log(`[OK] Server running at http://localhost:${PORT}`));
+    app.listen(PORT, '0.0.0.0', () => {
+        const nets = require('os').networkInterfaces();
+        let ip = '???';
+        for (const name of Object.keys(nets)) {
+            for (const n of nets[name]) {
+                if (n.family === 'IPv4' && !n.internal) { ip = n.address; break; }
+            }
+            if (ip !== '???') break;
+        }
+        console.log(`\n  ✅ Local:  http://localhost:${PORT}`);
+        console.log(`  ✅ Phone:  http://${ip}:${PORT}\n`);
+    });
 }).catch(err => {
     console.error('[FATAL] Database connection failed:', err);
     process.exit(1);
 });
-
 // ==========================================================================
 //   ADD THESE NEW ENDPOINTS - Individual CRUD (Add before existing POST routes)
 // ==========================================================================

@@ -155,10 +155,10 @@ document.getElementById('signupForm')?.addEventListener('submit', async (e) => {
 
     try {
         // CONNECT TO SERVER API
-        const res = await fetch('/api/signup', { 
+        const res = await fetch('https://my-school-app-hvwj.onrender.com/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email, password })
+            body: JSON.stringify({ email, password })
         });
 
         const data = await res.json();
