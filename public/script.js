@@ -2,7 +2,7 @@
 // Define your backend API URL
 // SMART URL: Automatically uses localhost if testing, or the live site if deployed
 // Force both Localhost and Render to use the Cloud Database
-const API_URL = "https://my-school-app-hvwj.onrender.com",
+const API_URL = "https://my-school-app-hvwj.onrender.com";
     
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
