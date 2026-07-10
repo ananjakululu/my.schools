@@ -650,6 +650,431 @@ function initTheme() { const themeToggle = $('themeToggle'); const html = docume
 function updateThemeIcon(theme) { const themeToggle = $('themeToggle'); if (themeToggle) { themeToggle.innerHTML = theme === 'dark' ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>'; } }
 function startClock() { const clockEl = $('liveClock'); const dateEl = $('liveDate'); if (!clockEl && !dateEl) return; const tick = () => { const now = new Date(); if (clockEl) clockEl.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); if (dateEl) dateEl.textContent = now.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }); }; tick(); setInterval(tick, 1000); }
 
+
+// ══════════════════════════════════════════════════════════════════════
+//   EXAM MODULE — All missing functions for cascading dropdowns
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Called when "Select Assessment..." (exam schedule) changes.
+ * Stores the selected assessment and resets downstream dropdowns.
+ */
+function onAssessmentChange() {
+    const select = $('examAssessmentSelect');
+    if (!select) return;
+
+    const assessId = select.value;
+    currentExamContext.assessId = assessId;
+    currentExamContext.tradeId = null;
+    currentExamContext.subjectId = null;
+    currentExamContext.studentId = null;
+
+    // Reset grade dropdown
+    const gradeSelect = $('examTradeSelect');
+    if (gradeSelect) {
+        gradeSelect.innerHTML = '<option value="">Select Grade...</option>';
+        gradeSelect.disabled = !assessId;
+    }
+
+    // Reset subject dropdown
+    const subjectSelect = $('examSubjectSelect');
+    if (subjectSelect) {
+        subjectSelect.innerHTML = '<option value="">Select Subject First...</option>';
+        subjectSelect.disabled = true;
+    }
+
+    // Reset student dropdown
+    const studentSelect = $('examStudentSelect');
+    if (studentSelect) {
+        studentSelect.innerHTML = '<option value="">Select Subject First...</option>';
+        studentSelect.disabled = true;
+    }
+
+    
+/**
+ * Called when "Select Grade..." changes.
+ * Populates subjects applicable to that grade.
+ */
+function loadExamSubjects(grade) {
+    const select = $('examSubjectSelect');
+    if (!select) {
+        console.error('loadExamSubjects: #examSubjectSelect not found in DOM');
+        return;
+    }
+
+    select.innerHTML = '<option value="">Select Subject...</option>';
+
+    if (!grade) {
+        select.disabled = true;
+        return;
+    }
+
+    // Get all learning areas for this grade
+    const subjects = store.learningAreas.filter(la =>
+        la.applicableLevels && la.applicableLevels.includes(grade)
+    );
+
+    if (subjects.length === 0) {
+        select.innerHTML = '<option value="">No subjects for this grade</option>';
+        select.disabled = true;
+        console.warn(`loadExamSubjects: No learning areas found for grade "${grade}"`);
+        console.warn('Available grades in learningAreas:', [...new Set(store.learningAreas.flatMap(la => la.applicableLevels || []))]);
+        return;
+    }
+
+    // Sort alphabetically
+    subjects.sort((a, b) => a.name.localeCompare(b.name));
+
+    subjects.forEach(la => {
+        const opt = document.createElement('option');
+        opt.value = la.id;
+        opt.textContent = la.name;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
+
+    // Reset student dropdown
+    const studentSelect = $('examStudentSelect');
+    if (studentSelect) {
+        studentSelect.innerHTML = '<option value="">Select Subject First...</option>';
+        studentSelect.disabled = true;
+    }
+
+    _hideExamInterface();
+    _updateLearnerCount();
+}
+
+/**
+ * Called when "Select Subject..." changes.
+ * Populates students in the selected grade.
+ */
+function loadExamStudents() {
+    const select = $('examStudentSelect');
+    if (!select) {
+        console.error('loadExamStudents: #examStudentSelect not found in DOM');
+        return;
+    }
+
+    select.innerHTML = '<option value="">Select Student...</option>';
+
+    const grade = currentExamContext.tradeId;
+    if (!grade) {
+        select.disabled = true;
+        _updateLearnerCount();
+        return;
+    }
+
+    // Get students in this grade
+    const students = store.students.filter(s => s.grade === grade);
+
+    if (students.length === 0) {
+        select.innerHTML = '<option value="">No students in this grade</option>';
+        select.disabled = true;
+        console.warn(`loadExamStudents: No students found for grade "${grade}"`);
+        console.warn('Available grades in students:', [...new Set(store.students.map(s => s.grade).filter(Boolean))]);
+        _updateLearnerCount(0);
+        return;
+    }
+
+    // Sort by name
+    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    students.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name || 'Unknown'} (${s.reg || s.idNumber || 'No Reg'})`;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
+    _hideExamInterface();
+    _updateLearnerCount(students.length);
+}
+
+/**
+ * Called when "Select Student..." changes.
+ * Loads the grading interface (CBET units or score entry).
+ */
+function loadCBETUnits() {
+    const studentId = currentExamContext.studentId;
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+
+    if (!studentId || !subjectId || !grade) {
+        _hideExamInterface();
+        return;
+    }
+
+    const student = StudentRepo.getById(studentId);
+    const subject = store.learningAreas.find(la => la.id === subjectId);
+
+    if (!student) {
+        console.error('loadCBETUnits: Student not found:', studentId);
+        showToast('Selected student not found.', 'error');
+        _hideExamInterface();
+        return;
+    }
+
+    if (!subject) {
+        console.error('loadCBETUnits: Subject not found:', subjectId);
+        showToast('Selected subject not found.', 'error');
+        _hideExamInterface();
+        return;
+    }
+
+    // Find existing exam record for this student+subject+assessment
+    const assessId = currentExamContext.assessId || 'default';
+    const existingExam = store.exams.find(e =>
+        e.studentId === studentId &&
+        e.subjectId === subjectId &&
+        (e.assessId === assessId || e.grade === grade)
+    );
+
+    // Show the grading interface
+    const iface = $('examInterface');
+    const empty = $('examEmptyState');
+
+    if (empty) empty.style.display = 'none';
+    if (iface) {
+        iface.style.display = 'block';
+        iface.innerHTML = _buildGradingInterface(student, subject, existingExam);
+        _attachGradingListeners(studentId, subjectId, grade, assessId, existingExam);
+    }
+
+    console.log(`Loaded grading for: ${student.name} — ${subject.name}`);
+}
+
+// ── Internal Helpers ──
+
+function _hideExamInterface() {
+    const iface = $('examInterface');
+    const empty = $('examEmptyState');
+    if (iface) { iface.style.display = 'none'; iface.innerHTML = ''; }
+    if (empty) empty.style.display = 'flex';
+}
+
+function _updateLearnerCount(count) {
+    // Try multiple possible selectors for the learner count element
+    const countEl = document.querySelector('.learner-count') ||
+                    document.querySelector('.exam-learner-count') ||
+                    document.querySelector('[data-learner-count]');
+
+    if (countEl) {
+        if (count !== undefined) {
+            countEl.textContent = `${count} learner${count !== 1 ? 's' : ''}`;
+        } else {
+            const grade = currentExamContext.tradeId;
+            if (grade) {
+                const n = store.students.filter(s => s.grade === grade).length;
+                countEl.textContent = `${n} learner${n !== 1 ? 's' : ''}`;
+            } else {
+                countEl.textContent = '0 learners';
+            }
+        }
+    }
+}
+
+function _populateExamGrades(assessId) {
+    const select = $('examTradeSelect');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Select Grade...</option>';
+
+    // Get grades that actually have students
+    const gradesWithStudents = [...new Set(
+        store.students.map(s => s.grade).filter(Boolean)
+    )];
+
+    if (gradesWithStudents.length === 0) {
+        select.innerHTML = '<option value="">No students enrolled yet</option>';
+        select.disabled = true;
+        showToast('No students found. Add students in Intake first.', 'error');
+        return;
+    }
+
+    // Sort by CBC order
+    const gradeOrder = ['PP1','PP2','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9'];
+    gradesWithStudents.sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b));
+
+    gradesWithStudents.forEach(g => {
+        const count = store.students.filter(s => s.grade === g).length;
+        const opt = document.createElement('option');
+        opt.value = g;
+        opt.textContent = `${g} (${count} students)`;
+        select.appendChild(opt);
+    });
+
+    select.disabled = false;
+}
+
+function _buildGradingInterface(student, subject, existingExam) {
+    const score = existingExam ? existingExam.score : '';
+    const rating = score !== '' ? cbcRating(Number(score)) : null;
+
+    return `
+        <div class="grading-panel" style="padding: 20px; background: var(--bg-card, #fff); border-radius: 12px; border: 1px solid var(--border, #e2e8f0);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <div>
+                    <h3 style="margin: 0; color: var(--text, #1e293b);">${escapeHtml(student.name)}</h3>
+                    <small style="color: var(--text-muted, #64748b);">${escapeHtml(student.reg || '')} • ${escapeHtml(student.grade || '')}</small>
+                </div>
+                <div style="text-align: right;">
+                    <span style="font-weight: 600; color: var(--text, #1e293b);">${escapeHtml(subject.name)}</span>
+                    <br>
+                    <small style="color: var(--text-muted, #64748b);">${escapeHtml(subject.code || '')}</small>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">
+                <div>
+                    <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--text, #1e293b);">
+                        Score (0 - 100)
+                    </label>
+                    <input 
+                        type="number" 
+                        id="examScoreInput" 
+                        min="0" 
+                        max="100" 
+                        value="${score}" 
+                        placeholder="Enter score..."
+                        style="width: 100%; padding: 12px 16px; border: 2px solid var(--border, #e2e8f0); border-radius: 8px; font-size: 18px; font-weight: 700; text-align: center; outline: none; transition: border-color 0.2s;"
+                        onfocus="this.style.borderColor='var(--primary, #3b82f6)'"
+                        onblur="this.style.borderColor='var(--border, #e2e8f0)'"
+                    >
+                </div>
+
+                <div id="ratingPreview" style="padding: 16px; border-radius: 8px; text-align: center; transition: all 0.3s; ${rating ? `background: ${rating.color}15; border: 2px solid ${rating.color};` : 'background: var(--bg-secondary, #f1f5f9); border: 2px dashed var(--border, #cbd5e1);'}">
+                    ${rating ? `
+                        <div style="font-size: 28px; font-weight: 800; color: ${rating.color};">${rating.code}</div>
+                        <div style="font-size: 12px; color: ${rating.color}; margin-top: 4px;">${rating.text}</div>
+                    ` : `
+                        <div style="font-size: 14px; color: var(--text-muted, #94a3b8);">Enter a score to see rating</div>
+                    `}
+                </div>
+            </div>
+
+            <div style="margin-top: 20px; display: flex; gap: 12px; justify-content: flex-end;">
+                <button 
+                    id="btnClearScore" 
+                    style="padding: 10px 20px; border: 1px solid var(--border, #e2e8f0); border-radius: 8px; background: var(--bg-secondary, #f8fafc); color: var(--text-muted, #64748b); cursor: pointer; font-weight: 500;"
+                >
+                    <i class="fa-solid fa-eraser"></i> Clear
+                </button>
+                <button 
+                    id="btnSaveScore" 
+                    style="padding: 10px 24px; border: none; border-radius: 8px; background: var(--primary, #3b82f6); color: white; cursor: pointer; font-weight: 600; font-size: 14px;"
+                >
+                    <i class="fa-solid fa-floppy-disk"></i> Save Score
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function _attachGradingListeners(studentId, subjectId, grade, assessId, existingExam) {
+    const scoreInput = $('examScoreInput');
+    const saveBtn = $('btnSaveScore');
+    const clearBtn = $('btnClearScore');
+
+    if (!scoreInput) return;
+
+    // Live rating preview
+    scoreInput.addEventListener('input', () => {
+        const val = Number(scoreInput.value);
+        const preview = $('ratingPreview');
+        if (!preview) return;
+
+        if (scoreInput.value === '' || isNaN(val)) {
+            preview.style.background = 'var(--bg-secondary, #f1f5f9)';
+            preview.style.border = '2px dashed var(--border, #cbd5e1)';
+            preview.innerHTML = '<div style="font-size:14px;color:var(--text-muted,#94a3b8);">Enter a score to see rating</div>';
+            return;
+        }
+
+        const clamped = Math.max(0, Math.min(100, val));
+        const rating = cbcRating(clamped);
+        preview.style.background = `${rating.color}15`;
+        preview.style.border = `2px solid ${rating.color}`;
+        preview.innerHTML = `
+            <div style="font-size:28px;font-weight:800;color:${rating.color};">${rating.code}</div>
+            <div style="font-size:12px;color:${rating.color};margin-top:4px;">${rating.text}</div>
+        `;
+    });
+
+    // Save
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+            const val = scoreInput.value.trim();
+
+            if (val === '' || isNaN(Number(val))) {
+                showToast('Please enter a valid score.', 'error');
+                scoreInput.focus();
+                return;
+            }
+
+            const score = Math.max(0, Math.min(100, Math.round(Number(val))));
+            const rating = cbcRating(score);
+
+            const examRecord = {
+                id: existingExam ? existingExam.id : generateId(),
+                studentId: studentId,
+                subjectId: subjectId,
+                grade: grade,
+                assessId: assessId || 'default',
+                score: score,
+                rating: rating.code,
+                ratingText: rating.text,
+                updatedAt: new Date().toISOString()
+            };
+
+            if (existingExam) {
+                // Update existing
+                const idx = store.exams.findIndex(e => e.id === existingExam.id);
+                if (idx !== -1) store.exams[idx] = examRecord;
+            } else {
+                // Create new
+                store.exams.push(examRecord);
+            }
+
+            saveData();
+            showToast(`Score saved: ${score}% — ${rating.code} (${rating.text})`);
+
+            // Brief visual feedback
+            saveBtn.style.background = '#22c55e';
+            saveBtn.innerHTML = '<i class="fa-solid fa-check"></i> Saved!';
+            setTimeout(() => {
+                saveBtn.style.background = 'var(--primary, #3b82f6)';
+                saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Score';
+            }, 1500);
+        });
+    }
+
+    // Clear
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            if (existingExam) {
+                // Remove from store
+                store.exams = store.exams.filter(e => e.id !== existingExam.id);
+                saveData();
+                showToast('Score cleared.', 'info');
+            }
+            scoreInput.value = '';
+            const preview = $('ratingPreview');
+            if (preview) {
+                preview.style.background = 'var(--bg-secondary, #f1f5f9)';
+                preview.style.border = '2px dashed var(--border, #cbd5e1)';
+                preview.innerHTML = '<div style="font-size:14px;color:var(--text-muted,#94a3b8);">Enter a score to see rating</div>';
+            }
+        });
+    }
+}
+
+/**
+ * Initialize the Exams tab — call this when the exams page loads.
+ * Populates the Assessment dropdown from examSchedules.
+ */
+
 // ==========================================================================
 //   GLOBAL EVENT LISTENERS
 // ==========================================================================
@@ -906,52 +1331,11 @@ function initGlobalListeners() {
     // ── Assessment Preview ──
     $('assessScore')?.addEventListener('input', updateAssessmentPreview);
 
-    // ── Exam Context Cascading Selects ──
-    $('examTradeSelect')?.addEventListener('change', e => {
-        const grade = e.target.value;
-        currentExamContext.tradeId = grade;
-        currentExamContext.subjectId = null;
-        currentExamContext.studentId = null;
+    // ✅ NEW — Assessment selector (if your HTML has it)
+ $('examAssessmentSelect')?.addEventListener('change', onAssessmentChange);
 
-        if ($('examInterface')) $('examInterface').style.display = 'none';
-        if ($('examEmptyState')) $('examEmptyState').style.display = 'flex';
 
-        $('examSubjectSelect').innerHTML = "<option value=''>Select Subject...</option>";
-        $('examStudentSelect').innerHTML = "<option value=''>Select Subject First...</option>";
-        $('examStudentSelect').disabled = true;
-
-        if (grade) loadExamSubjects(grade);
-        else $('examSubjectSelect').disabled = true;
-    });
-
-    $('examSubjectSelect')?.addEventListener('change', e => {
-        const subjectId = e.target.value;
-        currentExamContext.subjectId = subjectId;
-        currentExamContext.studentId = null;
-
-        if ($('examInterface')) $('examInterface').style.display = 'none';
-        if ($('examEmptyState')) $('examEmptyState').style.display = 'flex';
-
-        if (subjectId) loadExamStudents();
-        else {
-            $('examStudentSelect').disabled = true;
-            $('examStudentSelect').innerHTML = "<option value=''>Select Subject First...</option>";
-        }
-
-        const batchBtn = $('btnOpenBatchAssessment');
-        if (batchBtn) batchBtn.disabled = !subjectId;
-    });
-
-    $('examStudentSelect')?.addEventListener('change', e => {
-        const studentId = e.target.value;
-        currentExamContext.studentId = studentId;
-
-        if (studentId && currentExamContext.subjectId) loadCBETUnits();
-        else {
-            if ($('examInterface')) $('examInterface').style.display = 'none';
-            if ($('examEmptyState')) $('examEmptyState').style.display = 'flex';
-        }
-    });
+    
 
     // ── Batch Admission ──
     $('batchAdmissionFile')?.addEventListener('change', handleBatchAdmissionFile);
@@ -1034,6 +1418,8 @@ function initGlobalListeners() {
             if (btn) btn.disabled = !grade;
         }
     });
+    // At the end of initGlobalListeners(), add:
+setTimeout(() => initExamsTab(), 200);
 }
 // ==========================================================================
 //   ADMISSIONS / INTAKE
@@ -1448,121 +1834,7 @@ function populateExamGrades() {
     });
 }
 
-// --- LOAD SUBJECTS FOR SELECTED GRADE ---
-function loadExamSubjects(grade) {
-    const select = $('examSubjectSelect');
-    if (!select) return;
-    select.innerHTML = '<option value="">Select Subject...</option>';
 
-    const subjects = store.learningAreas.filter(la => la.applicableLevels && la.applicableLevels.includes(grade));
-    subjects.forEach(subj => {
-        const opt = document.createElement('option');
-        opt.value = subj.id;
-        opt.textContent = `${subj.name} (${subj.code})`;
-        select.appendChild(opt);
-    });
-
-    select.disabled = subjects.length === 0;
-    if (subjects.length === 0) {
-        select.innerHTML = '<option value="">No subjects for this grade</option>';
-    }
-}
-
-// --- LOAD STUDENTS FOR SELECTED SUBJECT/GRADE ---
-function loadExamStudents() {
-    const select = $('examStudentSelect');
-    if (!select) return;
-    select.innerHTML = '<option value="">Select Learner...</option>';
-
-    const grade = currentExamContext.tradeId;
-    if (!grade) { select.disabled = true; return; }
-
-    const students = StudentRepo.findBy('grade', grade);
-    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-    students.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = `${s.reg || '—'} — ${s.name}`;
-        select.appendChild(opt);
-    });
-
-    select.disabled = students.length === 0;
-    if (students.length === 0) {
-        select.innerHTML = '<option value="">No learners in this grade</option>';
-    }
-
-    // Enable summary button
-    const summaryBtn = $('btnViewExamSummary');
-    if (summaryBtn) summaryBtn.disabled = false;
-
-    // Show quick stats
-    updateExamQuickStats();
-}
-
-// --- LOAD CBET UNITS FOR ASSESSMENT ---
-function loadCBETUnits() {
-    const { studentId, subjectId, tradeId: grade } = currentExamContext;
-    if (!studentId || !subjectId || !grade) return;
-
-    const student = StudentRepo.getById(studentId);
-    const subject = store.learningAreas.find(la => la.id === subjectId);
-    if (!student || !subject) return;
-
-    // Show the interface, hide empty state
-    if ($('examInterface')) $('examInterface').style.display = 'block';
-    if ($('examEmptyState')) $('examEmptyState').style.display = 'none';
-
-    // Populate student banner
-    if ($('examStudentPhoto')) $('examStudentPhoto').src = student.photo || DEFAULT_AVATAR;
-    if ($('examStudentName')) $('examStudentName').textContent = student.name;
-    if ($('examStudentReg')) $('examStudentReg').innerHTML = `<i class="fa-solid fa-id-card"></i> ${student.reg || '—'}`;
-    if ($('examStudentGrade')) $('examStudentGrade').innerHTML = `<i class="fa-solid fa-graduation-cap"></i> ${grade}`;
-    if ($('examStudentSubject')) $('examStudentSubject').innerHTML = `<i class="fa-solid fa-book"></i> ${subject.name}`;
-
-    // Get units
-    const units = getUnitsForSubject(subjectId, grade);
-
-    // Get existing exam record for this student+subject+term+year
-    const term = $('examTermSelect') ? $('examTermSelect').value : 'Term 1';
-    const year = $('examYearInput') ? $('examYearInput').value : new Date().getFullYear().toString();
-    const examRecord = findExamRecord(studentId, subjectId, grade, term, year);
-
-    // Render unit cards
-    const grid = $('examUnitsGrid');
-    if (!grid) return;
-    grid.innerHTML = '';
-
-    units.forEach(unit => {
-        const existingScore = examRecord ? (examRecord.scores || {})[unit.code] : null;
-        const score = existingScore ? existingScore.score : null;
-        const level = score !== null ? getCompetencyLevel(score) : null;
-        const isLocked = score !== null;
-
-        const card = document.createElement('div');
-        card.className = `cbet-unit-card${isLocked ? ' assessed locked' : ''}`;
-        card.dataset.unitCode = unit.code;
-        card.dataset.unitName = unit.name;
-        card.dataset.locked = isLocked ? 'true' : 'false';
-
-        card.innerHTML = `
-            <div class="cuc-code">${unit.code}</div>
-            <div class="cuc-name">${escapeHtml(unit.name)}</div>
-            <div class="cuc-score-bar">
-                <div class="cuc-score-fill ${level || ''}" style="width:${score !== null ? score : 0}%"></div>
-            </div>
-            <div class="cuc-status">
-                <span class="cuc-score-text">${score !== null ? score + '%' : '—'}</span>
-                <span class="cuc-badge ${level || 'pending'}">${level || 'Pending'}</span>
-            </div>
-        `;
-
-        grid.appendChild(card);
-    });
-
-    // Update overall bar
-    updateOverallBar(examRecord, units);
-}
 
 // --- FIND EXISTING EXAM RECORD ---
 function findExamRecord(studentId, subjectId, grade, term, year) {
@@ -14550,17 +14822,55 @@ function getAllAssessments() {
 }
 
 // ── Tab Switching ───────────────────────────────────────────────
-function switchExamTab(tab) {
+function switchExamTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.exam-tab-content').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.exam-tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.exam-tab-content').forEach(c => c.classList.remove('active'));
-    const btn = document.querySelector(`.exam-tab-btn[data-examtab="${tab}"]`);
-    const panel = document.getElementById('examTab-' + tab);
-    if (btn) btn.classList.add('active');
-    if (panel) panel.classList.add('active');
-    if (tab === 'enter')    populateScoreEntryDropdowns();
-    if (tab === 'results')  populateResultsDropdowns();
-    if (tab === 'analysis') populateAnalysisDropdowns();
-    if (tab === 'batch')    populateBatchDropdowns();
+
+    // Show selected tab
+    const tabEl = $(`examTab-${tabName}`);
+    if (tabEl) tabEl.classList.add('active');
+
+    // Highlight button
+    document.querySelector(`.exam-tab-btn[data-examtab="${tabName}"]`)?.classList.add('active');
+
+    // Populate dropdowns when switching to a tab
+    if (tabName === 'enter') populateScoreEntryDropdowns();
+    if (tabName === 'results') populateResultsDropdowns();
+    if (tabName === 'analysis') populateAnalysisDropdowns();
+    if (tabName === 'batch') populateBatchDropdowns();
+    if (tabName === 'assessments') renderAssessmentCards();
+}
+
+// ── POPULATE ALL ASSESSMENT DROPDOWNS ───────────────────────────────
+function _populateAssessmentSelect(selectId, includeAll) {
+    const select = $(selectId);
+    if (!select) return;
+
+    const currentVal = select.value;
+    select.innerHTML = includeAll ? '<option value="all">All Assessments</option>' : '<option value="">Select Assessment...</option>';
+
+    const schedules = store.examSchedules || [];
+    if (schedules.length === 0) {
+        select.innerHTML += '<option value="" disabled>No assessments created yet</option>';
+        return;
+    }
+
+    // Sort by newest first
+    const sorted = [...schedules].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    sorted.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        const statusIcon = s.status === 'closed' ? '🔒' : s.status === 'open' ? '🟢' : '📝';
+        opt.textContent = `${statusIcon} ${s.name} (${s.grade}) — ${s.term}`;
+        select.appendChild(opt);
+    });
+
+    // Restore previous selection if it still exists
+    if (currentVal && [...select.options].some(o => o.value === currentVal)) {
+        select.value = currentVal;
+    }
 }
 
 // ── RENDER ASSESSMENT CARDS ────────────────────────────────────
@@ -14666,6 +14976,8 @@ function populateAssessSubjects() {
     });
 }
 
+
+
 function saveAssessment(e) {
     e.preventDefault();
     const name       = getVal('assessName');
@@ -14733,11 +15045,12 @@ function _getAssessById(id) {
 }
 
 function populateScoreEntryDropdowns() {
-    const sel = $('scoreEntryAssessment');
-    if (!sel) return;
-    const cur = sel.value;
-    sel.innerHTML = _assessOptions(cur, true);
-    sel.value = cur;
+    _populateAssessmentSelect('scoreEntryAssessment', false);
+    const subjectSelect = $('scoreEntrySubject');
+    if (subjectSelect) {
+        subjectSelect.innerHTML = '<option value="">Select Subject...</option>';
+        subjectSelect.disabled = true;
+    }
 }
 
 function populateResultsDropdowns() {
@@ -15149,6 +15462,26 @@ function autoSaveScores() {
     showToast('Scores saved as draft.');
 }
 
+function _collectAndSaveScores() {
+    let saved = 0;
+    ($('scoreEntryBody')?.querySelectorAll('.score-input') || []).forEach(input => {
+        const val = input.value.trim();
+        if (val === '' || isNaN(Number(val))) return;
+        const studentId = input.dataset.sid;
+        const subjectId = input.dataset.subid;
+        const assessId = input.dataset.aid;
+        const score = Math.max(0, Math.min(100, Math.round(Number(val))));
+        const rating = cbcRating(score);
+        const assessment = getAllAssessments().find(s => s.id === assessId);
+
+        const idx = store.exams.findIndex(e => e.studentId === studentId && e.subjectId === subjectId && e.assessId === assessId);
+        const record = { id: idx !== -1 ? store.exams[idx].id : generateId(), studentId, subjectId, assessId, score, grade: assessment?.grade || '', rating: rating.code, ratingText: rating.text, updatedAt: new Date().toISOString() };
+        
+        if (idx !== -1) store.exams[idx] = record; else store.exams.push(record);
+        saved++;
+    });
+    if (saved > 0) saveData();
+}
 function submitAllScores() {
     autoSaveScores();
     const assessId = ($('scoreEntryAssessment') || {}).value;
@@ -15395,18 +15728,6 @@ function promptDeleteAssessment(id) {
     openModal('deleteAssessModal');
 }
 
-function confirmDeleteAssessment() {
-    if (!examDeleteTargetId) return;
-    const assess = _getAssessById(examDeleteTargetId);
-    store.exams = (store.exams || []).filter(e => e.assessId !== examDeleteTargetId);
-    store.examSchedules = (store.examSchedules || []).filter(a => a.id !== examDeleteTargetId);
-    saveData();
-    closeModal('deleteAssessModal');
-    renderAssessmentCards();
-    showToast('Assessment deleted.', 'error');
-    if (typeof logActivity === 'function') logActivity('exam', 'Deleted assessment: ' + (assess ? assess.name : ''));
-    examDeleteTargetId = null;
-}
 
 // ── EXPORT HELPERS ──────────────────────────────────────────────
 function _getAssessForExport() {
@@ -18746,19 +19067,23 @@ function populateAssessmentDropdowns() {
     });
 }
 
-// 1. TAB SWITCHING
-function switchExamTab(tabName) {
-    document.querySelectorAll('.exam-tab-content').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.exam-tab-btn').forEach(el => el.classList.remove('active'));
-    
-    const tabContent = document.getElementById(`examTab-${tabName}`);
-    const tabBtn = document.querySelector(`[data-examtab="${tabName}"]`);
-    
-    if (tabContent) tabContent.classList.add('active');
-    if (tabBtn) tabBtn.classList.add('active');
+let _pendingDeleteAssessId = null;
 
+// ── 1. TAB SWITCHING (Called by your HTML onclick) ─────────────────
+function switchExamTab(tabName) {
+    document.querySelectorAll('.exam-tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.exam-tab-btn').forEach(b => b.classList.remove('active'));
+
+    const tabEl = $(`examTab-${tabName}`);
+    if (tabEl) tabEl.classList.add('active';
+    document.querySelector(`.exam-tab-btn[data-examtab="${tabName}"]`)?.classList.add('active');
+
+    // Populate dropdowns when switching tabs
+    if (tabName === 'enter') populateScoreEntryDropdowns();
+    if (tabName === 'results') populateResultsDropdowns();
+    if (tabName === 'analysis') populateAnalysisDropdowns();
+    if (tabName === 'batch') populateBatchDropdowns();
     if (tabName === 'assessments') renderAssessmentCards();
-    if (tabName === 'batch') loadBatchGrid();
 }
 
 // 2. RENDER ASSESSMENT CARDS
@@ -19061,7 +19386,15 @@ function updateBatchRowMean(input) {
 }
 
 function filterBatchRows() { const t = $('batchSearch')?.value.toLowerCase(); document.querySelectorAll('#batchBody tr').forEach(r => { r.style.display = r.dataset.name.includes(t) ? '' : 'none'; }); }
-function saveBatchScores() { saveBatchData(true); }
+function saveBatchAndClose() {
+    saveBatchScores();
+    const assessId = $('batchAssessment')?.value;
+    if (assessId) {
+        const a = getAllAssessments().find(s => s.id === assessId);
+        if (a && a.status === 'open') { a.status = 'closed'; saveData(); renderAssessmentCards(); }
+    }
+    showToast('Batch saved and assessment closed!', 'success');
+}
 function saveBatchAndClose() { saveBatchData(false); }
 
 function saveBatchData(isDraft) {
