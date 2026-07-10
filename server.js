@@ -260,11 +260,19 @@ app.post('/api/login', rateLimit({ windowMs: 60 * 60 * 1000, max: 15 }), async (
         if (user.isActive !== 1) return res.status(403).json({ success: false, message: 'Account suspended. Contact Admin.' });
         
         await pool.query('UPDATE users SET "failedLoginAttempts" = 0, "lockedUntil" = NULL WHERE id = $1', [user.id]);
-        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+        // TO THIS:
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         await logAction(user.id, user.name, 'LOGIN', `Logged in from ${req.ip}`);
         res.json({ success: true, token, user: { id: user.id, email: user.email, role: user.role, name: user.name, department: user.department } });
     } catch (err) { console.error('[LOGIN ERROR]', err); res.status(500).json({ error: 'Login failed.' }); }
 });
+
+app.post('/api/logout', (req, res) => {
+    // In a JWT system, the server doesn't need to do anything to log out.
+    // The client just deletes the token. We return 200 OK so the dashboard doesn't crash.
+    res.json({ success: true, message: 'Logged out successfully.' });
+});
+
 
 app.post('/api/signup', rateLimit({ windowMs: 60 * 60 * 1000, max: 5 }), async (req, res) => {
     try {
