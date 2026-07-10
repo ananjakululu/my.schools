@@ -690,7 +690,7 @@ function onAssessmentChange() {
         studentSelect.disabled = true;
     }
 
-    
+}   
 /**
  * Called when "Select Grade..." changes.
  * Populates subjects applicable to that grade.
