@@ -223,47 +223,117 @@ function logout() {
     window.location.replace('login.html'); 
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//   SMART API URL — Automatically routes to local or cloud backend
+// ══════════════════════════════════════════════════════════════════════
+const API_URL = (() => {
+    const host = window.location.hostname;
+    const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+    
+    // If running locally (localhost, 127.0.0.1, or a local IP), use local backend
+    if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.')) {
+        // Change 5000 to whatever port your local backend runs on
+        return `http://localhost:8000`;  
+    }
+    
+    // Otherwise we're on Render/production — use the same origin
+    return window.location.origin;
+})();
+
+
 async function loadData() {
     const token = localStorage.getItem('authToken');
     if (!token) return logout();
 
-    try {
-        // 1. Try to fetch from Server
-        const res = await fetch(`${API_URL}/api/db`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+    // ── Step 1: Determine if we should even try the server ──
+    const isLocalDev = API_URL !== window.location.origin;
+    const isSameOrigin = API_URL === window.location.origin;
 
-        if (res.ok) {
-            const db = await res.json();
-            // Populate Store from Server
-            store.students = db.students || [];
-            store.staff = db.staff || [];
-            store.exams = db.exams || [];
-            store.notes = db.notes || [];
-            store.timetable = db.timetable || [];
-            store.examSchedules = db.examSchedules || [];
-            store.settings = { ...store.settings, ...db.settings };
-            
-            let existingAreas = db.learningAreas || [];
-            DEFAULT_LEARNING_AREAS.forEach(def => {
-                if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
+    // ── Step 2: Fetch from Server ──
+    let serverSuccess = false;
+    let serverError = null;
+
+    // Skip server call entirely if we're on localhost AND
+    // the backend isn't running (we'll detect this after first failure)
+    if (!window._localBackendConfirmedOffline) {
+        try {
+            const res = await fetch(`${API_URL}/api/db`, {
+                method: 'GET',
+                headers: { 
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                // Abort after 8 seconds so the user isn't stuck waiting
+                signal: AbortSignal.timeout(8000)
             });
-            store.learningAreas = existingAreas;
 
-            seedStaffData();
-            renderDashboard(); 
-            renderStaff();
-        } else {
-            // Handle 403 (Expired/Invalid token) or other server errors gracefully
-            throw new Error(`Server responded with ${res.status}`);
+            if (res.ok) {
+                const db = await res.json();
+                
+                // ── Populate Store from Server ──
+                store.students = db.students || [];
+                store.staff = db.staff || [];
+                store.exams = db.exams || [];
+                store.notes = db.notes || [];
+                store.timetable = db.timetable || [];
+                store.examSchedules = db.examSchedules || [];
+                store.settings = { ...store.settings, ...db.settings };
+                
+                // Merge default learning areas with any custom ones from server
+                let existingAreas = db.learningAreas || [];
+                DEFAULT_LEARNING_AREAS.forEach(def => {
+                    if (!existingAreas.some(area => area.code === def.code)) {
+                        existingAreas.push(def);
+                    }
+                });
+                store.learningAreas = existingAreas;
+
+                // ── Immediately back up fresh server data to localStorage ──
+                _backupToLocalStorage();
+
+                seedStaffData();
+                renderDashboard();
+                renderStaff();
+
+                serverSuccess = true;
+                window._localBackendConfirmedOffline = false; // Reset — backend is alive
+
+            } else if (res.status === 401 || res.status === 403) {
+                // Token is genuinely expired/invalid — don't fall back, log out
+                console.warn(`Auth failed (${res.status}). Redirecting to login.`);
+                showToast('Session expired. Please log in again.', 'error');
+                return logout();
+
+            } else {
+                serverError = `Server returned ${res.status}`;
+            }
+
+        } catch (err) {
+            serverError = err.message;
+
+            // Detect if this is a CORS error (local backend not running or not configured)
+            if (isLocalDev && (
+                err.message.includes('Failed to fetch') ||
+                err.message.includes('NetworkError') ||
+                err.message.includes('CORS') ||
+                err.name === 'TypeError'
+            )) {
+                console.warn('⚠️ Local backend unreachable. Is it running?');
+                console.warn(`   Expected: ${API_URL}`);
+                console.warn('   Try: node server.js (or your start command)');
+                
+                // Remember this so we don't keep failing silently on every save
+                window._localBackendConfirmedOffline = true;
+            }
         }
+    }
 
-    } catch (err) {
-        console.warn("Could not reach server or token invalid. Attempting offline fallback...", err.message);
-        
-        // 2. FALLBACK: Load from LocalStorage
+    // ── Step 3: If server failed, fall back to localStorage ──
+    if (!serverSuccess) {
+        console.warn(`Server load failed: ${serverError}. Falling back to localStorage.`);
+
         const localData = localStorage.getItem('elimutrack_backup');
+        
         if (localData) {
             try {
                 const parsed = JSON.parse(localData);
@@ -271,124 +341,191 @@ async function loadData() {
                 seedStaffData();
                 renderDashboard();
                 renderStaff();
-                
-                // Silent notification instead of blocking alert()
-                showToast('Loaded offline data (Server unreachable or token expired).', 'info');
+
+                // ── CLEAR WARNING about data mismatch ──
+                if (isLocalDev) {
+                    showToast(
+                        '⚠️ Using LOCAL cached data — backend is offline. Start your local server to sync.',
+                        'error'
+                    );
+                } else {
+                    showToast(
+                        'Loaded offline backup. Some data may be outdated.',
+                        'info'
+                    );
+                }
             } catch (parseErr) {
-                console.error("Corrupted local backup.", parseErr);
-                showToast('Error reading local backup data.', 'error');
+                console.error("Corrupted local backup:", parseErr);
+                seedStaffData();
+                renderDashboard();
+                renderStaff();
+                showToast('Local backup is corrupted. Starting with empty data.', 'error');
             }
         } else {
+            // No local backup either — start fresh
             seedStaffData();
             renderDashboard();
             renderStaff();
-            showToast('No data found on Server or Browser.', 'error');
+            showToast('No data found. This appears to be a fresh install.', 'info');
         }
     }
 }
-async function saveData() {
-    const token = localStorage.getItem('authToken');
-    if (!token) {
-        showToast('Session expired. Logging out.', 'error');
-        // Use replace() to destroy history and prevent offline loops
-        return window.location.replace('login.html');
-    }
 
-    // 1. LocalStorage Backup (Stripped of images to prevent crash)
+// ══════════════════════════════════════════════════════════════════════
+//   HELPER: Lightweight localStorage backup (strips heavy images)
+// ══════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+//   LIGHTWEIGHT LOCAL BACKUP — strips images to prevent 5MB crash
+// ══════════════════════════════════════════════════════════════════════
+function _backupToLocalStorage() {
     try {
-        const lightweightStore = {
+        const lightweight = {
             ...store,
-            // Remove heavy photos from backup
-            students: store.students.map(s => ({ ...s, photo: null })),
-            staff: store.staff.map(s => ({ ...s, photo: null })),
+            students: (store.students || []).map(s => ({ ...s, photo: null })),
+            staff: (store.staff || []).map(s => ({ ...s, photo: null })),
             settings: {
-                ...store.settings,
+                ...(store.settings || {}),
                 logo: null,
                 stamp: null,
                 hoiSignature: null,
                 ctSignature: null
             }
         };
-        localStorage.setItem('elimutrack_backup', JSON.stringify(lightweightStore));
+        localStorage.setItem('elimutrack_backup', JSON.stringify(lightweight));
     } catch (e) {
-        console.warn("Local Storage full. Backup skipped.");
+        console.warn('localStorage backup skipped:', e.message);
+    }
+}
+
+async function saveData() {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+        showToast('Session expired. Logging out.', 'error');
+        return window.location.replace('login.html');
     }
 
-    // 2. SKIP SERVER SYNC COMPLETELY IF OFFLINE OR TOKEN EXPIRED
-    // This prevents infinite 403 error loops and saves battery/CPU
-    if (!navigator.onLine || window._isOfflineMode) {
-        return; // Data is already safe in localStorage (Step 1)
+    // ════════════════════════════════════════════════════════════════
+    //  STEP 1: ALWAYS backup to localStorage first (safety net)
+    // ════════════════════════════════════════════════════════════════
+    _backupToLocalStorage();
+
+    // ════════════════════════════════════════════════════════════════
+    //  STEP 2: Skip server sync if we already know it's unreachable
+    //  This prevents repeated CORS failures every time the user clicks
+    // ════════════════════════════════════════════════════════════════
+    if (window._localBackendConfirmedOffline) {
+        showToast('Saved locally (backend offline).', 'info');
+        return;
     }
 
-    let _authFailed = false;
+    if (!navigator.onLine) {
+        showToast('Saved locally (no internet).', 'info');
+        return;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  STEP 3: Attempt server sync
+    // ════════════════════════════════════════════════════════════════
+    const endpoints = [
+        ['/students', store.students],
+        ['/staff', store.staff],
+        ['/settings', store.settings],
+        ['/exams', store.exams],
+        ['/learningAreas', store.learningAreas],
+        ['/notes', store.notes || []],
+        ['/timetable', store.timetable || []],
+        ['/examSchedules', store.examSchedules || []]
+    ];
+
     try {
-        // 3. Send to Server using a UNIFIED safe wrapper
-        // This catches both 403s and Network Failures (TypeError) gracefully
-        const safePost = async (path, body) => {
-            try {
-                const res = await fetch(`${API_URL}${path}`, {
+        const results = await Promise.all(
+            endpoints.map(([path, data]) =>
+                fetch(`${API_URL}${path}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                    body: JSON.stringify(body || [])
-                });
-                
-                // Detect expired/invalid token
-                if (res.status === 403) _authFailed = true;
-                
-                return res; 
-            } catch (e) {
-                // Network error (server down, timeout, no internet) -> treat as silent success
-                return { ok: true, status: 0, offline: true }; 
-            }
-        };
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(data),
+                    signal: AbortSignal.timeout(10000) // 10s timeout — no hanging
+                }).then(async res => {
+                    // Auth failure — don't confuse with network error
+                    if (res.status === 401 || res.status === 403) {
+                        return { status: res.status, authFailed: true, ok: false };
+                    }
+                    return { status: res.status, ok: res.ok, authFailed: false };
+                }).catch(err => {
+                    // Network error, CORS block, timeout, DNS failure, etc.
+                    return { status: 0, ok: false, authFailed: false, networkError: true, message: err.message };
+                })
+            )
+        );
 
-        // Fire all requests using the safe wrapper
-        const [studentsRes, staffRes, settingsRes, examsRes, areasRes, notesRes, timetableRes, examSchedulesRes] = await Promise.all([
-            safePost('/students', store.students),
-            safePost('/staff', store.staff),
-            safePost('/settings', store.settings),
-            safePost('/exams', store.exams),
-            safePost('/learningAreas', store.learningAreas),
-            safePost('/notes', store.notes || []),
-            safePost('/timetable', store.timetable || []),
-            safePost('/examSchedules', store.examSchedules || [])
-        ]);
-
-        // Handle 403 Session Expiry gracefully
-        if (_authFailed) {
-            window._isOfflineMode = true; // Stop future server requests until re-login
+        // ── Check for auth failure (401/403) → real session problem ──
+        const authFail = results.find(r => r && r.authFailed);
+        if (authFail) {
+            window._localBackendConfirmedOffline = true;
             if (!window._syncFailedToastShown) {
                 window._syncFailedToastShown = true;
-                showToast('Session expired on server. Data saved locally — please re-login to sync.', 'error');
+                showToast('Session expired on server. Data saved locally — re-login to sync.', 'error');
             }
             return;
         }
 
-        // Check if actual core endpoints failed (e.g., 500 server error, not network error)
-        const coreOk = studentsRes.ok && staffRes.ok && settingsRes.ok;
+        // ── Check for network/CORS failure → backend unreachable ──
+        const networkFail = results.find(r => r && r.networkError);
+        if (networkFail) {
+            window._localBackendConfirmedOffline = true;
+            
+            const isLocalDev = API_URL !== window.location.origin;
+            if (isLocalDev) {
+                console.warn('═════════════════════════════════════════════');
+                console.warn('  ⚠️  LOCAL BACKEND UNREACHABLE');
+                console.warn(`  Expected URL: ${API_URL}`);
+                console.warn('  Error:', networkFail.message);
+                console.warn('  Fix: Start your backend (e.g. node server.js)');
+                console.warn('═════════════════════════════════════════════');
+            }
+
+            if (!window._syncFailedToastShown) {
+                window._syncFailedToastShown = true;
+                if (isLocalDev) {
+                    showToast('Backend offline — saved locally. Start your server to sync.', 'error');
+                } else {
+                    showToast('Server unreachable — saved locally. Will retry.', 'error');
+                }
+            }
+            return;
+        }
+
+        // ── Check core endpoints for server errors (500, etc.) ──
+        const coreOk = results[0]?.ok && results[1]?.ok && results[2]?.ok;
         if (coreOk) {
-            window._syncFailedToastShown = false; // Reset flag on successful sync
+            // ✅ Genuine success — reset all failure flags
+            window._syncFailedToastShown = false;
+            window._localBackendConfirmedOffline = false;
             showToast('All changes saved successfully!');
         } else {
-            console.warn('Core save failed:', {
-                students: studentsRes.status,
-                staff: staffRes.status,
-                settings: settingsRes.status
+            console.warn('Core save rejected by server:', {
+                students: results[0]?.status,
+                staff: results[1]?.status,
+                settings: results[2]?.status
             });
-            throw new Error('Server rejected one or more core saves');
+            throw new Error(`Server rejected save (${results[0]?.status}, ${results[1]?.status}, ${results[2]?.status})`);
         }
 
     } catch (err) {
-        // Data is already saved to localStorage (step 1 above), so this is
-        // only a server-sync failure. Don't alarm the user — just log it.
-        console.warn("Server sync skipped (data saved locally):", err.message || err);
+        // This catches unexpected errors (e.g. AbortSignal not supported)
+        console.warn('Server sync failed (data safe in localStorage):', err.message);
         
         if (!window._syncFailedToastShown) {
             window._syncFailedToastShown = true;
-            showToast('Saved locally. Server sync will retry when online.', 'info');
+            showToast('Saved locally. Server sync will retry.', 'info');
         }
     }
 }
+
+
 function applyRoleRestrictions(role) {
     if (role === 'teacher') {
         document.body.classList.add('role-teacher');
