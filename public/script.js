@@ -19075,7 +19075,7 @@ function switchExamTab(tabName) {
     document.querySelectorAll('.exam-tab-btn').forEach(b => b.classList.remove('active'));
 
     const tabEl = $(`examTab-${tabName}`);
-    if (tabEl) tabEl.classList.add('active';
+    if (tabEl) tabEl.classList.add('active');
     document.querySelector(`.exam-tab-btn[data-examtab="${tabName}"]`)?.classList.add('active');
 
     // Populate dropdowns when switching tabs
