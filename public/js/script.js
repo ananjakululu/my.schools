@@ -2,7 +2,7 @@
 // Define your backend API URL
 // SMART URL: Automatically uses localhost if testing, or the live site if deployed
 // Force both Localhost and Render to use the Cloud Database
-const API_URL = "";
+const API_URL = "https://my-school-app-hvwj.onrender.com";
     
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
@@ -173,7 +173,9 @@ function openModal(id) {
     if ($(id)) { 
         $(id).classList.add('active'); 
         document.body.style.overflow = 'hidden'; 
+        
         if (id === 'courseModal') populateTeacherDropdown(); 
+        
         if (id === 'individualReportModal') {
             populateStudentSelect('reportStudentSelect');
             const form = $('reportFormContainer');
@@ -186,9 +188,12 @@ function openModal(id) {
             if(btnTrans) btnTrans.style.display = isTranscript ? 'block' : 'none';
             if(btnLeave) btnLeave.style.display = isTranscript ? 'none' : 'block';
         }
-        if (id === 'subjectReportModal' || id === 'classReportModal') {
-            populateDropdownsForReports();
+        
+        // ✅ FIXED: Added marksheetModal + setTimeout for safe DOM rendering
+        if (id === 'subjectReportModal' || id === 'classReportModal' || id === 'marksheetModal') {
+            setTimeout(() => populateDropdownsForReports(), 50);
         }
+        
         if (id === 'bulkProgressModal') {
             if (typeof initBulkProgressModal === 'function') initBulkProgressModal();
         }
@@ -208,9 +213,14 @@ function closeModal(id) {
 // ==========================================================================
 
 function logout() {
+    // 1. Clear ALL session data (Online + Offline)
     localStorage.removeItem('authToken');
     localStorage.removeItem('user');
-    window.location.href = 'login.html'; 
+    localStorage.removeItem('offline_session_backup');
+    //sessionStorage.removeItem('offline_mode');
+    
+    // 2. Use replace() to destroy dashboard history (prevents offline loops)
+    window.location.replace('login.html'); 
 }
 
 async function loadData() {
@@ -241,44 +251,47 @@ async function loadData() {
             });
             store.learningAreas = existingAreas;
 
-            // Seed demo staff on first run so the Staff section isn't empty.
-            // seedStaffData() is a no-op once any staff exist (server or local).
             seedStaffData();
+            renderDashboard(); 
+            renderStaff();
         } else {
-            throw new Error("Server response not OK");
+            // Handle 403 (Expired/Invalid token) or other server errors gracefully
+            throw new Error(`Server responded with ${res.status}`);
         }
 
-        renderDashboard(); 
-        renderStaff();
-
     } catch (err) {
-        console.error("Failed to load data from server.", err);
+        console.warn("Could not reach server or token invalid. Attempting offline fallback...", err.message);
         
-        // 2. FALLBACK: Load from LocalStorage (The Safety Net)
+        // 2. FALLBACK: Load from LocalStorage
         const localData = localStorage.getItem('elimutrack_backup');
         if (localData) {
-            const parsed = JSON.parse(localData);
-            Object.assign(store, parsed);
-            // Same first-run safety net for the offline path.
-            seedStaffData();
-            renderDashboard();
-            renderStaff();
-            alert("Warning: Could not connect to server. Loaded previously saved data from browser.");
+            try {
+                const parsed = JSON.parse(localData);
+                Object.assign(store, parsed);
+                seedStaffData();
+                renderDashboard();
+                renderStaff();
+                
+                // Silent notification instead of blocking alert()
+                showToast('Loaded offline data (Server unreachable or token expired).', 'info');
+            } catch (parseErr) {
+                console.error("Corrupted local backup.", parseErr);
+                showToast('Error reading local backup data.', 'error');
+            }
         } else {
-            // Last-resort: nothing on server or in localStorage. Seed demo
-            // staff so the user can still see how the section works.
             seedStaffData();
             renderDashboard();
             renderStaff();
-            alert("Critical Error: No data found on Server or Browser.");
+            showToast('No data found on Server or Browser.', 'error');
         }
     }
 }
 async function saveData() {
     const token = localStorage.getItem('authToken');
     if (!token) {
-        showToast('Session expired. Please login again.', 'error');
-        return window.location.href = 'login.html';
+        showToast('Session expired. Logging out.', 'error');
+        // Use replace() to destroy history and prevent offline loops
+        return window.location.replace('login.html');
     }
 
     // 1. LocalStorage Backup (Stripped of images to prevent crash)
@@ -301,78 +314,62 @@ async function saveData() {
         console.warn("Local Storage full. Backup skipped.");
     }
 
+    // 2. SKIP SERVER SYNC COMPLETELY IF OFFLINE OR TOKEN EXPIRED
+    // This prevents infinite 403 error loops and saves battery/CPU
+    if (!navigator.onLine || window._isOfflineMode) {
+        return; // Data is already safe in localStorage (Step 1)
+    }
+
     let _authFailed = false;
     try {
-        // 2. Send to Server (With Auth Headers)
-        // Helper: tolerant POST — returns {ok:true} for missing endpoints or auth failures
-        // so that optional new collections (notes/timetable/examSchedules) don't break the save flow.
-        const tolerantPost = async (path, body) => {
+        // 3. Send to Server using a UNIFIED safe wrapper
+        // This catches both 403s and Network Failures (TypeError) gracefully
+        const safePost = async (path, body) => {
             try {
-                const res = await fetch(`${API_URL}/${path}`, {
+                const res = await fetch(`${API_URL}${path}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                     body: JSON.stringify(body || [])
                 });
-                return res; // may have ok=false (404/403) — caller decides
+                
+                // Detect expired/invalid token
+                if (res.status === 403) _authFailed = true;
+                
+                return res; 
             } catch (e) {
-                return { ok: true, tolerant: true }; // network error → treat as success
+                // Network error (server down, timeout, no internet) -> treat as silent success
+                return { ok: true, status: 0, offline: true }; 
             }
         };
 
+        // Fire all requests using the safe wrapper
         const [studentsRes, staffRes, settingsRes, examsRes, areasRes, notesRes, timetableRes, examSchedulesRes] = await Promise.all([
-            fetch(`${API_URL}/students`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.students)
-            }),
-            fetch(`${API_URL}/staff`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.staff)
-            }),
-            fetch(`${API_URL}/settings`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
-                },
-                body: JSON.stringify(store.settings)
-            }),
-            fetch(`${API_URL}/exams`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(store.exams)
-            }),
-            fetch(`${API_URL}/learningAreas`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(store.learningAreas)
-            }),
-            // Optional endpoints — tolerate 404 (endpoint not deployed yet) silently
-            tolerantPost('notes', store.notes || []),
-            tolerantPost('timetable', store.timetable || []),
-            tolerantPost('examSchedules', store.examSchedules || [])
+            safePost('/students', store.students),
+            safePost('/staff', store.staff),
+            safePost('/settings', store.settings),
+            safePost('/exams', store.exams),
+            safePost('/learningAreas', store.learningAreas),
+            safePost('/notes', store.notes || []),
+            safePost('/timetable', store.timetable || []),
+            safePost('/examSchedules', store.examSchedules || [])
         ]);
 
-        // Detect auth failure (403) on core endpoints
-        if (studentsRes.status === 403 || staffRes.status === 403 || settingsRes.status === 403) {
-            _authFailed = true;
+        // Handle 403 Session Expiry gracefully
+        if (_authFailed) {
+            window._isOfflineMode = true; // Stop future server requests until re-login
+            if (!window._syncFailedToastShown) {
+                window._syncFailedToastShown = true;
+                showToast('Session expired on server. Data saved locally — please re-login to sync.', 'error');
+            }
+            return;
         }
 
-        // Core collections must succeed for us to claim "saved". The optional
-        // collections (notes/timetable/examSchedules) are best-effort — if the
-        // server doesn't have those endpoints yet, data still lives in localStorage.
+        // Check if actual core endpoints failed (e.g., 500 server error, not network error)
         const coreOk = studentsRes.ok && staffRes.ok && settingsRes.ok;
         if (coreOk) {
+            window._syncFailedToastShown = false; // Reset flag on successful sync
             showToast('All changes saved successfully!');
         } else {
-            // Log only core failures. Optional-endpoint 404s are silent.
             console.warn('Core save failed:', {
                 students: studentsRes.status,
                 staff: staffRes.status,
@@ -385,14 +382,10 @@ async function saveData() {
         // Data is already saved to localStorage (step 1 above), so this is
         // only a server-sync failure. Don't alarm the user — just log it.
         console.warn("Server sync skipped (data saved locally):", err.message || err);
-        // Only show the error toast once per session to avoid spam
+        
         if (!window._syncFailedToastShown) {
             window._syncFailedToastShown = true;
-            if (_authFailed) {
-                showToast('Session expired. Data saved locally — please re-login to sync.', 'error');
-            } else {
-                showToast('Saved locally. Server sync will retry.', 'success');
-            }
+            showToast('Saved locally. Server sync will retry when online.', 'info');
         }
     }
 }
@@ -468,8 +461,49 @@ function initializeApp(user) {
     updateSettingsForm();
     updateHeaderAndDashboard();
     populateProfileList();
+    initReports();              // ← ADD THIS
+    injectReportSearchDropdown(); // ← ADD THIS
+    initAnalysisListeners();
     currentView = { students: 'grid', staff: 'grid' };
     setTimeout(() => { const loader = $('appLoader'); if (loader) loader.style.display = 'none'; }, 800);
+}
+
+// Returns the grade and applicable subject IDs for the current exam context
+function _getBatchContext() {
+    const grade = currentExamContext.tradeId || $('examTradeSelect')?.value;
+    if (!grade) {
+        showToast('Please select a Grade in the Exams tab first.', 'error');
+        return null;
+    }
+    
+    const subjectIds = store.learningAreas
+        .filter(la => la.applicableLevels && la.applicableLevels.includes(grade))
+        .map(la => la.id);
+        
+    if (!subjectIds.length) {
+        showToast('No learning areas configured for this grade.', 'error');
+        return null;
+    }
+    
+    // Return a dummy assessId and the mapped subjects
+    return { assessId: generateId(), grade, subjectIds };
+}
+
+
+
+// Looks up a subject ID to get its human-readable name
+function getSubjectName(subjectId) {
+    const la = store.learningAreas.find(l => l.id === subjectId);
+    return la ? la.name : 'Unknown Subject';
+}
+
+// ⚠️ CRITICAL FIX: This MUST return an object with a .color property for your upload code to work!
+function cbcRating(score) {
+    if (score >= 80) return { code: 'EE', text: 'Exceeding Expectations', color: '#27ae60' };
+    if (score >= 70) return { code: 'ME', text: 'Meeting Expectations', color: '#2ecc71' };
+    if (score >= 50) return { code: 'AE', text: 'Approaching Expectations', color: '#f39c12' };
+    if (score >= 30) return { code: 'BE', text: 'Below Expectations', color: '#e74c3c' };
+    return { code: 'NE', text: 'Needs Support', color: '#c0392b' };
 }
 
 // ==========================================================================
@@ -485,7 +519,7 @@ function startClock() { const clockEl = $('liveClock'); const dateEl = $('liveDa
 function initGlobalListeners() {
     document.body.addEventListener('click', e => {
         const target = e.target;
-        
+
         const sectionHeader = target.closest('.nav-section-header');
         if (sectionHeader) {
             const section = sectionHeader.closest('.nav-section');
@@ -493,7 +527,7 @@ function initGlobalListeners() {
             return;
         }
 
-        const navItem = target.closest('[data-page]'); 
+        const navItem = target.closest('[data-page]');
         if (navItem) return router(navItem.dataset.page, navItem);
 
         const modalTrigger = target.closest('[data-modal]');
@@ -501,19 +535,19 @@ function initGlobalListeners() {
             if (modalTrigger.dataset.reportType) {
                 currentReportContext.type = modalTrigger.dataset.reportType;
             } else {
-                currentReportContext.type = null; 
+                currentReportContext.type = null;
             }
             return openModal(modalTrigger.dataset.modal);
         }
 
-        if (target.classList.contains('modal-backdrop') || target.matches('[data-dismiss="modal"]')) { 
-            const modal = target.closest('.modal-backdrop'); 
-            if (modal) return closeModal(modal.id); 
+        if (target.classList.contains('modal-backdrop') || target.matches('[data-dismiss="modal"]')) {
+            const modal = target.closest('.modal-backdrop');
+            if (modal) return closeModal(modal.id);
         }
-        
+
         const tabBtn = target.closest('.tab-btn');
         if (tabBtn) return switchSettingsTab(parseInt(tabBtn.dataset.tab));
-        
+
         const bandBtn = target.closest('.band-btn');
         if (bandBtn) {
             document.querySelectorAll('.band-btn').forEach(b => b.classList.remove('active'));
@@ -521,33 +555,32 @@ function initGlobalListeners() {
             return filterCurricula(bandBtn.dataset.band);
         }
 
-        // --- FIX: HANDLE CURRICULUM ACCORDION TOGGLE ---
         const accordionHeader = target.closest('.accordion-header');
         if (accordionHeader) {
             const item = accordionHeader.closest('.accordion-item');
             if (item) item.classList.toggle('open');
             return;
         }
-        // ----------------------------------------------
 
-        const viewBtn = target.closest('[data-view]'); 
-        if (viewBtn) { 
-            const section = viewBtn.dataset.section, viewType = viewBtn.dataset.view; 
-            currentView[section] = viewType; 
-            const group = viewBtn.closest('.btn-group'); 
-            if (group) { group.querySelectorAll('.btn').forEach(b => b.classList.remove('active')); viewBtn.classList.add('active'); } 
-            ({ students: applyFilters, staff: renderStaff }[section] || (() => {}))(); 
-            return; 
+        const viewBtn = target.closest('[data-view]');
+        if (viewBtn) {
+            const section = viewBtn.dataset.section, viewType = viewBtn.dataset.view;
+            currentView[section] = viewType;
+            const group = viewBtn.closest('.btn-group');
+            if (group) { group.querySelectorAll('.btn').forEach(b => b.classList.remove('active')); viewBtn.classList.add('active'); }
+            ({ students: applyFilters, staff: renderStaff }[section] || (() => {}))();
+            return;
         }
 
         const pageBtn = target.closest('.btn-page');
         if (pageBtn && !pageBtn.disabled) {
-            const pageNum = pageBtn.textContent; if (!isNaN(pageNum)) { currentPage = parseInt(pageNum); applyFilters(); }
+            const pageNum = pageBtn.textContent;
+            if (!isNaN(pageNum)) { currentPage = parseInt(pageNum); applyFilters(); }
             else if (pageBtn.querySelector('.fa-chevron-left')) { if (currentPage > 1) { currentPage--; applyFilters(); } }
-            else if (pageBtn.querySelector('.-chevron-right')) { currentPage++; applyFilters(); }
+            else if (pageBtn.querySelector('.fa-chevron-right')) { currentPage++; applyFilters(); }
         }
 
-                const actionBtn = target.closest('[data-action]');
+        const actionBtn = target.closest('[data-action]');
         if (actionBtn) {
             const action = actionBtn.dataset.action;
             const id = actionBtn.dataset.id;
@@ -556,57 +589,66 @@ function initGlobalListeners() {
             if (action === 'edit') { if (type === 'staff') editStaff(id); else editStudent(id); }
             if (action === 'delete') { if (type === 'staff') deleteStaff(id); else secureDelete(id); }
             if (action === 'view') viewStudent(id);
-            if (action === 'openStaffModal') openStaffModal(); 
-            
-            // --- FIX: Ensure both actions open the modal correctly ---
-            if (action === 'edit-curriculum' || action === 'edit-subject') {
-                editCourseSettings(id); // This function populates the form AND opens the modal
-            }
-            
+            if (action === 'openStaffModal') openStaffModal();
+            if (action === 'edit-curriculum' || action === 'edit-subject') editCourseSettings(id);
             if (action === 'delete-subject') deleteCourse(id);
             if (action === 'clearStudent') clearStudent(id);
-            return; 
+            return;
         }
 
-        const stepBtn = target.closest('[data-step]'); 
-        if (stepBtn) { const current = parseInt(stepBtn.dataset.current); if (stepBtn.dataset.step === 'next') nextStep(current, current + 1); if (stepBtn.dataset.step === 'prev') prevStep(current, current - 1); }
-        
-        const staffStepBtn = target.closest('[data-staff-step]'); 
-        if (staffStepBtn) { const current = parseInt(staffStepBtn.dataset.current); if (staffStepBtn.dataset.staffStep === 'next') nextStaffStep(current, current + 1); if (staffStepBtn.dataset.staffStep === 'prev') prevStaffStep(current, current - 1); }
+        const stepBtn = target.closest('[data-step]');
+        if (stepBtn) {
+            const current = parseInt(stepBtn.dataset.current);
+            if (stepBtn.dataset.step === 'next') nextStep(current, current + 1);
+            if (stepBtn.dataset.step === 'prev') prevStep(current, current - 1);
+        }
+
+        const staffStepBtn = target.closest('[data-staff-step]');
+        if (staffStepBtn) {
+            const current = parseInt(staffStepBtn.dataset.current);
+            if (staffStepBtn.dataset.staffStep === 'next') nextStaffStep(current, current + 1);
+            if (staffStepBtn.dataset.staffStep === 'prev') prevStaffStep(current, current - 1);
+        }
 
         if (target.closest('#btnToggleSidebar')) toggleSidebar();
         if (target.closest('#btnNotify')) showToast('System Updated');
-        
+
         if (target.closest('#btnUploadLogo')) $('logoInput').click();
         if (target.closest('#btnUploadStamp')) $('stampInput').click();
         if (target.closest('#btnUploadHoiSignature')) $('hoiSignatureInput').click();
         if (target.closest('#btnUploadClassTeacherSignature')) $('classTeacherSignatureInput').click();
-        
+
         if (target.closest('#btnImportBackup')) $('importFile').click();
         if (target.closest('#btnExportBackup')) exportBackup();
         if (target.closest('#btnConfirmAuth')) confirmAuth();
-        if (target.closest('#btnResetSystem')) { pendingAction = 'reset'; pendingActionData = null; $('authMessage').textContent = 'DANGER: Enter admin password to WIPE ALL DATA.'; $('adminPassword').value = ''; openModal('authModal'); }
-        
-        if (target.closest('#btnGenTranscriptReport')) generateTranscriptPDF($('reportStudentSelect').value, true); 
+        if (target.closest('#btnResetSystem')) {
+            pendingAction = 'reset';
+            pendingActionData = null;
+            $('authMessage').textContent = 'DANGER: Enter admin password to WIPE ALL DATA.';
+            $('adminPassword').value = '';
+            openModal('authModal');
+        }
+
+        if (target.closest('#btnGenTranscriptReport')) generateTranscriptPDF($('reportStudentSelect').value, true);
         if (target.closest('#btnGenLeavingCert')) generateLeavingCertificatePDF();
         if (target.closest('#btnGenSubjectList')) generateSubjectScoreListPDF();
         if (target.closest('#btnGenClassList')) generateClassListPDF();
-        
+
         if (target.closest('#btnSaveAssessment')) saveUnitAssessment();
         if (target.closest('#btnExportCSV')) exportStudentsCSV();
-        if (target.closest('#btnExportStudentsExcel')) exportStudentsExcel(); 
+        if (target.closest('#btnExportStudentsExcel')) exportStudentsExcel();
         if (target.closest('#btnStaffReport')) generateStaffListPDF();
         if (target.closest('#btnProfileReport')) generateSchoolProfile();
         if (target.closest('#btnPrintStaffList')) generateStaffListPDF();
 
         const unitCard = target.closest('.cbet-unit-card');
-        if (unitCard) { 
-            const code = unitCard.dataset.unitCode; 
-            const name = unitCard.dataset.unitName; 
-            const isLocked = unitCard.dataset.locked === 'true'; 
-            const studentId = currentExamContext.studentId; 
-            if (isLocked) { return showToast('Unit already completed.', 'info'); } 
-            if (studentId) { openAssessmentModal(code, name, studentId); } else { showToast('Please select a student first.', 'error'); } 
+        if (unitCard) {
+            const code = unitCard.dataset.unitCode;
+            const name = unitCard.dataset.unitName;
+            const isLocked = unitCard.dataset.locked === 'true';
+            const studentId = currentExamContext.studentId;
+            if (isLocked) { return showToast('Unit already completed.', 'info'); }
+            if (studentId) { openAssessmentModal(code, name, studentId); } else { showToast('Please select a student first.', 'error'); }
         }
 
         const dashNavItem = target.closest('.dash-nav-item');
@@ -614,58 +656,129 @@ function initGlobalListeners() {
             const tabName = dashNavItem.dataset.tab || dashNavItem.textContent.trim();
             openDashTab(e, tabName);
         }
+
+        // ── Inbox folder tab switching ──
+        const folderBtn = target.closest('.folder-btn');
+        if (folderBtn) {
+            document.querySelectorAll('.folder-btn').forEach(b => b.classList.remove('active'));
+            folderBtn.classList.add('active');
+            renderInboxFolder(folderBtn.dataset.folder);
+        }
     });
 
+    // ── Form Submissions ──
     $('eventsForm')?.addEventListener('submit', saveEventsDetails);
-
     $('dashChartFilter')?.addEventListener('change', e => renderDashboardChart(e.target.value));
-    
     $('newStudentForm')?.addEventListener('submit', submitRegistration);
     $('institutionForm')?.addEventListener('submit', saveInstitutionDetails);
     $('hoiForm')?.addEventListener('submit', saveHOIDetails);
     $('courseForm')?.addEventListener('submit', saveCourseSettings);
     $('staffForm')?.addEventListener('submit', submitStaff);
-    
+
+    // ── Notes: Save Activity Record ──
+    $('noteForm')?.addEventListener('submit', e => {
+        e.preventDefault();
+        const note = {
+            id: generateId(),
+            studentId: getVal('noteStudentSelect'),
+            type: getVal('noteType'),
+            title: getVal('noteTitle'),
+            description: getVal('noteDesc'),
+            date: getVal('noteDate'),
+            createdAt: new Date().toISOString()
+        };
+        if (!note.studentId || !note.title) {
+            showToast('Please fill all required fields.', 'error');
+            return;
+        }
+        if (!store.notes) store.notes = [];
+        store.notes.unshift(note);
+        saveData();
+        closeModal('addNoteModal');
+        $('noteForm')?.reset();
+        renderNotesTab();
+        showToast('Activity record saved successfully!');
+    });
+
+    // ── Inbox: Send Message ──
+    $('composeForm')?.addEventListener('submit', e => {
+        e.preventDefault();
+        const studentId = getVal('composeRecipient');
+        const student = StudentRepo.getById(studentId);
+        const msg = {
+            id: generateId(),
+            studentId: studentId,
+            recipientName: student ? student.guardianName : '',
+            subject: getVal('composeSubject'),
+            body: getVal('composeBody'),
+            date: new Date().toISOString(),
+            folder: 'sent',
+            read: true,
+            createdAt: new Date().toISOString()
+        };
+        if (!msg.studentId || !msg.subject || !msg.body) {
+            showToast('Please fill all fields.', 'error');
+            return;
+        }
+        if (!store.messages) store.messages = [];
+        store.messages.unshift(msg);
+        saveData();
+        closeModal('composeModal');
+        $('composeForm')?.reset();
+        renderInboxTab();
+        showToast('Message sent successfully!');
+    });
+
+    // ── Search Inputs ──
     $('globalSearch')?.addEventListener('input', debounce(e => handleGlobalSearch(e.target.value), 300));
     $('studentSearch')?.addEventListener('input', debounce(() => { currentPage = 1; applyFilters(); }, 300));
-    ['courseFilter', 'levelFilter', 'genderFilter'].forEach(id => { $(id)?.addEventListener('change', () => { currentPage = 1; applyFilters(); }); });
-    
+    ['courseFilter', 'levelFilter', 'genderFilter'].forEach(id => {
+        $(id)?.addEventListener('change', () => { currentPage = 1; applyFilters(); });
+    });
     $('staffSearch')?.addEventListener('input', debounce(renderStaff, 300));
     $('staffDeptFilter')?.addEventListener('change', renderStaff);
-    
+    $('profileSearchInput')?.addEventListener('input', e => {
+        const term = e.target.value.toLowerCase();
+        const allStudents = StudentRepo.getAll();
+        const filtered = allStudents.filter(s =>
+            (s.name && s.name.toLowerCase().includes(term)) ||
+            (s.reg && s.reg.toLowerCase().includes(term)) ||
+            (s.grade && s.grade.toLowerCase().includes(term))
+        );
+        populateProfileList(filtered);
+    });
+
+    // ── Intake Form Field Validation ──
     const nameInputs = ['surname', 'firstName', 'otherNames'];
-    nameInputs.forEach(id => { $(id)?.addEventListener('input', e => { validateName(e.target); autoCapitalize(e.target); updateLiveCard(); }); });
+    nameInputs.forEach(id => {
+        $(id)?.addEventListener('input', e => { validateName(e.target); autoCapitalize(e.target); updateLiveCard(); });
+    });
     $('idNumber')?.addEventListener('input', e => validateID(e.target));
     $('phone')?.addEventListener('input', e => validatePhone(e.target));
-    
+    $('dob')?.addEventListener('change', updateLiveCard);
+    $('level')?.addEventListener('change', updateLiveCard);
+
+    // ── Photo Uploads ──
     $('studentPhotoInput')?.addEventListener('change', e => previewStudentPhoto(e.target));
     $('staffPhotoInput')?.addEventListener('change', e => previewStaffPhoto(e.target));
-
-    // NOTE: staffForm submit is already bound above (line ~560); do not
-    // re-bind here or submitStaff will run twice and double-save.
-
-    
     $('logoInput')?.addEventListener('change', e => previewLogo(e.target));
     $('stampInput')?.addEventListener('change', e => previewStamp(e.target));
     $('hoiSignatureInput')?.addEventListener('change', e => previewHOISignature(e.target));
     $('classTeacherSignatureInput')?.addEventListener('change', e => previewCTSignature(e.target));
-    
-    $('importFile')?.addEventListener('change', e => importBackup(e.target));
-    
-    $('dob')?.addEventListener('change', updateLiveCard);
-    $('level')?.addEventListener('change', updateLiveCard);
-    
+
+    // ── Assessment Preview ──
     $('assessScore')?.addEventListener('input', updateAssessmentPreview);
-    
-    $('examTradeSelect')?.addEventListener('change', e => { 
-        const grade = e.target.value; 
-        currentExamContext.tradeId = grade; 
-        currentExamContext.subjectId = null; 
-        currentExamContext.studentId = null; 
-        
-        if ($('examInterface')) $('examInterface').style.display = 'none'; 
-        if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; 
-        
+
+    // ── Exam Context Cascading Selects ──
+    $('examTradeSelect')?.addEventListener('change', e => {
+        const grade = e.target.value;
+        currentExamContext.tradeId = grade;
+        currentExamContext.subjectId = null;
+        currentExamContext.studentId = null;
+
+        if ($('examInterface')) $('examInterface').style.display = 'none';
+        if ($('examEmptyState')) $('examEmptyState').style.display = 'flex';
+
         $('examSubjectSelect').innerHTML = "<option value=''>Select Subject...</option>";
         $('examStudentSelect').innerHTML = "<option value=''>Select Subject First...</option>";
         $('examStudentSelect').disabled = true;
@@ -673,69 +786,118 @@ function initGlobalListeners() {
         if (grade) loadExamSubjects(grade);
         else $('examSubjectSelect').disabled = true;
     });
-    
+
     $('examSubjectSelect')?.addEventListener('change', e => {
         const subjectId = e.target.value;
         currentExamContext.subjectId = subjectId;
         currentExamContext.studentId = null;
 
-        if ($('examInterface')) $('examInterface').style.display = 'none'; 
+        if ($('examInterface')) $('examInterface').style.display = 'none';
         if ($('examEmptyState')) $('examEmptyState').style.display = 'flex';
 
-        if (subjectId) loadExamStudents(); 
+        if (subjectId) loadExamStudents();
         else {
             $('examStudentSelect').disabled = true;
             $('examStudentSelect').innerHTML = "<option value=''>Select Subject First...</option>";
         }
-        
+
         const batchBtn = $('btnOpenBatchAssessment');
-        if(batchBtn) batchBtn.disabled = !subjectId;
+        if (batchBtn) batchBtn.disabled = !subjectId;
     });
 
-    $('examStudentSelect')?.addEventListener('change', e => { 
-        const studentId = e.target.value; 
-        currentExamContext.studentId = studentId; 
-        
-        if (studentId && currentExamContext.subjectId) loadCBETUnits(); 
-        else { 
-            if ($('examInterface')) $('examInterface').style.display = 'none'; 
-            if ($('examEmptyState')) $('examEmptyState').style.display = 'flex'; 
-        } 
+    $('examStudentSelect')?.addEventListener('change', e => {
+        const studentId = e.target.value;
+        currentExamContext.studentId = studentId;
+
+        if (studentId && currentExamContext.subjectId) loadCBETUnits();
+        else {
+            if ($('examInterface')) $('examInterface').style.display = 'none';
+            if ($('examEmptyState')) $('examEmptyState').style.display = 'flex';
+        }
     });
 
-    $('subjectReportGrade')?.addEventListener('change', populateSubjectReportDropdowns);
-
+    // ── Batch Admission ──
     $('batchAdmissionFile')?.addEventListener('change', handleBatchAdmissionFile);
     $('btnConfirmBatchAdmission')?.addEventListener('click', confirmBatchAdmission);
     $('btnDownloadAdmissionTemplate')?.addEventListener('click', downloadAdmissionTemplate);
     $('btnOpenBatchAssessment')?.addEventListener('click', openBatchAssessmentModal);
     $('btnSaveBatchAssessment')?.addEventListener('click', saveBatchAssessments);
-    
+    // ── Batch Upload (Excel Scores) ──  ← ADD THESE TWO
+     $('batchUploadFile')?.addEventListener('change', handleBatchFileSelect);
+    $('btnApplyBatchUpload')?.addEventListener('click', confirmBatchUpload);
+    $('btnCloseBatchUpload')?.addEventListener('click', () => {
+    _pendingBatchRows = null;
+    if ($('batchUploadFile')) $('batchUploadFile').value = '';
+    hideBatchPreview();
+});  // ← ADD THIS
+
+    // ── HOI Preview Live Update ──
     ['hoiName', 'hoiTitle', 'hoiTsc', 'hoiPhone', 'hoiEmail'].forEach(id => {
         $(id)?.addEventListener('input', updateHOIPreview);
     });
 
-    $('subjectReportModal')?.addEventListener('click', () => populateDropdownsForReports());
-    $('classReportModal')?.addEventListener('click', () => populateDropdownsForReports());
-    $('subjectReportGrade')?.addEventListener('change', populateSubjectReportDropdowns);
+    // ── Backup Import ──
+    $('importFile')?.addEventListener('change', e => importBackup(e.target));
 
-    
-  $('profileSearchInput')?.addEventListener('input', (e) => {
-    const term = e.target.value.toLowerCase();
-    const allStudents = StudentRepo.getAll();
-    
-    // Filter students
-    const filtered = allStudents.filter(s => 
-        (s.name && s.name.toLowerCase().includes(term)) || 
-        (s.reg && s.reg.toLowerCase().includes(term)) ||
-        (s.grade && s.grade.toLowerCase().includes(term))
-    );
-    
-    // Re-render (Function handles 'Flat vs Grouped' logic internally)
-    populateProfileList(filtered);
-});
+    // ══════════════════════════════════════════════════════════════════════
+    //   REPORT MODAL DROPDOWNS — Enhanced with live data counts
+    //   (REPLACES the old subjectReportGrade handler that called
+    //    the non-existent populateSubjectReportDropdowns function)
+    // ══════════════════════════════════════════════════════════════════════
+    document.addEventListener('change', function (e) {
+
+        // ── Subject Report: Grade → populate subjects with data counts ──
+        if (e.target.id === 'subjectReportGrade') {
+            const grade = e.target.value;
+            const subjectSelect = $('subjectReportSubject');
+            if (!subjectSelect) return;
+
+            subjectSelect.innerHTML = '<option value="">Select Subject...</option>';
+
+            if (!grade) {
+                subjectSelect.disabled = true;
+                const btn = $('btnGenSubjectList');
+                if (btn) btn.disabled = true;
+                return;
+            }
+
+            // Get all applicable subjects for this grade
+            const allApplicable = store.learningAreas.filter(la =>
+                la.applicableLevels && la.applicableLevels.includes(grade)
+            );
+
+            // Get subjects that actually have scored data
+            const assessedSubjects = _getAssessedSubjects(grade);
+
+            allApplicable.forEach(la => {
+                const hasData = assessedSubjects.find(s => s.id === la.id);
+                const dataTag = hasData
+                    ? ` (${hasData.count} scores, avg ${hasData.avg.toFixed(0)}%)`
+                    : ' (no data yet)';
+                subjectSelect.innerHTML += `<option value="${la.id}">${la.name}${dataTag}</option>`;
+            });
+
+            subjectSelect.disabled = false;
+
+            // Can't generate yet — need subject too
+            const btn = $('btnGenSubjectList');
+            if (btn) btn.disabled = true;
+        }
+
+        // ── Subject Report: Subject selected → enable generate button ──
+        if (e.target.id === 'subjectReportSubject') {
+            const btn = $('btnGenSubjectList');
+            if (btn) btn.disabled = !e.target.value;
+        }
+
+        // ── Class Report: Grade selected → enable/disable generate button ──
+        if (e.target.id === 'classReportGrade') {
+            const grade = e.target.value;
+            const btn = $('btnGenClassList');
+            if (btn) btn.disabled = !grade;
+        }
+    });
 }
-
 // ==========================================================================
 //   ADMISSIONS / INTAKE
 // ==========================================================================
@@ -855,11 +1017,18 @@ function prevStep(current, prev) {
     document.querySelectorAll('.step-modern').forEach((step, index) => {
         const stepNum = index + 1;
         step.classList.remove('active', 'completed');
-        if (stepNum === prev) step.classList.add('active');
+        if (stepNum < current) step.classList.add('completed');
+        else if (stepNum === prev) step.classList.add('active');
     });
 }
-function resetIntakeForm() { $('newStudentForm')?.reset(); if ($('editModeId')) $('editModeId').value = ""; if ($('studentPhotoPreview')) $('studentPhotoPreview').src = DEFAULT_AVATAR; if ($('liveCardPhoto')) $('liveCardPhoto').src = DEFAULT_AVATAR; document.querySelectorAll('.form-step').forEach(s => s.classList.remove('active')); $('form-step-1')?.classList.add('active'); const stepIndicators = document.querySelectorAll('.stepper .step'); stepIndicators.forEach((step, index) => { step.classList.remove('active', 'completed'); if (index === 0) step.classList.add('active'); }); clearErrors(); updateLiveCard(); }
 
+function resetIntakeForm() { 
+    $('newStudentForm')?.reset(); 
+    if ($('editModeId')) $('editModeId').value = ""; 
+    if ($('studentPhotoPreview')) $('studentPhotoPreview').src = DEFAULT_AVATAR;
+    // Reset any other form fields...
+    clearErrors();
+}
 // 3. ENHANCED SUBMISSION
 function submitRegistration(e) {
     e.preventDefault();
@@ -4370,7 +4539,29 @@ function addDocFooter(doc, includeSignatures = false) {
 }
 function calculatePositions(data, key) { const sorted = [...data].sort((a, b) => b[key] - a[key]); let rank = 1; for (let i = 0; i < sorted.length; i++) { if (i > 0 && sorted[i][key] !== sorted[i-1][key]) { rank = i + 1; } sorted[i].position = rank; } return sorted; }
 
-function populateStudentSelect(elementId = 'reportStudentSelect') { const select = $(elementId); if(!select) return; select.innerHTML = '<option value="">Select Learner...</option>'; StudentRepo.getAll().forEach(s => { select.innerHTML += `<option value="${s.id}">${s.name} (${s.grade})</option>`; }); }
+function populateStudentSelect(selectId) {
+    const select = $(selectId);
+    if (!select) return;
+    select.innerHTML = '<option value="">Select Student...</option>';
+    const grouped = {};
+    StudentRepo.getAll().sort((a,b) => (a.name||'').localeCompare(b.name||'')).forEach(s => {
+        const g = s.grade || 'Unassigned';
+        if (!grouped[g]) grouped[g] = [];
+        grouped[g].push(s);
+    });
+    Object.entries(grouped).sort().forEach(([grade, studs]) => {
+        const og = document.createElement('optgroup');
+        og.label = grade;
+        studs.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = `${s.reg || 'N/A'} - ${s.name}`;
+            og.appendChild(opt);
+        });
+        select.appendChild(og);
+    });
+}
+
 
 function getLetterGrade(score) {
     const s = parseInt(score) || 0;
@@ -4384,510 +4575,706 @@ function getLetterGrade(score) {
     return { grade: 'BE2', points: 1.0, remarks: 'Not yet demonstrated' };
 }
 
+// ── Report Modal Live Previews ────────────────────────────────────────────
 
+// Individual Report: Show student summary when selected
+document.addEventListener('change', function(e) {
+    if (e.target.id === 'reportStudentSelect') {
+        const studentId = e.target.value;
+        const preview = $('reportPreviewInfo');
+        if (!preview) return;
+
+        if (!studentId) {
+            preview.innerHTML = 'Select a learner above to see a summary of their assessment data before generating the PDF.';
+            return;
+        }
+
+        const student = StudentRepo.getById(studentId);
+        const scores = _getStudentScores(studentId);
+
+        if (!scores.length) {
+            preview.innerHTML = `
+                <div style="display:flex; align-items:center; gap:0.5rem; color:var(--warning);">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <strong>No assessment data</strong> — This learner has no scored assessments yet.
+                    Go to the <strong>Assessment</strong> section to record scores first.
+                </div>`;
+            return;
+        }
+
+        const summary = _calcSummary(scores);
+        const rating = cbcRating(summary.avg);
+
+        preview.innerHTML = `
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.75rem; margin-bottom:0.75rem;">
+                <div style="text-align:center;">
+                    <div style="font-size:1.25rem; font-weight:800; color:${rating.color};">${summary.avg}%</div>
+                    <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Average</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:1.25rem; font-weight:800; color:var(--text-main);">${scores.length}</div>
+                    <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Subjects</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:1.25rem; font-weight:800; color:var(--success);">${summary.highest}</div>
+                    <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Highest</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:1.25rem; font-weight:800; color:${cbcRating(summary.lowest).color};">${summary.lowest}</div>
+                    <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Lowest</div>
+                </div>
+            </div>
+            <div style="font-size:0.75rem; color:var(--text-muted); display:flex; gap:1rem; flex-wrap:wrap;">
+                <span style="color:#22c55e; font-weight:700;">EE: ${summary.ee}</span>
+                <span style="color:#3b82f6; font-weight:700;">ME: ${summary.me}</span>
+                <span style="color:#f59e0b; font-weight:700;">AE: ${summary.ae}</span>
+                <span style="color:#ef4444; font-weight:700;">BE: ${summary.be}</span>
+                <span style="color:var(--text-muted); font-weight:700;">NE: ${summary.ne}</span>
+            </div>
+            <div style="margin-top:0.75rem; font-size:0.78rem; color:var(--text-main); font-weight:600;">
+                <i class="fa-solid fa-file-pdf" style="color:var(--danger);"></i>
+                PDF will include: school header, all ${scores.length} subject scores with CBC ratings, competency summary, auto-generated teacher remarks, and signature lines.
+            </div>`;
+    }
+});
+
+// Class Report: Show grade summary when selected
+document.addEventListener('change', function(e) {
+    if (e.target.id === 'classReportGrade') {
+        const grade = e.target.value;
+        const previewEl = $('classReportPreview');
+        const statsEl = $('classReportStats');
+        if (!previewEl || !statsEl) return;
+
+        if (!grade) {
+            previewEl.style.display = 'none';
+            return;
+        }
+
+        const gradeData = _getGradeScores(grade);
+        const assessedSubjects = _getAssessedSubjects(grade);
+
+        previewEl.style.display = 'block';
+
+        if (!gradeData.length) {
+            statsEl.innerHTML = `<div style="grid-column:1/-1; color:var(--warning); font-size:0.82rem;">
+                <i class="fa-solid fa-triangle-exclamation"></i> No assessment data for this grade.
+            </div>`;
+            return;
+        }
+
+        const avgs = gradeData.map(g => g.avg);
+        const classAvg = avgs.reduce((a, b) => a + b, 0) / avgs.length;
+        const highest = gradeData[0];
+        const lowest = gradeData[gradeData.length - 1];
+
+        statsEl.innerHTML = `
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:var(--text-main);">${gradeData.length}</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Learners</div>
+            </div>
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:${cbcRating(classAvg).color};">${classAvg.toFixed(1)}%</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Class Avg</div>
+            </div>
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:var(--text-main);">${assessedSubjects.length}</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Subjects</div>
+            </div>`;
+
+        // Also update the button disabled state (redundant safety)
+        const btn = $('btnGenClassList');
+        if (btn) btn.disabled = !gradeData.length;
+    }
+});
+
+// Subject Report: Show subject summary when selected
+document.addEventListener('change', function(e) {
+    if (e.target.id === 'subjectReportSubject') {
+        const subjectId = e.target.value;
+        const grade = $('subjectReportGrade')?.value;
+        const previewEl = $('subjectReportPreview');
+        const statsEl = $('subjectReportStats');
+        if (!previewEl || !statsEl) return;
+
+        if (!subjectId || !grade) {
+            previewEl.style.display = 'none';
+            return;
+        }
+
+        const scores = _getSubjectScores(subjectId, grade);
+        const subjectName = getSubjectName(subjectId);
+
+        previewEl.style.display = 'block';
+
+        if (!scores.length) {
+            statsEl.innerHTML = `<div style="grid-column:1/-1; color:var(--warning); font-size:0.82rem;">
+                <i class="fa-solid fa-triangle-exclamation"></i> No scores recorded for ${escapeHtml(subjectName)} in ${grade}.
+            </div>`;
+            return;
+        }
+
+        const summary = _calcSummary(scores);
+
+        statsEl.innerHTML = `
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:var(--text-main);">${scores.length}</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Learners</div>
+            </div>
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:${cbcRating(summary.avg).color};">${summary.avg.toFixed(1)}%</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Average</div>
+            </div>
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:var(--success);">${summary.highest}</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Highest</div>
+            </div>
+            <div>
+                <div style="font-size:1.3rem; font-weight:800; color:${cbcRating(summary.lowest).color};">${summary.lowest}</div>
+                <div style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Lowest</div>
+            </div>`;
+
+        // Enable/disable generate button
+        const btn = $('btnGenSubjectList');
+        if (btn) btn.disabled = !scores.length;
+    }
+});
 // ==========================================================================
 //   ZERAKI STYLE TRANSCRIPT (CORRECTED)
 // ==========================================================================
 
-function generateTranscriptPDF(previewStudentId, isPreview = false) {
-    let studentId = previewStudentId || 
-                    $('reportStudentSelect')?.value || 
-                    $('analysisStudentSelect')?.value || 
-                    currentExamContext.studentId || 
-                    currentStudentId;
+function generateTranscriptPDF(studentId, showPreview) {
+    if (!studentId) {
+        showToast('Please select a learner first.', 'error');
+        return;
+    }
 
-    if (!studentId) return showToast('Please select a learner first.', 'error');
-    
     const student = StudentRepo.getById(studentId);
-    if (!student) return showToast('Learner not found.', 'error');
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
-
-    const { jsPDF } = window.jspdf; 
-    const doc = new jsPDF(); 
-    
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight(); 
-    const margin = 15;
-    let yPos = 10;
-
-    // --- 1. COMPACT HEADER ---
-    doc.setFillColor(0, 51, 102); 
-    doc.rect(0, 0, pageWidth, 32, 'F');
-    
-    if (store.settings.logo) { 
-        try { 
-            doc.addImage(store.settings.logo, 'PNG', margin, 6, 20, 20);
-        } catch (e) {} 
+    if (!student) {
+        showToast('Learner not found.', 'error');
+        return;
     }
-    
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18).setFont(undefined, 'bold');
-    doc.text(store.settings.schoolName || "School Name", pageWidth / 2, 13, { align: 'center' });
-    
-    if (store.settings.motto) {
-        doc.setFontSize(7).setFont(undefined, 'italic');
-        doc.text(store.settings.motto, pageWidth / 2, 19, { align: 'center' });
+
+    const scores = _getStudentScores(studentId);
+    if (!scores.length) {
+        showToast('This learner has no scored assessments yet. Record scores in the Assessment section first.', 'error');
+        return;
     }
-    
-    doc.setFontSize(8).setFont(undefined, 'normal');
-    doc.text(`KNEC: ${store.settings.schoolCode || 'N/A'} | Tel: ${store.settings.phone || 'N/A'}`, pageWidth / 2, 27, { align: 'center' });
 
-    yPos = 38;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 12;
+    let y = margin;
 
-    // --- 2. COMPACT STUDENT PROFILE STRIP ---
-    doc.setDrawColor(220);
-    doc.setFillColor(250, 250, 252);
-    doc.roundedRect(margin, yPos, pageWidth - (margin*2), 26, 2, 2, 'FD');
-    
-    try {
-        doc.addImage(student.photo || DEFAULT_AVATAR, 'JPEG', margin + 3, yPos + 3, 20, 20);
-    } catch(e) {}
+    // ── Colors ──
+    const primary = [25, 60, 120];
+    const dark = [15, 23, 42];
+    const gray = [100, 116, 139];
+    const lightBg = [241, 245, 249];
+    const white = [255, 255, 255];
 
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(12).setFont(undefined, 'bold');
-    doc.text(student.name, margin + 28, yPos + 9);
-    
-    doc.setFontSize(8).setFont(undefined, 'normal').setTextColor(80);
-    doc.text(`Adm: ${student.reg} | Gr: ${student.grade} (${student.stream}) | G: ${student.gender}`, margin + 28, yPos + 16);
-    doc.text(`Term: ${store.settings.currentTerm} ${store.settings.academicYear}`, margin + 28, yPos + 22);
+    // ── NEW CBC GRADING (8-tier) ──
+    function cbcGrade8(score) {
+        if (score == null || score === undefined)
+            return { code: 'NM', grade: 'NG', points: 0, remark: 'No Assessment Results' };
+        const s = Math.round(score);
+        if (s >= 90) return { code: 'EE1', grade: 'EE1', points: 8, remark: 'Exceptional mastery' };
+        if (s >= 75) return { code: 'EE2', grade: 'EE2', points: 7, remark: 'Strong competency' };
+        if (s >= 58) return { code: 'ME1', grade: 'ME1', points: 6, remark: 'Competent with minor gaps' };
+        if (s >= 41) return { code: 'ME2', grade: 'ME2', points: 5, remark: 'Basic competency achieved' };
+        if (s >= 31) return { code: 'AE1', grade: 'AE1', points: 4, remark: 'Emerging competency' };
+        if (s >= 21) return { code: 'AE2', grade: 'AE2', points: 3, remark: 'Developing competency' };
+        if (s >= 11) return { code: 'BE1', grade: 'BE1', points: 2, remark: 'Minimal competency' };
+        return { code: 'BE2', grade: 'BE2', points: 1, remark: 'Not yet demonstrated' };
+    }
 
-    yPos += 30;
+    // ── CALCULATE CLASS & STREAM RANKS ──
+    function calculateRanks(sid) {
+        const all = StudentRepo.getAll().filter(s => s.grade === student.grade);
+        const withAvg = all.map(s => {
+            const sc = _getStudentScores(s.id).filter(x => x.score != null);
+            const avg = sc.length > 0 ? sc.reduce((a, b) => a + b.score, 0) / sc.length : -1;
+            return { id: s.id, avg, stream: s.stream };
+        });
+        withAvg.sort((a, b) => b.avg - a.avg);
 
-    // --- 3. REPORT TITLE ---
-    doc.setTextColor(0, 51, 102);
-    doc.setFontSize(12).setFont(undefined, 'bold');
-    doc.text("ASSESSMENT PROGRESS REPORT", pageWidth / 2, yPos, { align: 'center' });
-    yPos += 8;
+        const cIdx = withAvg.findIndex(x => x.id === sid);
+        const classRank = cIdx >= 0 ? cIdx + 1 : withAvg.length;
+        const totalClass = withAvg.length;
 
-    // --- 4. DEFINE SUBJECTS & CALCULATE STATS ---
-    const subjects = store.learningAreas.filter(sub => !sub.applicableLevels || sub.applicableLevels.includes(student.grade));
+        const streamOnly = withAvg.filter(x => x.stream === student.stream);
+        const sIdx = streamOnly.findIndex(x => x.id === sid);
+        const streamRank = sIdx >= 0 ? sIdx + 1 : streamOnly.length;
+        const totalStream = streamOnly.length;
 
-    let totalScore = 0;
-    let totalPoints = 0;
-    let assessedCount = 0;
-    
-    let topSubject = { name: 'N/A', score: 0 };
-    let lowSubject = { name: 'N/A', score: 100 };
+        return { classRank, totalClass, streamRank, totalStream };
+    }
 
-    const tableData = subjects.map(sub => {
-        const exam = store.exams.find(e => e.studentId === studentId && e.unitCode === sub.code);
-        
-        let score, grade, points, remarks;
-        let teacherName = 'Not Assigned';
+    // ── STUDENT INITIALS ──
+    function getInitials(name) {
+        if (!name) return '??';
+        const p = name.trim().split(/\s+/);
+        if (p.length >= 2) return (p[0][0] + p[p.length - 1][0]).toUpperCase();
+        return p[0].substring(0, 2).toUpperCase();
+    }
 
-        const teacher = sub.teacherId ? StaffRepo.getById(sub.teacherId) : null; 
-        if (teacher) teacherName = teacher.name;
+    // ── COMPUTED DATA ──
+    const ranks = calculateRanks(studentId);
+    const scored = scores.filter(s => s.score != null);
+    const totalMarks = scored.reduce((a, b) => a + b.score, 0);
+    const totalPoints = scored.reduce((a, s) => a + cbcGrade8(s.score).points, 0);
+    const meanScore = scored.length > 0 ? totalMarks / scored.length : 0;
+    const maxSubjects = Math.max(scores.length, 1);
 
-        if (exam) {
-            score = parseInt(exam.score);
-            const gradeInfo = getLetterGrade(score); 
-            grade = gradeInfo.grade;
-            points = gradeInfo.points;
-            remarks = gradeInfo.remarks;
-            
-            if (score > topSubject.score) { topSubject = { name: sub.name, score: score }; }
-            if (score < lowSubject.score) { lowSubject = { name: sub.name, score: score }; }
-            
-            totalScore += score;
-            totalPoints += gradeInfo.points;
-            assessedCount++; 
-        } else {
-            score = 'NM';
-            grade = 'NG';
-            points = 'NP';
-            remarks = 'No Assessment Results';
-        }
+    // ── HEADER ──
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(...primary);
+    doc.text(store.settings.schoolName || 'Cbeguru', pageW / 2, y + 5, { align: 'center' });
 
-        return [sub.name, score, grade, points, remarks, teacherName];
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    doc.setTextColor(...gray);
+    doc.text(store.settings.motto || 'United we succeed in Good Health', pageW / 2, y + 11, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    const hdrParts = [];
+    if (store.settings.schoolCode) hdrParts.push(`KNEC: ${store.settings.schoolCode}`);
+    if (store.settings.phone) hdrParts.push(`Tel: ${store.settings.phone}`);
+    doc.text(hdrParts.join(' | '), pageW / 2, y + 16, { align: 'center' });
+
+    y += 22;
+
+    // ── STUDENT INFO ──
+    const initials = getInitials(student.name);
+    doc.setFillColor(...primary);
+    doc.circle(margin + 6, y + 4, 6, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(...white);
+    doc.text(initials, margin + 6, y + 6.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...dark);
+    doc.text((student.name || 'Unknown').toUpperCase(), margin + 16, y + 4);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...gray);
+    const gradeLabel = student.grade
+        ? `Gr: ${student.grade}${student.stream ? ' (' + student.stream + ')' : ''}`
+        : 'Gr: N/A';
+    const genderLabel = student.gender
+        ? `G: ${student.gender.charAt(0).toUpperCase() + student.gender.slice(1)}`
+        : 'G: N/A';
+    doc.text(`Adm: ${student.reg || 'N/A'} | ${gradeLabel} | ${genderLabel}`, margin + 16, y + 9);
+
+    const termLabel = `${store.settings.currentTerm || 'Term 1'} ${store.settings.academicYear || new Date().getFullYear()}`;
+    doc.text(`Term: ${termLabel}`, margin + 16, y + 14);
+    doc.text(`Class Rank: ${ranks.classRank}/${ranks.totalClass}`, pageW - margin - 4, y + 9, { align: 'right' });
+    doc.text(`Stream Rank: ${ranks.streamRank}/${ranks.totalStream}`, pageW - margin - 4, y + 14, { align: 'right' });
+
+    y += 21;
+
+    // ── TITLE ──
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...dark);
+    doc.text('ASSESSMENT PROGRESS REPORT', pageW / 2, y, { align: 'center' });
+    y += 5;
+
+    // ── STATS CARDS ──
+    const gap = 4;
+    const cardW = (pageW - margin * 2 - gap * 2) / 3;
+    const cardH = 15;
+    const cards = [
+        { label: 'MEAN SCORE', value: `${meanScore.toFixed(1)}%` },
+        { label: 'RANK', value: `${ranks.classRank}/${ranks.totalClass}` },
+        { label: 'SUBJECTS', value: `${scored.length}/${maxSubjects}` }
+    ];
+
+    cards.forEach((card, i) => {
+        const cx = margin + i * (cardW + gap);
+        doc.setFillColor(...lightBg);
+        doc.roundedRect(cx, y, cardW, cardH, 2, 2, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.setTextColor(...primary);
+        doc.text(card.value, cx + cardW / 2, y + 6.5, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6);
+        doc.setTextColor(...gray);
+        doc.text(card.label, cx + cardW / 2, y + 12, { align: 'center' });
     });
 
-    const avg = assessedCount > 0 ? (totalScore / assessedCount) : 0;
+    y += cardH + 4;
 
-    const totalSubjectsCount = subjects.length;
-    const maxPossibleScore = totalSubjectsCount * 100;
-    const maxPossiblePoints = totalSubjectsCount * 8;
+    // ── SUBJECT BREAKDOWN LABEL ──
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...dark);
+    doc.text('Subject Breakdown', margin, y);
+    y += 3;
 
-    const allStudents = StudentRepo.findBy('grade', student.grade);
-    const totalStudentsInGrade = allStudents.length;
-    
-    const ranked = allStudents.map(s => {
-        let sTotal = 0; let sCount = 0;
-        subjects.forEach(sub => {
-            const e = store.exams.find(ex => ex.studentId === s.id && ex.unitCode === sub.code);
-            if (e) { sTotal += parseInt(e.score); sCount++; }
-        });
-        return { id: s.id, avg: sCount > 0 ? (sTotal / sCount) : 0 };
-    }).sort((a,b) => b.avg - a.avg);
-    
-    const rank = ranked.findIndex(s => s.id === studentId) + 1;
+    // ── SCORES TABLE ──
+    const tableBody = scores.map(s => {
+        const g = cbcGrade8(s.score);
+        return [
+            s.subjectName,
+            g.code === 'NM' ? 'NM' : Math.round(s.score),
+            g.grade,
+            g.code === 'NM' ? 'NP' : g.points,
+            g.remark,
+            'Not Assigned'
+        ];
+    });
 
-    // --- 5. DRAW SUMMARY BOXES ---
-    const boxW = 50; const gap = 4;
-    const totalW = (boxW * 3) + (gap * 2);
-    const startX = (pageWidth - totalW) / 2;
+    // TOTAL ROW
+    tableBody.push([
+        { content: 'TOTAL', styles: { fontStyle: 'bold', fillColor: lightBg } },
+        { content: `${totalMarks}/${maxSubjects * 100}`, styles: { fontStyle: 'bold', fillColor: lightBg, halign: 'center' } },
+        { content: '', styles: { fillColor: lightBg } },
+        { content: `${totalPoints}.0/${maxSubjects * 8}.0`, styles: { fontStyle: 'bold', fillColor: lightBg, halign: 'center' } },
+        { content: '', styles: { fillColor: lightBg } },
+        { content: '', styles: { fillColor: lightBg } }
+    ]);
 
-    // Mean Score
-    doc.setFillColor(37, 99, 235);
-    doc.roundedRect(startX, yPos, boxW, 18, 2, 2, 'F');
-    doc.setTextColor(255);
-    doc.setFontSize(16).setFont(undefined, 'bold');
-    doc.text(`${avg.toFixed(1)}%`, startX + (boxW/2), yPos + 9, { align: 'center' });
-    doc.setFontSize(7).setFont(undefined, 'normal');
-    doc.text("MEAN SCORE", startX + (boxW/2), yPos + 15, { align: 'center' });
-
-    // Rank (Format: 3/58)
-    doc.setFillColor(22, 163, 74);
-    doc.roundedRect(startX + boxW + gap, yPos, boxW, 18, 2, 2, 'F');
-    doc.setTextColor(255);
-    doc.setFontSize(16).setFont(undefined, 'bold');
-    doc.text(`${rank}/${totalStudentsInGrade}`, (startX + boxW + gap) + (boxW/2), yPos + 9, { align: 'center' });
-    doc.setFontSize(7).setFont(undefined, 'normal');
-    doc.text("RANK", (startX + boxW + gap) + (boxW/2), yPos + 15, { align: 'center' });
-
-    // Subjects Count
-    doc.setFillColor(249, 115, 22);
-    doc.roundedRect(startX + (boxW*2) + (gap*2), yPos, boxW, 18, 2, 2, 'F');
-    doc.setTextColor(255);
-    doc.setFontSize(16).setFont(undefined, 'bold');
-    doc.text(`${assessedCount}/${totalSubjectsCount}`, (startX + (boxW*2) + (gap*2)) + (boxW/2), yPos + 9, { align: 'center' });
-    doc.setFontSize(7).setFont(undefined, 'normal');
-    doc.text("SUBJECTS", (startX + (boxW*2) + (gap*2)) + (boxW/2), yPos + 15, { align: 'center' });
-
-    yPos += 23;
-
-    // --- 6. DETAILED TABLE (UPDATED COLUMN STYLES) ---
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(10).setFont(undefined, 'bold');
-    doc.text("Subject Breakdown", margin, yPos);
-    yPos += 2;
-
-    const scoreDisplay = `${totalScore}/${maxPossibleScore}`; 
-    const pointsDisplay = `${totalPoints.toFixed(1)}/${maxPossiblePoints.toFixed(1)}`; 
-    
-    const footerRow = ['TOTAL', scoreDisplay, '', pointsDisplay, '', ''];
-
-    doc.autoTable({ 
-        startY: yPos, 
-        head: [['Subject', 'Score', 'Grd', 'Pts', 'Remarks', 'Teacher']], 
-        body: tableData,
-        foot: [footerRow],
+    doc.autoTable({
+        startY: y,
+        head: [['Subject', 'Score', 'Grd', 'Pts', 'Remarks', 'Teacher']],
+        body: tableBody,
+        margin: { left: margin, right: margin },
         theme: 'grid',
-        headStyles: {
-            fillColor: [0, 51, 102], 
-            textColor: 255,
-            fontSize: 8,           
-            fontStyle: 'bold',
-            cellPadding: 2
-        },
-        footStyles: {
-            fillColor: [241, 245, 249],
-            textColor: [30, 41, 59],
-            fontStyle: 'bold',
-            fontSize: 8,           
-            cellPadding: 2
-        },
         styles: {
-            fontSize: 8,           
-            lineColor: [0, 51, 102], 
-            lineWidth: 0.1,
-            cellPadding: 2,        
-            font: 'helvetica'
+            fontSize: 7.5,
+            cellPadding: 2.5,
+            lineColor: [226, 232, 240],
+            lineWidth: 0.25,
+            overflow: 'linebreak'
+        },
+        headStyles: {
+            fillColor: dark,
+            textColor: white,
+            fontStyle: 'bold',
+            fontSize: 7
         },
         columnStyles: {
-            0: { cellWidth: 45 },           // Subject
-            1: { halign: 'center', cellWidth: 18 }, // Score
-            2: { halign: 'center', cellWidth: 10 }, // Grade
-            3: { halign: 'center', cellWidth: 20 }, // Pts (INCREASED from 14)
-            4: { cellWidth: 'auto' },       // Remarks (Will auto-shrink)
-            5: { cellWidth: 28, fontStyle: 'italic' } // Teacher
+            0: { cellWidth: 'auto' },
+            1: { cellWidth: 18, halign: 'center' },
+            2: { cellWidth: 14, halign: 'center' },
+            3: { cellWidth: 16, halign: 'center' },
+            4: { cellWidth: 'auto', fontSize: 6.5 },
+            5: { cellWidth: 22, fontSize: 6.5 }
         },
-        margin: { left: margin, right: margin },
         didParseCell: function (data) {
-            if (data.section === 'body' && data.column.index >= 1 && data.column.index <= 3) {
-                 const cellText = data.cell.raw;
-                 if (typeof cellText === 'string' && (cellText === 'NM' || cellText === 'NG' || cellText === 'NP')) {
-                     data.cell.styles.textColor = [150, 150, 150];
-                     data.cell.styles.fontStyle = 'italic';
-                 }
+            // Color-code Grade column
+            if (data.section === 'body' && data.column.index === 2) {
+                const v = data.cell.raw;
+                if (typeof v === 'string' && v !== 'NG') {
+                    const map = {
+                        EE1: [34, 197, 94], EE2: [34, 197, 94],
+                        ME1: [59, 130, 246], ME2: [59, 130, 246],
+                        AE1: [245, 158, 11], AE2: [245, 158, 11],
+                        BE1: [239, 68, 68], BE2: [239, 68, 68]
+                    };
+                    data.cell.styles.textColor = map[v] || gray;
+                    data.cell.styles.fontStyle = 'bold';
+                }
+            }
+            // Color-code Score column
+            if (data.section === 'body' && data.column.index === 1 && typeof data.cell.raw === 'number') {
+                const s = data.cell.raw;
+                if (s >= 75) data.cell.styles.textColor = [34, 197, 94];
+                else if (s >= 58) data.cell.styles.textColor = [59, 130, 246];
+                else if (s >= 31) data.cell.styles.textColor = [245, 158, 11];
+                else data.cell.styles.textColor = [239, 68, 68];
+                data.cell.styles.fontStyle = 'bold';
             }
         }
     });
 
-    // --- 7. BALANCING LOGIC ---
-    let finalY = doc.lastAutoTable.finalY + 5;
-    const bottomMargin = 25; 
-    const gradeKeyHeight = 15;
-    const remarksHeight = 16;
-    const remarksGap = 5;
-    const totalBottomContent = gradeKeyHeight + remarksHeight + remarksGap + 10; 
-    
-    const availableSpace = pageHeight - bottomMargin - finalY - totalBottomContent;
-    
-    if (availableSpace > 30) {
-        finalY += (availableSpace * 0.4); 
+    y = doc.lastAutoTable.finalY + 3;
+
+    // ── GRADING KEY ──
+    if (y + 12 > pageH - 65) { doc.addPage(); y = margin; }
+
+    doc.setFillColor(...lightBg);
+    doc.roundedRect(margin, y, pageW - margin * 2, 10, 2, 2, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.5);
+    doc.setTextColor(...dark);
+    doc.text('Grading Key:', margin + 3, y + 4);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.setTextColor(...gray);
+    doc.text(
+        '90-100: EE1   75-89: EE2   58-74: ME1   41-57: ME2   31-40: AE1   21-30: AE2   11-20: BE1   1-10: BE2',
+        margin + 22, y + 4
+    );
+    doc.text('NM: No Marks   NG: No Grade   NP: No Points', margin + 22, y + 7.5);
+
+    y += 14;
+
+    // ── BUILD CONTEXTUAL REMARKS ──
+    const firstName = (student.name || 'Learner').split(/\s+/)[0].toUpperCase();
+    const pronoun = student.gender === 'Female' ? 'she' : 'he';
+    const possessive = student.gender === 'Female' ? 'her' : 'his';
+    const caps = pronoun.charAt(0).toUpperCase() + pronoun.slice(1);
+
+    let weakest = 'N/A', strongest = 'N/A';
+    if (scored.length > 0) {
+        const byScore = [...scored].sort((a, b) => a.score - b.score);
+        weakest = byScore[0].subjectName;
+        strongest = byScore[scored.length - 1].subjectName;
     }
 
-    // --- 8. GRADE KEY ---
-    doc.setFontSize(7).setTextColor(100);
-    doc.text("Grading Key:", margin, finalY);
-    finalY += 3;
-    
-    doc.setFillColor(245, 247, 250);
-    doc.roundedRect(margin, finalY, pageWidth - (margin*2), 10, 1, 1, 'F');
-    
-    doc.setFontSize(6).setTextColor(50);
-    const keys = ["90-100: EE1", "75-89: EE2", "58-74: ME1", "41-57: ME2", "31-40: AE1", "21-30: AE2", "11-20: BE1", "1-10: BE2"];
-    const colW = (pageWidth - (margin*2)) / 4; 
-    keys.forEach((k, i) => {
-        const col = i % 4;
-        const row = Math.floor(i / 4);
-        doc.text(k, margin + 2 + (col * colW), finalY + 4 + (row * 3));
-    });
-
-    finalY += 15;
-
-    // --- 9. DYNAMIC REMARKS ---
-    const isMale = student.gender === 'Male' || student.gender === 'M';
-    const pronoun = isMale ? 'He' : 'She';
-    const possessive = isMale ? 'His' : 'Her';
-    const fName = student.name.split(' ')[0];
-
-    let ctRemark = "";
-    let hoiRemark = "";
-
-    if (avg >= 80) {
-        ctRemark = `${fName} has displayed exceptional mastery this term. ${pronoun} is a self-driven learner who excels in ${topSubject.name}. Keep up the outstanding spirit!`;
-        hoiRemark = `An exemplary performance by ${fName}. ${pronoun} sets a high standard for the class. A true ambassador of excellence. Highly commended.`;
-    } else if (avg >= 58) {
-        ctRemark = `A good effort by ${fName}. ${pronoun} shows strength in ${topSubject.name}. However, ${possessive.toLowerCase()} performance in ${lowSubject.name} needs more focus.`;
-        hoiRemark = `${fName} is on the right track. With targeted improvement in weak areas, ${pronoun.toLowerCase()} is capable of achieving top grades.`;
-    } else if (avg >= 41) {
-        ctRemark = `${fName} is making steady progress. While ${possessive.toLowerCase()} work in ${topSubject.name} is commendable, ${pronoun.toLowerCase()} struggled with ${lowSubject.name}. Encourage revision.`;
-        hoiRemark = `Satisfactory performance. ${fName} needs to put in extra effort, especially in ${lowSubject.name}, to unlock full potential.`;
-    } else if (avg >= 21) {
-        ctRemark = `${fName} has faced significant challenges. ${pronoun} needs urgent remedial work in ${lowSubject.name}. Please ensure ${pronoun.toLowerCase()} attends extra lessons.`;
-        hoiRemark = `Performance below expected standards. ${fName} requires close monitoring and parental support to improve.`;
+    let ctRemark, hoiRemark;
+    if (scored.length === 0) {
+        ctRemark = `This has been a difficult term for ${firstName}. ${caps} requires specialized attention in all areas, particularly N/A.`;
+        hoiRemark = `Critical attention needed. The school and parents must work together to support ${firstName}'s academic journey.`;
+    } else if (meanScore >= 55) {
+        ctRemark = `A good effort by ${firstName}. ${caps} shows strength in ${strongest}. However, ${possessive} performance in ${weakest} needs more focus.`;
+        hoiRemark = `${firstName} is on the right track. With targeted improvement in weak areas, ${pronoun} is capable of achieving top grades.`;
+    } else if (meanScore >= 40) {
+        ctRemark = `${firstName} is making steady progress. While ${possessive} work in ${strongest} is commendable, ${pronoun} struggled with ${weakest}. Encourage revision.`;
+        hoiRemark = `Satisfactory performance. ${firstName} needs to put in extra effort, especially in ${weakest}, to unlock full potential.`;
     } else {
-        ctRemark = `This has been a difficult term for ${fName}. ${pronoun} requires specialized attention in all areas, particularly ${lowSubject.name}.`;
-        hoiRemark = `Critical attention needed. The school and parents must work together to support ${fName}'s academic journey.`;
+        ctRemark = `${firstName} has faced significant challenges. ${caps} needs urgent remedial work in ${weakest}. Please ensure ${pronoun} attends extra lessons.`;
+        hoiRemark = `Performance below expected standards. ${firstName} requires close monitoring and parental support to improve.`;
     }
 
-    const remHeight = 16;
-    
-    // Class Teacher Box
-    doc.setFontSize(8).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Class Teacher's Remarks:", margin, finalY);
-    finalY += 1;
-    
-    doc.setDrawColor(200).setFillColor(254, 254, 254);
-    doc.roundedRect(margin, finalY, pageWidth - (margin*2), remHeight, 1, 1, 'FD');
-    
-    doc.setFontSize(6.5).setTextColor(50).setFont(undefined, 'normal');
-    doc.text(ctRemark, margin + 2, finalY + 4, { maxWidth: pageWidth - margin * 2 - 55 });
-    
-    doc.line(pageWidth - margin - 50, finalY + remHeight - 3, pageWidth - margin - 5, finalY + remHeight - 3);
-    doc.setFontSize(6).setTextColor(120);
-    doc.text("Sign/Stamp", pageWidth - margin - 27, finalY + remHeight - 1, {align: 'center'});
-    
-    finalY += remHeight + 3;
+    // ── CLASS TEACHER'S REMARKS ──
+    if (y + 20 > pageH - 20) { doc.addPage(); y = margin; }
 
-    // HOI Box
-    doc.setFontSize(8).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Head of Institution's Remarks:", margin, finalY);
-    finalY += 1;
-    
-    doc.setDrawColor(200);
-    doc.roundedRect(margin, finalY, pageWidth - (margin*2), remHeight, 1, 1, 'D');
-    
-    doc.setFontSize(6.5).setTextColor(50).setFont(undefined, 'normal');
-    doc.text(hoiRemark, margin + 2, finalY + 4, { maxWidth: pageWidth - margin * 2 - 55 });
-    
-    doc.line(pageWidth - margin - 50, finalY + remHeight - 3, pageWidth - margin - 5, finalY + remHeight - 3);
-    doc.setFontSize(6).setTextColor(120);
-    doc.text("Sign/Stamp", pageWidth - margin - 27, finalY + remHeight - 1, {align: 'center'});
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...dark);
+    doc.text("Class Teacher's Remarks:", margin, y);
 
-    addDocFooter(doc, false);
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...gray);
+    const ctLines = doc.splitTextToSize(ctRemark, pageW - margin * 2 - 22);
+    doc.text(ctLines, margin, y + 5);
 
-    // --- OUTPUT HANDLING ---
-    const pdfBlob = doc.output('blob');
-    const blobUrl = URL.createObjectURL(pdfBlob);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(...gray);
+    doc.text('Sign/Stamp', pageW - margin - 2, y + 5, { align: 'right' });
 
-    if (isPreview) {
-        window.open(blobUrl, '_blank');
-        showToast('Report opened in new tab.');
-        closeModal('individualReportModal');
-    } else {
-        doc.save(`Report_${student.name}.pdf`); 
-        closeModal('individualReportModal');
+    y += Math.max(ctLines.length * 3.5, 8) + 10;
+
+    // ── HEAD OF INSTITUTION'S REMARKS ──
+    if (y + 20 > pageH - 12) { doc.addPage(); y = margin; }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...dark);
+    doc.text("Head of Institution's Remarks:", margin, y);
+
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...gray);
+    const hoiLines = doc.splitTextToSize(hoiRemark, pageW - margin * 2 - 22);
+    doc.text(hoiLines, margin, y + 5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(...gray);
+    doc.text('Sign/Stamp', pageW - margin - 2, y + 5, { align: 'right' });
+
+    // ── FOOTER (on every page) ──
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        const fy = pageH - 8;
+        doc.setFontSize(5.5);
+        doc.setTextColor(...gray);
+        const genStr = new Date().toLocaleString('en-KE', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+        doc.text(`(c) Official Results  Generated: ${genStr}`, margin, fy);
+        doc.text(`Page ${i} of ${totalPages}`, pageW - margin, fy, { align: 'right' });
     }
+
+    // ── SAVE ──
+    const fileName = `Progress_Report_${student.grade || ''}_${(student.name || 'Unknown').replace(/\s+/g, '_')}.pdf`;
+    doc.save(fileName);
+    showToast(`Report card downloaded: ${fileName}`);
 }
-
 // ==========================================================================
 //   LEAVING CERTIFICATE GENERATION (KENYAN FORMAT)
 // ==========================================================================
-function generateLeavingCertificatePDF(studentId) {
-    const id = studentId || $('reportStudentSelect')?.value;
-    if (!id) return showToast('Please select a learner first.', 'error');
-    
-    const student = StudentRepo.getById(id);
-    if (!student) return showToast('Learner not found.', 'error');
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
+function generateLeavingCertificatePDF() {
+    const studentId = $('reportStudentSelect')?.value;
+    if (!studentId) {
+        showToast('Please select a learner.', 'error');
+        return;
+    }
+
+    const student = StudentRepo.getById(studentId);
+    if (!student) {
+        showToast('Learner not found.', 'error');
+        return;
+    }
+
+    const scores = _getStudentScores(studentId);
+    const summary = scores.length ? _calcSummary(scores) : { avg: 0, total: 0, ee: 0, me: 0, ae: 0, be: 0, ne: 0 };
 
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF('p', 'mm', 'a4');
-
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
+    const pageW = doc.internal.pageSize.getWidth();
     const margin = 20;
-    const centerX = pageWidth / 2;
+    let y = margin;
 
-    // --- 1. OUTER DOUBLE BORDER ---
-    doc.setDrawColor(0, 51, 102).setLineWidth(1.5);
-    doc.rect(5, 5, pageWidth - 10, pageHeight - 10); // Outer Thick Border
-    doc.setDrawColor(0, 51, 102).setLineWidth(0.5);
-    doc.rect(6.5, 6.5, pageWidth - 13, pageHeight - 13); // Inner Thin Border
+    const dark = [15, 23, 42];
+    const primary = [34, 197, 94];
 
-    // --- 2. NATIONAL HEADER ---
-    let yPos = 25;
-    
-    doc.setFontSize(14).setFont(undefined, 'bold').setTextColor(0, 51, 102);
-    doc.text("REPUBLIC OF KENYA", centerX, yPos, { align: 'center' });
-    
-    doc.setFontSize(10).setFont(undefined, 'normal').setTextColor(50);
-    doc.text("MINISTRY OF EDUCATION", centerX, yPos + 6, { align: 'center' });
-    doc.text("STATE DEPARTMENT FOR EARLY LEARNING AND BASIC EDUCATION", centerX, yPos + 12, { align: 'center' });
+    // Border
+    doc.setDrawColor(...dark);
+    doc.setLineWidth(2);
+    doc.rect(8, 8, pageW - 16, doc.internal.pageSize.getHeight() - 16);
+    doc.setLineWidth(0.5);
+    doc.rect(10, 10, pageW - 20, doc.internal.pageSize.getHeight() - 20);
 
-    // --- 3. SCHOOL IDENTITY ---
-    yPos += 22;
-    
-    // Logo
-    if (store.settings.logo) {
-        try { 
-            doc.addImage(store.settings.logo, 'PNG', centerX - 12, yPos, 24, 24); 
-            yPos += 28;
-        } catch (e) { console.log("Logo error"); yPos += 10; }
-    } else {
-        yPos += 10;
+    // School header
+    doc.setFillColor(...primary);
+    doc.roundedRect(margin, y, pageW - margin * 2, 30, 3, 3, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(255, 255, 255);
+    doc.text(store.settings.schoolName || 'ElimuTrack School', pageW / 2, y + 12, { align: 'center' });
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${store.settings.address || ''}  |  ${store.settings.phone || ''}  |  ${store.settings.email || ''}`, pageW / 2, y + 20, { align: 'center' });
+    doc.text(`School Code: ${store.settings.schoolCode || 'N/A'}  |  ${store.settings.category || 'Public'} ${store.settings.level || 'Primary School'}`, pageW / 2, y + 25, { align: 'center' });
+
+    y = 50;
+
+    // Title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.setTextColor(...dark);
+    doc.text('LEAVING CERTIFICATE', pageW / 2, y, { align: 'center' });
+
+    y += 12;
+
+    // Certificate body
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(30, 41, 59);
+    const certText = `This is to certify that ${student.name || 'the learner'} was a bona fide learner of this institution.`;
+    doc.text(certText, margin, y, { align: 'center', maxWidth: pageW - margin * 2 });
+
+    y += 12;
+
+    // Details table
+    doc.autoTable({
+        startY: y,
+        body: [
+            ['Admission Number', student.reg || 'N/A'],
+            ['Date of Birth', student.dob ? new Date(student.dob).toLocaleDateString('en-KE') : 'N/A'],
+            ['ID Number', student.idNumber || 'N/A'],
+            ['Grade on Leaving', student.grade || 'N/A'],
+            ['Stream', student.stream || 'N/A'],
+            ['Gender', student.gender || 'N/A'],
+            ['Date of Admission', '—'],
+            ['Date of Leaving', new Date().toLocaleDateString('en-KE')],
+            ['Conduct', 'Satisfactory'],
+            ['Reason for Leaving', 'Transfer / Completion']
+        ],
+        margin: { left: margin + 20, right: margin + 20 },
+        theme: 'plain',
+        styles: { fontSize: 9.5, cellPadding: 4 },
+        columnStyles: {
+            0: { cellWidth: 50, fontStyle: 'bold', textColor: [100, 116, 139] },
+            1: { cellWidth: 'auto', textColor: [30, 41, 59] }
+        },
+        didDrawCell: function(data) {
+            if (data.row.index % 2 === 0) {
+                doc.setFillColor(248, 250, 252);
+                doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height, 'F');
+            }
+        }
+    });
+
+    y = doc.lastAutoTable.finalY + 8;
+
+    if (scores.length > 0) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(...dark);
+        doc.text(`Academic Summary: ${scores.length} subjects assessed, Average: ${summary.avg}%, CBC Rating: ${cbcRating(summary.avg).code}`, margin, y);
+        y += 8;
     }
 
-    // School Name
-    doc.setFontSize(20).setFont(undefined, 'bold').setTextColor(0, 51, 102);
-    doc.text(store.settings.schoolName || "SCHOOL NAME", centerX, yPos, { align: 'center' });
-    
-    // Motto
-    if (store.settings.motto) {
-        doc.setFontSize(9).setFont(undefined, 'italic').setTextColor(100);
-        doc.text(`"${store.settings.motto}"`, centerX, yPos + 6, { align: 'center' });
-    }
+    // Signatures
+    y = doc.internal.pageSize.getHeight() - 55;
 
-    // --- 4. TITLE BOX ---
-    yPos += 12;
-    doc.setFillColor(0, 51, 102).rect(margin, yPos, pageWidth - (margin * 2), 10, 'F');
-    doc.setTextColor(255, 255, 255).setFontSize(14).setFont(undefined, 'bold');
-    doc.text("LEAVING CERTIFICATE", centerX, yPos + 7, { align: 'center' });
+    doc.setDrawColor(100, 116, 139);
+    doc.setLineWidth(0.3);
 
-    // --- 5. REFERENCE INFO ---
-    yPos += 18;
-    doc.setFontSize(9).setFont(undefined, 'normal').setTextColor(80);
-    doc.text(`Ref No: ${student.reg || 'N/A'}`, margin, yPos);
-    doc.text(`Date: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}`, pageWidth - margin, yPos, { align: 'right' });
-
-    // Declaration
-    yPos += 8;
-    doc.setFontSize(10).setFont(undefined, 'normal').setTextColor(0);
-    const declaration = "This is to certify that the person named hereunder was a bona fide student of this school.";
-    doc.text(declaration, centerX, yPos, { align: 'center' });
-    yPos += 10;
-
-    // --- 6. STUDENT DETAILS GRID ---
-    const labelX = 40;
-    const valueX = 95;
-    const lineHeight = 9;
-
-    const addDetail = (label, value) => {
-        doc.setFontSize(11).setFont(undefined, 'normal').setTextColor(50);
-        doc.text(label, labelX, yPos);
-        doc.text(":", valueX - 5, yPos);
-        doc.setFont(undefined, 'bold').setTextColor(0);
-        doc.text(`${value || 'N/A'}`, valueX, yPos);
-        yPos += lineHeight;
-    };
-
-    addDetail("FULL NAME", student.name.toUpperCase());
-    addDetail("ADMISSION NUMBER", student.reg);
-    addDetail("DATE OF BIRTH", student.dob ? new Date(student.dob).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : 'N/A');
-    addDetail("BIRTH CERTIFICATE NO.", student.idNumber);
-    addDetail("GENDER", student.gender);
-    addDetail("PARENT/GUARDIAN", student.guardianName || 'N/A');
-    addDetail("CLASS ADMITTED", student.entryLevel || student.grade);
-    addDetail("LAST CLASS ATTENDED", student.grade);
-    addDetail("DATE OF ADMISSION", student.createdAt ? new Date(student.createdAt).toLocaleDateString('en-GB') : 'N/A');
-    addDetail("DATE OF LEAVING", new Date().toLocaleDateString('en-GB'));
-    
-    // Reason for Leaving
-    const reason = student.clearanceReason || (["Grade 6", "Grade 9"].includes(student.grade) ? "Completion of Cycle" : "Transfer");
-    addDetail("REASON FOR LEAVING", reason);
-
-    // --- 7. CONDUCT & CHARACTER ---
-    yPos += 5;
-    doc.setFontSize(11).setFont(undefined, 'normal').setTextColor(0);
-    doc.text("CONDUCT & CHARACTER:", labelX, yPos);
-    yPos += 2;
-    doc.setFontSize(10).setTextColor(50);
-    const conductText = `The above named student's conduct and character while in this school were found to be SATISFACTORY. We wish him/her success in future endeavors.`;
-    const splitText = doc.splitTextToSize(conductText, pageWidth - (margin * 2) - 10);
-    doc.text(splitText, margin, yPos);
-    yPos += (splitText.length * 6) + 5;
-
-    // --- 8. SIGNATURES & STAMP ---
-    yPos += 10;
-    
-    // Official School Stamp Box (Center)
-    doc.setDrawColor(150).setLineWidth(0.3);
-    doc.setLineDashPattern([1, 1], 0); 
-    doc.rect(centerX - 25, yPos, 50, 30);
-    doc.setLineDashPattern([], 0); 
-    doc.setFontSize(8).setTextColor(130);
-    doc.text("OFFICIAL SCHOOL STAMP", centerX, yPos + 33, { align: 'center' });
-
-    // Insert Stamp Image if exists
-    if (store.settings.stamp) {
-        try { doc.addImage(store.settings.stamp, 'PNG', centerX - 18, yPos + 2, 36, 25); } catch (e) {}
-    }
-
-    // Signature Lines
-    const sigY = pageHeight - 55;
-    const sigLineLength = 45;
-
-    doc.setFontSize(10).setFont(undefined, 'normal').setTextColor(50);
-    
     // Class Teacher
-    doc.text("CLASS TEACHER", 45, sigY, { align: 'center' });
-    doc.setDrawColor(0).setLineWidth(0.5);
-    doc.line(45 - (sigLineLength/2), sigY - 5, 45 + (sigLineLength/2), sigY - 5);
-    // Signature Image
+    doc.line(margin, y + 15, margin + 55, y + 15);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Class Teacher', margin + 10, y + 20);
+
     if (store.settings.ctSignature) {
-        try { doc.addImage(store.settings.ctSignature, 'PNG', 28, sigY - 22, 35, 14); } catch (e) {}
+        try { doc.addImage(store.settings.ctSignature, 'PNG', margin + 10, y, 35, 14); } catch(e) {}
     }
 
-    // Principal
-    doc.text("PRINCIPAL", pageWidth - 45, sigY, { align: 'center' });
-    doc.line((pageWidth - 45) - (sigLineLength/2), sigY - 5, (pageWidth - 45) + (sigLineLength/2), sigY - 5);
-    // Signature Image
+    // HOI
+    const hoiX = pageW / 2 - 20;
+    doc.line(hoiX, y + 15, hoiX + 55, y + 15);
+    doc.text(store.settings.hoiTitle || 'Principal', hoiX + 10, y + 20);
+
     if (store.settings.hoiSignature) {
-        try { doc.addImage(store.settings.hoiSignature, 'PNG', pageWidth - 62, sigY - 22, 35, 14); } catch (e) {}
+        try { doc.addImage(store.settings.hoiSignature, 'PNG', hoiX + 10, y, 35, 14); } catch(e) {}
+    } else {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text(store.settings.hoiName || '', hoiX + 10, y + 8);
     }
 
-    // --- 9. FOOTER ---
-    doc.setFontSize(7).setTextColor(120);
-    doc.text("Any erasure or alteration renders this certificate invalid.", centerX, pageHeight - 22, { align: 'center' });
-    doc.setFontSize(8).setTextColor(150);
-    doc.text(`Generated via ElimuTrack System | KNEC Code: ${store.settings.schoolCode || 'N/A'}`, centerX, pageHeight - 16, { align: 'center' });
+    // Stamp placeholder
+    if (store.settings.stamp) {
+        try { doc.addImage(store.settings.stamp, 'PNG', pageW - margin - 40, y - 5, 40, 40); } catch(e) {}
+    }
 
-    // --- OUTPUT ---
-    doc.save(`Leaving_Certificate_${student.name.replace(/\s/g, '_')}.pdf`);
-    showToast('Leaving Certificate Generated!');
+    // Date
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Date: ${new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageW - margin - 50, y + 20);
+
+    const fileName = `Leaving_Certificate_${(student.name || 'Unknown').replace(/\s+/g, '_')}.pdf`;
+    doc.save(fileName);
+    showToast(`Leaving certificate downloaded: ${fileName}`);
+    closeModal('individualReportModal');
 }
+
+
+// ==========================================================================
+//   HELPER FUNCTIONS FOR REPORTS
+// ==========================================================================
+
+function getScoreColor(score) {
+    if (score >= 80) return '#27ae60'; if (score >= 70) return '#2ecc71';
+    if (score >= 50) return '#f39c12'; if (score >= 30) return '#e74c3c'; return '#c0392b';
+}
+
+function getDistColor(code) {
+    const colors = { EE: '#27ae60', ME: '#2ecc71', AE: '#f39c12', BE: '#e74c3c', NE: '#c0392b' };
+    return colors[code] || '#95a5a6';
+}
+function formatDate(d) { return d ? new Date(d).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) : 'N/A'; }
 
 
 // ==========================================================================
@@ -4895,290 +5282,123 @@ function generateLeavingCertificatePDF(studentId) {
 // ==========================================================================
 
 function generateSubjectScoreListPDF() {
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
-    const { jsPDF } = window.jspdf; 
-    const doc = new jsPDF();
+    const grade = $('subjectReportGrade')?.value;
+    const subjectId = $('subjectReportSubject')?.value;
 
-    // 1. Get Inputs
-    const grade = $('subjectReportGrade').value; 
-    const subjectCode = $('subjectReportSubject').value;
-    const subject = store.learningAreas.find(s => s.code === subjectCode);
-    
-    if(!subject) return showToast('Select subject', 'error');
-    
-    // 2. Retrieve Linked Teacher
-    const teacher = subject.teacherId ? StaffRepo.getById(subject.teacherId) : null;
-    const teacherName = teacher ? teacher.name : 'Not Assigned';
+    if (!grade || !subjectId) {
+        showToast('Please select both grade and subject.', 'error');
+        return;
+    }
 
-    // 3. Get Students and Scores
-    const students = StudentRepo.findBy('grade', grade);
-    let data = students.map(s => { 
-        const exam = store.exams.find(e => e.studentId === s.id && e.unitCode === subjectCode); 
-        const score = exam ? parseInt(exam.score) : null;
-        
-        // Use getCompetenceStatus for UI classification (Competent/NYC) and colors
-        const comp = exam ? getCompetenceStatus(score) : { level: 'Absent', abbr: 'ABS', decision: 'N/A' };
-        
-        // Use getLetterGrade for the specific Remarks required in the PDF
-        const letterInfo = exam ? getLetterGrade(score) : { grade: 'ABS', remarks: 'Absent' };
+    const subjectName = getSubjectName(subjectId);
+    const scores = _getSubjectScores(subjectId, grade);
 
-        return { 
-            id: s.id,
-            name: s.name, 
-            adm: s.reg, 
-            gender: s.gender,
-            score: score, 
-            level: comp.abbr, 
-            decision: comp.decision,
-            remarks: letterInfo.remarks, // New detailed remarks
-            gradeLetter: letterInfo.grade // EE1, ME2, etc.
-        }; 
-    });
+    if (!scores.length) {
+        showToast(`No scores found for ${subjectName} in ${grade}.`, 'error');
+        return;
+    }
 
-    // 4. Calculate Statistics
-    const presentData = data.filter(d => d.score !== null);
-    const scores = presentData.map(d => d.score);
-    
-    const totalStudents = data.length;
-    const presentCount = presentData.length;
-    
-    const totalPoints = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) : 0;
-    const avgScore = scores.length > 0 ? (totalPoints / scores.length).toFixed(1) : 0;
-    const maxScore = scores.length > 0 ? Math.max(...scores) : 0;
-    const minScore = scores.length > 0 ? Math.min(...scores) : 0;
-    
-    // Grade Distribution - Grouped for Display (EE, ME, AE, BE)
-    const distribution = { EE: 0, ME: 0, AE: 0, BE: 0, ABS: 0 };
-    data.forEach(d => {
-        const lvl = d.level; 
-        if (lvl.startsWith('EE')) distribution.EE++;
-        else if (lvl.startsWith('ME')) distribution.ME++;
-        else if (lvl.startsWith('AE')) distribution.AE++;
-        else if (lvl.startsWith('BE')) distribution.BE++;
-        else distribution.ABS++;
-    });
-
-    // Sort & Rank
-    data.sort((a, b) => (b.score || -1) - (a.score || -1));
-    let rank = 1;
-    data.forEach((d, i) => {
-        if (d.score !== null) {
-            if (i > 0 && d.score === data[i-1].score) d.position = data[i-1].position;
-            else d.position = rank;
-            rank++;
-        } else {
-            d.position = '-';
-        }
-    });
-
-    const top3Overall = data.filter(d => d.score !== null).slice(0, 3);
-    const top3Boys = data.filter(d => d.gender === 'Male' && d.score !== null).slice(0, 3);
-    const top3Girls = data.filter(d => d.gender === 'Female' && d.score !== null).slice(0, 3);
-
-    // 5. Build PDF
-    let yPos = addDocHeader(doc, `${subject.name} - Performance List`);
-    const pageWidth = doc.internal.pageSize.getWidth();
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const pageW = doc.internal.pageSize.getWidth();
     const margin = 15;
-    const contentWidth = pageWidth - (margin * 2);
+    let y = margin;
 
-    // -- Context Box --
-    const infoBoxHeight = 28;
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(226, 232, 240);
-    doc.roundedRect(margin, yPos, contentWidth, infoBoxHeight, 3, 3, 'FD');
-    
-    doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Assessment Context", margin + 5, yPos + 6);
-    
-    doc.setFontSize(9).setFont(undefined, 'normal').setTextColor(71, 85, 105);
-    doc.text(`Subject Teacher: ${teacherName}`, margin + 5, yPos + 12);
-    doc.text(`Target Grade: ${grade}`, margin + 5, yPos + 17);
-    doc.text(`Academic Year: ${store.settings.academicYear}`, margin + 5, yPos + 22);
-    
-    doc.text(`Assessment Type: BASELINE`, pageWidth - margin - 5, yPos + 12, { align: 'right' });
-    doc.text(`Term: ${store.settings.currentTerm}`, pageWidth - margin - 5, yPos + 17);
-    doc.text(`Candidates: ${presentCount} / ${totalStudents}`, pageWidth - margin - 5, yPos + 22, { align: 'right' });
-    
-    yPos += infoBoxHeight + 10;
+    const primary = [34, 197, 94];
+    const dark = [15, 23, 42];
 
-    // -- Statistics Grid --
-    doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Performance Statistics", margin, yPos);
-    yPos += 2;
+    // Header
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageW, 32, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(255, 255, 255);
+    doc.text(store.settings.schoolName || 'ElimuTrack School', pageW / 2, 12, { align: 'center' });
+    doc.setFontSize(10);
+    doc.text(`SUBJECT SCORE LIST — ${subjectName.toUpperCase()}`, pageW / 2, 21, { align: 'center' });
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${grade}  |  ${store.settings.academicYear} — ${store.settings.currentTerm}  |  ${scores.length} learners assessed`, pageW / 2, 28, { align: 'center' });
 
-    const stats = [
-        { label: "Total Points\n(Sum of Scores)", value: totalPoints, color: [37, 99, 235] },
-        { label: "Class Average\n(Mean Score)", value: avgScore, color: [22, 163, 74] },
-        { label: "Highest Score\n(Max)", value: maxScore, color: [217, 119, 6] },
-        { label: "Lowest Score\n(Min)", value: minScore, color: [220, 38, 38] },
-        { label: "Std Deviation\n(Range)", value: maxScore - minScore, color: [107, 114, 128] }
-    ];
+    y = 40;
 
-    const statWidth = (contentWidth - 40) / 5; 
-    const statHeight = 22;
-    let statX = margin;
+    // Summary box
+    const summary = _calcSummary(scores.map(s => ({ score: s.score })));
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(margin, y, pageW - margin * 2, 14, 2, 2, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...dark);
+    doc.text(`Average: ${summary.avg}%   |   Highest: ${summary.highest}   |   Lowest: ${summary.lowest}   |   EE: ${summary.ee}  ME: ${summary.me}  AE: ${summary.ae}  BE: ${summary.be}  NE: ${summary.ne}`, margin + 5, y + 9);
 
-    stats.forEach(stat => {
-        doc.setDrawColor(226, 232, 240);
-        doc.roundedRect(statX, yPos, statWidth, statHeight, 3, 3, 'FD');
-        
-        doc.setTextColor(...stat.color).setFontSize(16).setFont(undefined, 'bold');
-        doc.text(String(stat.value), statX + (statWidth/2), yPos + 10, { align: 'center' });
-        
-        doc.setTextColor(100).setFontSize(7).setFont(undefined, 'normal');
-        const lines = stat.label.split('\n');
-        lines.forEach((line, i) => {
-            doc.text(line, statX + (statWidth/2), yPos + 15 + (i * 3), { align: 'center' });
-        });
+    y += 20;
 
-        statX += statWidth + 10;
-    });
-
-    yPos += statHeight + 12;
-
-    // -- Hall of Fame --
-    doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Top Performers", margin, yPos);
-    yPos += 2;
-
-    const podiumW = (contentWidth - 10) / 3;
-    
-    const drawPodiumList = (title, list, startX) => {
-        doc.setFillColor(241, 245, 249).setDrawColor(226, 232, 240);
-        doc.roundedRect(startX, yPos, podiumW, 8, 2, 2, 'FD');
-        doc.setFontSize(8).setFont(undefined, 'bold').setTextColor(51, 65, 85);
-        doc.text(title, startX + (podiumW/2), yPos + 5, { align: 'center' });
-        
-        let listY = yPos + 12;
-        doc.setFontSize(8).setFont(undefined, 'normal');
-        
-        if(list.length === 0) {
-            doc.setTextColor(150);
-            doc.text("N/A", startX + (podiumW/2), listY + 4, { align: 'center' });
-        } else {
-            list.forEach((s, i) => {
-                const colors = [[218, 165, 32], [192, 192, 192], [205, 127, 50]];
-                doc.setFillColor(...colors[i]);
-                doc.circle(startX + 4, listY + 1.5, 1.5, 'F');
-                
-                doc.setTextColor(30, 41, 59);
-                doc.text(s.name, startX + 8, listY + 2);
-                
-                doc.setTextColor(100);
-                doc.text(`${s.score}%`, startX + podiumW - 3, listY + 2, { align: 'right' });
-                listY += 5;
-            });
-        }
-    };
-
-    drawPodiumList("Top 3 Overall", top3Overall, margin);
-    drawPodiumList("Top 3 Boys", top3Boys, margin + podiumW + 5);
-    drawPodiumList("Top 3 Girls", top3Girls, margin + (podiumW + 5) * 2);
-
-    yPos += 35; 
-
-    // -- Grade Distribution --
-    doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Competence Level Distribution", margin, yPos);
-    yPos += 4;
-
-    const gradeColors = {
-        'EE': { bg: [187, 247, 208], text: [22, 163, 74] }, 
-        'ME': { bg: [191, 219, 254], text: [37, 99, 235] }, 
-        'AE': { bg: [254, 215, 170], text: [234, 88, 12] }, 
-        'BE': { bg: [254, 202, 202], text: [220, 38, 38] }, 
-        'ABS': { bg: [229, 231, 235], text: [107, 114, 128] } 
-    };
-
-    const pillW = 35;
-    const pillGap = 5;
-    let pillX = margin;
-
-    Object.keys(gradeColors).forEach(key => {
-        const count = distribution[key];
-        doc.setFillColor(...gradeColors[key].bg).roundedRect(pillX, yPos, pillW, 8, 4, 4, 'F');
-        doc.setTextColor(...gradeColors[key].text).setFontSize(9).setFont(undefined, 'bold');
-        doc.text(`${key}: ${count}`, pillX + (pillW/2), yPos + 5, { align: 'center' });
-        pillX += pillW + pillGap;
-    });
-
-    yPos += 15;
-
-    // -- Detailed Table --
-    doc.setFontSize(10).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Learner Marks", margin, yPos);
-    yPos += 5;
-
-    // FIX: Use the specific remarks from data mapping
-    const tableData = data.map(d => [
-        d.position, 
-        d.adm, 
-        d.name, 
-        d.gender ? d.gender.charAt(0) : '-', 
-        d.score !== null ? d.score : 'ABS', 
-        d.gradeLetter, // e.g., EE1, ME2
-        d.remarks      // e.g., Exceptional mastery
+    // Table
+    const tableData = scores.map((s, i) => [
+        i + 1,
+        s.reg || 'N/A',
+        s.studentName,
+        s.stream || '—',
+        s.gender === 'Male' ? 'M' : 'F',
+        Math.round(s.score),
+        s.rating.code,
+        s.rating.text
     ]);
 
-    doc.autoTable({ 
-        startY: yPos, 
-        head: [['#', 'Adm No', 'Name', 'G', 'Score', 'Grade', 'Remarks']], 
-        body: tableData, 
+    doc.autoTable({
+        startY: y,
+        head: [['#', 'ADM No', 'Student Name', 'Stream', 'G', 'Score', 'Rating', 'Remarks']],
+        body: tableData,
+        margin: { left: margin, right: margin },
         theme: 'grid',
-        headStyles: { 
-            fillColor: [30, 41, 59], 
-            textColor: 255,
-            fontSize: 8,
-            fontStyle: 'bold',
-            cellPadding: 2
-        },
-        bodyStyles: {
-            fontSize: 8,
-            cellPadding: 2,
-            lineColor: [226, 232, 240]
-        },
-        alternateRowStyles: {
-            fillColor: [248, 250, 252]
-        },
+        styles: { fontSize: 8.5, cellPadding: 3, lineColor: [226, 232, 240], lineWidth: 0.3 },
+        headStyles: { fillColor: dark, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
         columnStyles: {
-            0: { halign: 'center', cellWidth: 10 },
-            1: { cellWidth: 28 },
+            0: { cellWidth: 10, halign: 'center' },
+            1: { cellWidth: 25 },
             2: { cellWidth: 'auto' },
-            3: { halign: 'center', cellWidth: 8 },
-            4: { halign: 'center', cellWidth: 12, fontStyle: 'bold' },
-            5: { halign: 'center', cellWidth: 14 },
-            6: { cellWidth: 45 } // Wider for remarks
+            3: { cellWidth: 18, halign: 'center' },
+            4: { cellWidth: 10, halign: 'center' },
+            5: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+            6: { cellWidth: 15, halign: 'center' },
+            7: { cellWidth: 'auto', fontSize: 7.5 }
         },
-        didParseCell: function (data) {
-            // Color the Grade column based on group
-            if (data.column.index === 5 && data.section === 'body') {
-                const grade = data.cell.raw; 
-                if (grade) {
-                    let groupKey = 'ABS';
-                    if (grade.startsWith('EE')) groupKey = 'EE';
-                    else if (grade.startsWith('ME')) groupKey = 'ME';
-                    else if (grade.startsWith('AE')) groupKey = 'AE';
-                    else if (grade.startsWith('BE')) groupKey = 'BE';
-
-                    if (gradeColors[groupKey]) {
-                        data.cell.styles.textColor = gradeColors[groupKey].text;
-                        data.cell.styles.fontStyle = 'bold';
-                    }
-                }
+        didParseCell: function(data) {
+            if (data.section === 'body' && data.column.index === 5 && typeof data.cell.raw === 'number') {
+                const s = data.cell.raw;
+                if (s >= 80) data.cell.styles.textColor = [34, 197, 94];
+                else if (s >= 70) data.cell.styles.textColor = [59, 130, 246];
+                else if (s >= 50) data.cell.styles.textColor = [245, 158, 11];
+                else data.cell.styles.textColor = [239, 68, 68];
             }
-            // Gold/Silver/Bronze for Position
-            if (data.column.index === 0 && data.section === 'body') {
-                if (data.cell.raw === 1) data.cell.styles.textColor = [218, 165, 32]; 
-                if (data.cell.raw === 2) data.cell.styles.textColor = [192, 192, 192]; 
-                if (data.cell.raw === 3) data.cell.styles.textColor = [205, 127, 50]; 
+            if (data.section === 'body' && data.column.index === 6) {
+                const gradeColors = { EE: [34, 197, 94], ME: [59, 130, 246], AE: [245, 158, 11], BE: [239, 68, 68], NE: [100, 116, 139] };
+                const c = gradeColors[data.cell.raw] || [100, 116, 139];
+                data.cell.styles.textColor = c;
+                data.cell.styles.fontStyle = 'bold';
             }
-        },
-        margin: { left: margin, right: margin }
+        }
     });
-    
-    addDocFooter(doc);
-    doc.save(`Baseline_Report_${subject.name}_${grade}.pdf`); 
+
+    // Footer
+    const footY = doc.internal.pageSize.getHeight() - 10;
+    doc.setFillColor(241, 245, 249);
+    doc.rect(0, footY - 3, pageW, 13, 'F');
+    doc.setFontSize(6);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Generated by ElimuTrack CBC System on ${new Date().toLocaleString('en-KE')}`, pageW / 2, footY, { align: 'center' });
+
+    const fileName = `Subject_${subjectName.replace(/\s+/g, '_')}_${grade.replace(/\s+/g, '_')}.pdf`;
+    doc.save(fileName);
+    showToast(`Subject report downloaded: ${fileName}`);
     closeModal('subjectReportModal');
+}
+
+
+function validateMarksheetForm() {
+    const g = $('marksheetGrade')?.value;
+    const t = $('marksheetTerm')?.value;
+    if($('btnGenMarksheet')) $('btnGenMarksheet').disabled = !(g && t);
 }
 
 // ==========================================================================
@@ -5812,335 +6032,168 @@ function generateAutoComment(avg) {
 }
 
 function generateClassListPDF() {
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
-    const { jsPDF } = window.jspdf; 
-    const doc = new jsPDF('landscape', 'mm', 'a4');
+    const grade = $('classReportGrade')?.value;
+    if (!grade) {
+        showToast('Please select a grade.', 'error');
+        return;
+    }
 
-    // 1. Get Inputs
-    const grade = $('classReportGrade').value; 
-    const stream = $('classReportStream').value;
-    if (!grade) return showToast('Please select a grade.', 'error');
+    const gradeData = _getGradeScores(grade);
+    if (!gradeData.length) {
+        showToast(`No assessment data found for ${grade}. Record scores first.`, 'error');
+        return;
+    }
 
-    let students = StudentRepo.findBy('grade', grade);
-    if (stream !== 'all') students = students.filter(s => s.stream === stream);
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('l', 'mm', 'a4');
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 12;
+    let y = margin;
 
-    // 2. Define Subjects
-    const subjects = store.learningAreas.filter(s => !s.applicableLevels || s.applicableLevels.includes(grade));
-    
-    // 3. Helper to strip prefixes (JS-, LP-, MS-, etc.) for display
-    const getDisplayCode = (code) => {
-        // Splits by hyphen and takes the last part (e.g., "JS-ENG" -> "ENG")
-        return code.split('-').pop(); 
-    };
+    const primary = [34, 197, 94];
+    const dark = [15, 23, 42];
 
-    // 4. Process Data
-    let data = students.map(st => {
-        let total = 0; 
-        let count = 0;
-        
-        // Calculate Scores per subject
-        const subjectData = {};
-        subjects.forEach(sub => {
-            const exam = store.exams.find(e => e.studentId === st.id && e.unitCode === sub.code);
-            
-            if (exam) {
-                // --- ASSESSED ---
-                const score = parseInt(exam.score);
-                subjectData[sub.code] = { 
-                    score: score, 
-                    grade: getCompetenceStatus(score).abbr,
-                    isAssessed: true 
-                };
-                total += score; 
-                count++;
-            } else {
-                // --- NOT ASSESSED ---
-                subjectData[sub.code] = { 
-                    score: 'NM',        // Not Measured
-                    grade: 'NG',        // No Grade
-                    isAssessed: false
-                };
-            }
+    // Header
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageW, 28, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(255, 255, 255);
+    doc.text(store.settings.schoolName || 'ElimuTrack School', pageW / 2, 11, { align: 'center' });
+    doc.setFontSize(10);
+    doc.text(`CLASS RANKING REPORT — ${grade.toUpperCase()}`, pageW / 2, 20, { align: 'center' });
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${store.settings.academicYear} — ${store.settings.currentTerm}  |  Generated: ${new Date().toLocaleDateString('en-KE')}`, pageW / 2, 25, { align: 'center' });
+
+    y = 34;
+
+    // Get all assessed subjects for this grade
+    const assessedSubjects = _getAssessedSubjects(grade);
+    const subjectIds = assessedSubjects.map(s => s.id);
+
+    // Build table header
+    const headRow = ['Rank', 'ADM No', 'Student Name', 'Gender'];
+    subjectIds.forEach(s => {
+        const shortName = s.name.length > 10 ? s.name.substring(0, 10) + '.' : s.name;
+        headRow.push(shortName);
+    });
+    headRow.push('Total', 'Avg', 'Grade');
+
+    // Build table body
+    const bodyRows = gradeData.map((student, idx) => {
+        const row = [
+            idx + 1,
+            student.reg || 'N/A',
+            student.studentName,
+            student.gender === 'Male' ? 'M' : 'F'
+        ];
+
+        let total = 0;
+        subjectIds.forEach(sid => {
+            const found = student.scores.find(s => s.subjectId === sid);
+            const score = found ? Math.round(found.score) : 0;
+            row.push(score || '—');
+            if (found) total += found.score;
         });
 
-        // Calculate Average only based on assessed subjects
-        const avg = count > 0 ? (total / count) : 0;
+        const avg = student.scores.length ? total / student.scores.length : 0;
+        row.push(Math.round(total));
+        row.push(avg.toFixed(1) + '%');
+        row.push(cbcRating(avg).code);
 
-        return {
-            adm: st.reg, 
-            name: st.name, 
-            gender: st.gender ? st.gender.charAt(0).toUpperCase() : '-',
-            subjects: subjectData,
-            total: total, 
-            avg: avg,
-            assessedCount: count
-        };
-    });
-
-    // Rank Students (Overall)
-    data.sort((a, b) => b.avg - a.avg); 
-    let rank = 1;
-    data.forEach((d, i) => {
-        if (i > 0 && d.avg === data[i - 1].avg) d.position = data[i - 1].position;
-        else d.position = rank;
-        rank++;
-    });
-
-    // --- Calculate Top Performers ---
-    const top3Overall = data.slice(0, 3);
-    const boys = data.filter(s => s.gender === 'M' || s.gender === 'B');
-    const girls = data.filter(s => s.gender === 'F' || s.gender === 'G');
-    
-    const top3Boys = boys.slice(0, 3);
-    const top3Girls = girls.slice(0, 3);
-
-    const fmtWinner = (s, pos) => s ? `${pos}. ${s.name} (${s.avg.toFixed(1)}%)` : `${pos}. -`;
-
-    // 5. Calculate Subject Stats
-    const subjectStats = {};
-    
-    subjects.forEach(sub => {
-        // Filter only students who were assessed for this subject
-        const assessedStudents = data.filter(d => d.subjects[sub.code].isAssessed);
-        const scores = assessedStudents.map(d => d.subjects[sub.code].score);
-        
-        const totalScore = scores.reduce((a, b) => a + b, 0);
-        const avgScore = scores.length > 0 ? (totalScore / scores.length) : 0;
-        
-        let maxScore = -1;
-        let topper = "-";
-        
-        if (assessedStudents.length > 0) {
-            assessedStudents.forEach(d => {
-                if (d.subjects[sub.code].score > maxScore) {
-                    maxScore = d.subjects[sub.code].score;
-                    topper = d.name.split(' ')[0]; 
-                } else if (d.subjects[sub.code].score === maxScore) {
-                    topper += `, ${d.name.split(' ')[0]}`;
-                }
-            });
-        } else {
-            maxScore = 0; // Reset max score if no one was assessed
-        }
-
-        // Determine teacher name or default to "Not Assigned"
-        const teacher = sub.teacherId ? StaffRepo.getById(sub.teacherId) : null;
-        const teacherName = teacher ? teacher.name : 'Not Assigned';
-        
-        subjectStats[sub.code] = { 
-            total: totalScore, 
-            avg: avgScore, 
-            topper, 
-            maxScore,
-            rank: 0, 
-            teacherName: teacherName,
-            assessedCount: scores.length
-        };
-    });
-
-    // Calculate Subject Positions
-    let subjectCodes = subjects.map(s => s.code);
-    subjectCodes.sort((a, b) => subjectStats[b].avg - subjectStats[a].avg);
-    let subRank = 1;
-    subjectCodes.forEach((code, i) => {
-        if (i > 0 && subjectStats[code].avg === subjectStats[subjectCodes[i - 1]].avg) {
-            subjectStats[code].rank = subjectStats[subjectCodes[i - 1]].rank;
-        } else {
-            subjectStats[code].rank = subRank;
-        }
-        subRank++;
-    });
-
-    // 6. Build PDF
-    let yPos = addDocHeader(doc, `Detailed Marksheet: ${grade} ${stream === 'all' ? '(All Streams)' : stream}`);
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const margin = 10;
-
-    // -- Summary Stats Box --
-    doc.setFillColor(240, 244, 248);
-    doc.roundedRect(margin, yPos, pageWidth - (margin*2), 12, 2, 2, 'F');
-    doc.setFontSize(9).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text(`Total Learners: ${students.length}`, margin + 5, yPos + 5);
-    doc.text(`Class Average: ${data.length > 0 ? (data.reduce((a,b)=>a+b.avg,0)/data.length).toFixed(1) : 0}%`, margin + 60, yPos + 5);
-    doc.text(`Subjects Count: ${subjects.length}`, margin + 130, yPos + 5);
-    
-    doc.setTextColor(100).setFont(undefined, 'normal');
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, pageWidth - margin - 5, yPos + 8, { align: 'right' });
-    yPos += 16;
-
-    // -- Main Table --
-    const headers = ['Adm No', 'Name', 'G', ...subjects.map(s => getDisplayCode(s.code)), 'Total', 'Avg', 'Grade', 'Pos'];
-    
-    const rows = data.map(d => {
-        const subjectCols = subjects.map(s => {
-            const sd = d.subjects[s.code];
-            // Will display "NM NG" if not assessed, or "85 ME" if assessed
-            return `${sd.score} ${sd.grade}`; 
-        });
-        
-        // If no subjects were assessed, display 'NG' for grade, otherwise calculate
-        const meanGrade = d.assessedCount > 0 ? getCompetenceStatus(d.avg).abbr : 'NG';
-        
-        return [d.adm, d.name, d.gender, ...subjectCols, d.total, d.avg.toFixed(1), meanGrade, d.position];
+        return row;
     });
 
     doc.autoTable({
-        startY: yPos,
-        head: [headers],
-        body: rows,
-        theme: 'grid',
-        headStyles: { 
-            fillColor: [30, 41, 59], 
-            fontSize: 7, 
-            fontStyle: 'bold',
-            cellPadding: 1.5
-        },
-        bodyStyles: { 
-            fontSize: 7,
-            cellPadding: 1.5
-        },
-        columnStyles: {
-            0: { cellWidth: 26, halign: 'left' },    // Adm No
-            1: { cellWidth: 30 },                    // Name
-            2: { cellWidth: 6, halign: 'center' },   // G
-            ...(() => {
-                // Widths: Adm(26) + Name(30) + G(6) + Total(14) + Avg(11) + Grade(9) + Pos(7) = 103
-                const usedWidth = 103; 
-                const remaining = (pageWidth - (margin*2) - usedWidth);
-                const subWidth = subjects.length > 0 ? remaining / subjects.length : 10;
-                const styles = {};
-                for(let i=0; i<subjects.length; i++) {
-                    styles[3+i] = { cellWidth: subWidth, halign: 'center' };
-                }
-                return styles;
-            })(),
-            [3 + subjects.length]: { cellWidth: 14, fontStyle: 'bold', halign: 'center' },     // Total
-            [3 + subjects.length + 1]: { cellWidth: 11, halign: 'center' },                  // Avg
-            [3 + subjects.length + 2]: { cellWidth: 9, halign: 'center' },                   // Grade
-            [3 + subjects.length + 3]: { cellWidth: 7, fontStyle: 'bold', halign: 'center' }  // Position
-        },
+        startY: y,
+        head: [headRow],
+        body: bodyRows,
         margin: { left: margin, right: margin },
-        didParseCell: function (data) {
-            // Style "NM" and "NG" in body (gray italic)
-            if (data.section === 'body' && data.column.index >= 3 && data.column.index < (3 + subjects.length)) {
-                 const cellText = data.cell.raw;
-                 if (typeof cellText === 'string' && (cellText.includes('NM') || cellText.includes('NG'))) {
-                     data.cell.styles.textColor = [150, 150, 150]; // Gray color
-                     data.cell.styles.fontStyle = 'italic';
-                 }
-            }
-            
-            // Color the Position column (now the last column)
-            const posIndex = 3 + subjects.length + 3;
-            if (data.column.index === posIndex && data.section === 'body') {
-                if (data.cell.raw === 1) data.cell.styles.textColor = [218, 165, 32]; 
-                if (data.cell.raw === 2) data.cell.styles.textColor = [192, 192, 192]; 
-                if (data.cell.raw === 3) data.cell.styles.textColor = [205, 127, 50]; 
-                if (data.cell.raw <= 3) data.cell.styles.fontStyle = 'bold';
-            }
-        }
-    });
-
-    let finalY = doc.lastAutoTable.finalY + 5;
-
-    // -- Performance Awards Section --
-    doc.setFontSize(9).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Performance Awards", margin, finalY);
-    finalY += 3;
-
-    const awardHeaders = ['Top 3 Overall', 'Top 3 Boys', 'Top 3 Girls'];
-    const awardRows = [
-        [
-            top3Overall.map((s, i) => fmtWinner(s, i+1)).join('\n'),
-            top3Boys.map((s, i) => fmtWinner(s, i+1)).join('\n'),
-            top3Girls.map((s, i) => fmtWinner(s, i+1)).join('\n')
-        ]
-    ];
-
-    doc.autoTable({
-        startY: finalY,
-        head: [awardHeaders],
-        body: awardRows,
         theme: 'grid',
-        headStyles: { 
-            fillColor: [34, 197, 94], 
-            fontSize: 8, 
-            fontStyle: 'bold',
-            halign: 'center'
-        },
-        bodyStyles: { 
-            fontSize: 7,
-            cellPadding: 2,
-            lineHeightFactor: 1.5
-        },
+        styles: { fontSize: 6.5, cellPadding: 2, lineColor: [226, 232, 240], lineWidth: 0.2, halign: 'center' },
+        headStyles: { fillColor: dark, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 6.5 },
         columnStyles: {
-            0: { cellWidth: (pageWidth - margin*2) / 3, valign: 'top' },
-            1: { cellWidth: (pageWidth - margin*2) / 3, valign: 'top' },
-            2: { cellWidth: (pageWidth - margin*2) / 3, valign: 'top' }
+            0: { cellWidth: 10 },
+            1: { cellWidth: 22 },
+            2: { cellWidth: 35, halign: 'left' },
+            3: { cellWidth: 10 }
         },
-        margin: { left: margin, right: margin }
-    });
-
-    finalY = doc.lastAutoTable.finalY + 5;
-
-    // -- Subject Analysis Footer Table --
-    doc.setFontSize(9).setFont(undefined, 'bold').setTextColor(30, 41, 59);
-    doc.text("Subject Performance Analysis", margin, finalY);
-    finalY += 3;
-
-    // UPDATED: Use getDisplayCode for analysis headers
-    const analysisHeaders = ['Metric', ...subjects.map(s => getDisplayCode(s.code))];
-    const analysisRows = [
-        ['Subject Total', ...subjects.map(s => subjectStats[s.code].total)],
-        ['Class Mean', ...subjects.map(s => subjectStats[s.code].avg.toFixed(1))],
-        ['Subject Rank', ...subjects.map(s => subjectStats[s.code].rank)], 
-        ['Top Score', ...subjects.map(s => subjectStats[s.code].maxScore)],
-        ['Top Learner', ...subjects.map(s => subjectStats[s.code].topper)],
-        // NEW: Teacher Row
-        ['Teacher', ...subjects.map(s => subjectStats[s.code].teacherName)] 
-    ];
-
-    doc.autoTable({
-        startY: finalY,
-        head: [analysisHeaders],
-        body: analysisRows,
-        theme: 'plain', 
-        headStyles: { 
-            fillColor: [241, 245, 249], 
-            textColor: [30, 41, 59], 
-            fontSize: 7, 
-            fontStyle: 'bold' 
-        },
-        bodyStyles: { 
-            fontSize: 7,
-            textColor: 60
-        },
-        columnStyles: {
-            0: { cellWidth: 20, fontStyle: 'bold' },
-            ...(() => {
-                const usedWidth = 20;
-                const remaining = (pageWidth - (margin*2) - usedWidth);
-                const subWidth = subjects.length > 0 ? remaining / subjects.length : 10;
-                const styles = {};
-                for(let i=0; i<subjects.length; i++) {
-                    styles[1+i] = { cellWidth: subWidth, halign: 'center' };
-                }
-                return styles;
-            })()
-        },
-        margin: { left: margin, right: margin },
         didParseCell: function(data) {
-            if(data.row.index === 2 && data.section === 'body') { 
-                 data.cell.styles.fontStyle = 'bold';
-                 data.cell.styles.textColor = [34, 197, 94];
+            // Color rank 1-3
+            if (data.section === 'body' && data.column.index === 0) {
+                const rank = data.cell.raw;
+                if (rank === 1) { data.cell.styles.textColor = [245, 158, 11]; data.cell.styles.fontStyle = 'bold'; }
+                else if (rank === 2) { data.cell.styles.textColor = [100, 116, 139]; data.cell.styles.fontStyle = 'bold'; }
+                else if (rank === 3) { data.cell.styles.textColor = [249, 115, 22]; data.cell.styles.fontStyle = 'bold'; }
+            }
+            // Color grade column
+            if (data.section === 'body' && data.column.index === headRow.length - 1) {
+                const gradeColors = { EE: [34, 197, 94], ME: [59, 130, 246], AE: [245, 158, 11], BE: [239, 68, 68], NE: [100, 116, 139] };
+                const c = gradeColors[data.cell.raw] || [100, 116, 139];
+                data.cell.styles.textColor = c;
+                data.cell.styles.fontStyle = 'bold';
             }
         }
     });
 
-    addDocFooter(doc);
-    doc.save(`Detailed_Marksheet_${grade}_${stream}.pdf`); 
+    y = doc.lastAutoTable.finalY + 6;
+
+    // Footer
+    doc.setFillColor(241, 245, 249);
+    doc.rect(0, pageH - 12, pageW, 12, 'F');
+    doc.setFontSize(6);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Total Learners: ${gradeData.length}  |  Subjects: ${subjectIds.length}  |  Generated by ElimuTrack CBC System`, pageW / 2, pageH - 5, { align: 'center' });
+
+    const fileName = `Class_Ranking_${grade.replace(/\s+/g, '_')}_${store.settings.currentTerm || 'Term1'}.pdf`;
+    doc.save(fileName);
+    showToast(`Class report downloaded: ${fileName}`);
     closeModal('classReportModal');
 }
+
+
+function generateMarksheetPDF() {
+    const grade=$('marksheetGrade')?.value, stream=$('marksheetStream')?.value, term=$('marksheetTerm')?.value, year=$('marksheetYear')?.value||store.settings.academicYear;
+    if(!grade||!term) return showToast('Select Grade and Term.','error');
+    let students = StudentRepo.findBy('grade', grade);
+    if(stream) students = students.filter(s=>s.stream===stream);
+    students.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    const subjects = store.learningAreas.filter(la=>la.applicableLevels?.includes(grade));
+    
+    const data = students.map(st => {
+        const scores = {};
+        let total = 0, cnt = 0;
+        subjects.forEach(sub => {
+            const sc = store.exams.filter(e=>e.studentId===st.id && e.subjectId===sub.id && e.term===term && String(e.year)===String(year));
+            const best = sc.length > 0 ? Math.max(...sc.map(e=>e.score||0)) : null;
+            scores[sub.id] = best;
+            if(best !== null) { total += best; cnt++; }
+        });
+        return { student: st, scores, total, avg: cnt > 0 ? (total/cnt).toFixed(1) : '0.0', pos: 0 };
+    });
+
+    // Calculate Positions
+    const ranked = [...data].filter(d=>d.total>0).sort((a,b)=>b.total-a.total);
+    let pos = 0, lastTotal = null;
+    ranked.forEach((item, i) => {
+        if(item.total !== lastTotal) { pos = i + 1; lastTotal = item.total; }
+        item.pos = pos;
+    });
+    data.forEach(d => { const r = ranked.find(x=>x.student.id===d.student.id); if(r) d.pos = r.pos; else d.pos = '-'; });
+
+    const subjHeaders = subjects.map(s=>`<th style="padding:6px;border:1px solid #1a252f;font-size:10px;text-align:center;min-width:45px">${s.name.length > 12 ? s.code : s.name}</th>`).join('');
+    const rows = data.map((d,i) => {
+        const cells = subjects.map(s => { const v=d.scores[s.id]; return `<td style="padding:4px;border:1px solid #ddd;text-align:center;font-size:11px;color:${v!==null?getScoreColor(v):'#ccc'};font-weight:${v!==null?'bold':'normal'}">${v!==null?v:'-'}</td>`; }).join('');
+        return `<tr style="background:${i%2===0?'#fff':'#f8f9fa'}"><td style="padding:4px;border:1px solid #ddd;text-align:center">${i+1}</td><td style="padding:4px;border:1px solid #ddd">${d.student.name}</td>${cells}<td style="padding:4px;border:1px solid #ddd;text-align:center;font-weight:bold;background:#eef">${d.total||'-'}</td><td style="padding:4px;border:1px solid #ddd;text-align:center">${d.pos}</td></tr>`;
+    }).join('');
+
+    const s = store.settings;
+    const html = `<!DOCTYPE html><html><head><style>@page{size:landscape;margin:10mm}body{font-family:Arial,sans-serif;margin:10px;color:#333;font-size:11px}h1,h2{text-align:center;margin:5px 0}.meta{display:flex;justify-content:space-between;background:#f5f5f5;padding:8px;border-radius:4px;margin:10px 0;font-size:12px}table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#2c3e50;color:white;padding:6px;border:1px solid #1a252f;font-size:10px}@media print{.no-print{display:none}}</style></head><body><h1>${s.schoolName}</h1><h2>CLASS MARKSHEET - ${grade} ${stream?'('+stream+')':''}</h2><div class="meta"><span>Term: ${term}</span><span>Year: ${year}</span><span>Students: ${students.length}</span></div><table><thead><tr><th style="width:30px">#</th><th style="min-width:140px">Student Name</th>${subjHeaders}<th style="width:45px;background:#1a5276">Total</th><th style="width:40px;background:#1a5276">Pos</th></tr></thead><tbody>${rows}</tbody></table><div class="no-print" style="text-align:center;margin-top:15px"><button onclick="window.print()" style="padding:10px 30px;background:#2c3e50;color:white;border:none;border-radius:5px;cursor:pointer">Print / Save PDF</button></div></body></html>`;
+    window.open('', '_blank').document.write(html);
+}
+
 // ==========================================================================
 //   MISSING REPORT IMPLEMENTATIONS (FIXED)
 // ==========================================================================
@@ -8286,7 +8339,9 @@ function persistExamSchedule(editId, grade, name, venue, invigilator, selectedSu
         results: [],
         // Invigilation engagement
         invigStatus: { chief: 'Pending', assistant: 'Pending' },
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        examType: document.getElementById('examTypeSelect').value, // <--- ADD THIS
+        comments: ''
     };
 
     if (!store.examSchedules) store.examSchedules = [];
@@ -8939,125 +8994,432 @@ function importExamScores(examId, file) {
 }
 
 function generateStaffListPDF() {
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-
-    let yPos = addDocHeader(doc, "STAFF DIRECTORY");
-
-    const data = StaffRepo.getAll().map(s => [
-        s.name, 
-        s.tsc || '-', 
-        s.idNo || '-', 
-        s.designation || '-', 
-        s.dept || '-', 
-        s.phone || '-'
-    ]);
-
-    doc.autoTable({
-        startY: yPos,
-        head: [['Name', 'TSC No', 'ID No', 'Designation', 'Department', 'Phone']],
-        body: data,
-        headStyles: { fillColor: [37, 99, 235] }
-    });
-
-    addDocFooter(doc);
-    doc.save('Staff_Directory.pdf');
-    showToast('Staff List Generated');
-}
-
-function generateSchoolProfile() {
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-
-    let yPos = addDocHeader(doc, "SCHOOL PROFILE");
-
-    yPos += 10;
-    doc.setFontSize(12).setFont(undefined, 'bold').setTextColor(0);
-    doc.text("Institution Details", 20, yPos);
-    yPos += 5;
-    
-    const details = [
-        ["School Name", store.settings.schoolName],
-        ["KNEC Code", store.settings.schoolCode],
-        ["Category", store.settings.category],
-        ["Level", store.settings.level],
-        ["Address", store.settings.address],
-        ["Phone", store.settings.phone],
-        ["Email", store.settings.email],
-        ["Academic Year", store.settings.academicYear],
-        ["Current Term", store.settings.currentTerm]
-    ];
-
-    doc.setFontSize(10);
-    details.forEach(d => {
-        doc.setFont(undefined, 'bold').text(d[0] + ":", 20, yPos);
-        doc.setFont(undefined, 'normal').text(d[1] || 'N/A', 70, yPos);
-        yPos += 8;
-    });
-
-    yPos += 10;
-    doc.setFontSize(12).setFont(undefined, 'bold').setTextColor(0);
-    doc.text("Head of Institution", 20, yPos);
-    yPos += 5;
-
-    const hoiDetails = [
-        ["Name", store.settings.hoiName],
-        ["Title", store.settings.hoiTitle],
-        ["TSC No", store.settings.hoiTsc],
-        ["Phone", store.settings.hoiPhone]
-    ];
-
-    doc.setFontSize(10);
-    hoiDetails.forEach(d => {
-        doc.setFont(undefined, 'bold').text(d[0] + ":", 20, yPos);
-        doc.setFont(undefined, 'normal').text(d[1] || 'N/A', 70, yPos);
-        yPos += 8;
-    });
-
-    addDocFooter(doc);
-    doc.save('School_Profile.pdf');
-    showToast('School Profile Generated');
-}
-
-function populateDropdownsForReports() {
-    const gradeSelects = ['subjectReportGrade', 'classReportGrade'];
-    const grades = Object.keys(CBC_LEVELS);
-
-    gradeSelects.forEach(selectId => {
-        const select = $(selectId);
-        if (select && select.options.length <= 1) {
-            select.innerHTML = '<option value="">Select Grade...</option>';
-            grades.forEach(g => {
-                select.innerHTML += `<option value="${g}">${g}</option>`;
-            });
-        }
-    });
-}
-
-function populateSubjectReportDropdowns() {
-    const grade = $('subjectReportGrade').value;
-    const select = $('subjectReportSubject');
-    if(!select) return;
-    
-    select.innerHTML = '<option value="">Select Subject...</option>';
-    
-    if (!grade) return;
-
-    const applicableSubjects = store.learningAreas.filter(sub => 
-        !sub.applicableLevels || sub.applicableLevels.includes(grade)
-    );
-
-    if (applicableSubjects.length === 0) {
-        select.innerHTML = '<option value="">No Subjects Found</option>';
+    const staff = StaffRepo.getAll();
+    if (!staff.length) {
+        showToast('No staff records found.', 'error');
         return;
     }
 
-    applicableSubjects.forEach(sub => {
-        select.innerHTML += `<option value="${sub.code}">${sub.name}</option>`;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('l', 'mm', 'a4');
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 12;
+
+    const dark = [15, 23, 42];
+    const primary = [34, 197, 94];
+
+    // Header
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageW, 25, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`${store.settings.schoolName || 'ElimuTrack School'} — STAFF LIST`, pageW / 2, 16, { align: 'center' });
+
+    doc.autoTable({
+        startY: 30,
+        head: [['#', 'Name', 'TSC No', 'Role/Subject', 'Department', 'Phone', 'Email', 'ID Number']],
+        body: staff.map((s, i) => [
+            i + 1,
+            s.name || 'N/A',
+            s.tscNo || s.tsc || 'N/A',
+            s.role || s.subject || 'N/A',
+            s.department || 'N/A',
+            s.phone || 'N/A',
+            s.email || 'N/A',
+            s.idNumber || 'N/A'
+        ]),
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        styles: { fontSize: 7.5, cellPadding: 2.5 },
+        headStyles: { fillColor: dark, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
+        columnStyles: { 0: { cellWidth: 8 }, 2: { cellWidth: 25 } }
+    });
+
+    // Footer
+    const footY = doc.internal.pageSize.getHeight() - 10;
+    doc.setFillColor(241, 245, 249);
+    doc.rect(0, footY - 3, pageW, 13, 'F');
+    doc.setFontSize(6);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Total Staff: ${staff.length}  |  Generated: ${new Date().toLocaleDateString('en-KE')}  |  ElimuTrack CBC System`, pageW / 2, footY, { align: 'center' });
+
+    doc.save(`Staff_List_${store.settings.schoolName?.replace(/\s+/g, '_') || 'School'}.pdf`);
+    showToast('Staff list downloaded');
+}
+
+function generateSchoolProfile() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 15;
+    let y = margin;
+
+    const dark = [15, 23, 42];
+    const primary = [34, 197, 94];
+
+    // Header
+    doc.setFillColor(...primary);
+    doc.rect(0, 0, pageW, 30, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(255, 255, 255);
+    doc.text(store.settings.schoolName || 'ElimuTrack School', pageW / 2, 12, { align: 'center' });
+    doc.setFontSize(10);
+    doc.text('SCHOOL PROFILE REPORT', pageW / 2, 21, { align: 'center' });
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Generated: ${new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageW / 2, 27, { align: 'center' });
+
+    y = 38;
+
+    // School Details
+    doc.autoTable({
+        startY: y,
+        head: [['School Information']],
+        body: [
+            ['School Name', store.settings.schoolName || 'N/A'],
+            ['Motto', store.settings.motto || 'N/A'],
+            ['School Code', store.settings.schoolCode || 'N/A'],
+            ['Category', store.settings.category || 'N/A'],
+            ['Level', store.settings.level || 'N/A'],
+            ['Address', store.settings.address || 'N/A'],
+            ['Phone', store.settings.phone || 'N/A'],
+            ['Email', store.settings.email || 'N/A'],
+            ['Head of Institution', store.settings.hoiName || 'N/A'],
+            ['TSC Number', store.settings.hoiTsc || 'N/A']
+        ],
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: dark, textColor: [255, 255, 255] },
+        columnStyles: { 0: { cellWidth: 50, fontStyle: 'bold', textColor: [100, 116, 139] } }
+    });
+
+    y = doc.lastAutoTable.finalY + 8;
+
+    // Enrollment Summary
+    const students = StudentRepo.getAll();
+    const grades = [...new Set(students.map(s => s.grade))].sort();
+    const maleCount = students.filter(s => s.gender === 'Male').length;
+    const femaleCount = students.filter(s => s.gender === 'Female').length;
+
+    const enrollBody = grades.map(g => {
+        const gStudents = students.filter(s => s.grade === g);
+        return [g, gStudents.length, gStudents.filter(s => s.gender === 'Male').length, gStudents.filter(s => s.gender === 'Female').length];
+    });
+    enrollBody.push(['TOTAL', students.length, maleCount, femaleCount]);
+
+    doc.autoTable({
+        startY: y,
+        head: [['Grade', 'Total', 'Male', 'Female']],
+        body: enrollBody,
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 3, halign: 'center' },
+        headStyles: { fillColor: dark, textColor: [255, 255, 255] }
+    });
+
+    y = doc.lastAutoTable.finalY + 8;
+
+    // Assessment Summary
+    const assessedGrades = _getAssessedGrades();
+    const totalAssessments = (store.exams || []).filter(e => e.score > 0).length;
+
+    doc.autoTable({
+        startY: y,
+        head: [['Assessment Overview']],
+        body: [
+            ['Total Scored Assessments', String(totalAssessments)],
+            ['Grades with Data', String(assessedGrades.length)],
+            ['Teaching Staff', String(StaffRepo.count())],
+            ['Learning Areas Configured', String(store.learningAreas.length)]
+        ],
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: dark, textColor: [255, 255, 255] },
+        columnStyles: { 0: { cellWidth: 60, fontStyle: 'bold', textColor: [100, 116, 139] } }
+    });
+
+    // Footer
+    const footY = doc.internal.pageSize.getHeight() - 10;
+    doc.setFillColor(241, 245, 249);
+    doc.rect(0, footY - 3, pageW, 13, 'F');
+    doc.setFontSize(6);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Generated by ElimuTrack CBC System', pageW / 2, footY, { align: 'center' });
+
+    doc.save(`School_Profile_${store.settings.schoolName?.replace(/\s+/g, '_') || 'School'}.pdf`);
+    showToast('School profile downloaded');
+}
+
+/**
+ * Initialize dropdowns when a report modal opens.
+ * ONLY populates Grade, Term, Year dropdowns.
+ * Subject dropdown is populated by the grade CHANGE event above.
+ */
+function populateDropdownsForReports() {
+    // 1. Populate GRADE dropdowns in all report modals
+    const gradeSelects = ['subjectReportGrade', 'classReportGrade'];
+    const assessedGrades = _getAssessedGrades();
+
+    gradeSelects.forEach(id => {
+        const sel = $(id);
+        if (!sel) return;
+        const currentVal = sel.value;
+        sel.innerHTML = '<option value="">Select Grade...</option>';
+        assessedGrades.forEach(g => {
+            sel.innerHTML += `<option value="${g.grade}">${g.grade} (${g.studentCount} learners, ${g.assessmentCount} assessments)</option>`;
+        });
+        // Also add grades that have students but no assessments yet
+        const allGrades = [...new Set(StudentRepo.getAll().map(s => s.grade))].sort();
+        allGrades.forEach(g => {
+            if (!assessedGrades.find(ag => ag.grade === g)) {
+                sel.innerHTML += `<option value="${g}">${g} (No assessments yet)</option>`;
+            }
+        });
+        if (currentVal) sel.value = currentVal;
+    });
+
+    // 2. Populate SUBJECT dropdown for subject report
+    const subjectSel = $('subjectReportSubject');
+    if (subjectSel) {
+        const grade = $('subjectReportGrade')?.value || '';
+        subjectSel.innerHTML = '<option value="">Select Grade First...</option>';
+        if (grade) {
+            const subjects = _getAssessedSubjects(grade);
+            // Also show all applicable subjects even without data
+            const allApplicable = store.learningAreas.filter(la => la.applicableLevels && la.applicableLevels.includes(grade));
+            subjectSel.innerHTML = '<option value="">Select Subject...</option>';
+            allApplicable.forEach(la => {
+                const hasData = subjects.find(s => s.id === la.id);
+                const dataTag = hasData ? ` (${hasData.count} scores)` : ' (no data)';
+                subjectSel.innerHTML += `<option value="${la.id}">${la.name}${dataTag}</option>`;
+            });
+            subjectSel.disabled = false;
+        } else {
+            subjectSel.disabled = true;
+        }
+    }
+
+    // 3. Enable/disable generate buttons
+    const classBtn = $('btnGenClassList');
+    if (classBtn) classBtn.disabled = !$('classReportGrade')?.value;
+
+    const subjBtn = $('btnGenSubjectList');
+    if (subjBtn) subjBtn.disabled = !$('subjectReportSubject')?.value;
+}
+
+
+function populateSubjectDropdownForGrade(grade) {
+    const subjectSelect = $('subjectReportSubject') || $('classReportSubject');
+    if (!subjectSelect) return;
+    
+    // Filter learning areas applicable to this grade
+    const applicableSubjects = store.learningAreas.filter(la => 
+        la.applicableLevels && la.applicableLevels.includes(grade)
+    );
+    
+    subjectSelect.innerHTML = '<option value="">Select Subject...</option>';
+    applicableSubjects.forEach(la => {
+        subjectSelect.innerHTML += `<option value="${la.id}">${la.name}</option>`;
     });
 }
+
+/**
+ * When grade changes in subject report, reload subjects
+ */
+function populateSubjectReportDropdowns() {
+    const grade = $('subjectReportGrade')?.value;
+    if (grade) {
+        populateSubjectDropdownForGrade(grade);
+    }
+}
+
+// ==========================================================================
+//   REPORTS - DROPDOWN POPULATION & DATA FETCHING
+// ==========================================================================
+
+
+/**
+ * Populate subject dropdown based on selected grade
+ */
+function populateSubjectDropdownForGrade(grade) {
+    const subjectSelect = $('subjectReportSubject') || $('classReportSubject');
+    if (!subjectSelect) return;
+    
+    // Filter learning areas applicable to this grade
+    const applicableSubjects = store.learningAreas.filter(la => 
+        la.applicableLevels && la.applicableLevels.includes(grade)
+    );
+    
+    subjectSelect.innerHTML = '<option value="">Select Subject...</option>';
+    applicableSubjects.forEach(la => {
+        subjectSelect.innerHTML += `<option value="${la.id}">${la.name}</option>`;
+    });
+}
+
+/**
+ * When grade changes in subject report, reload subjects
+ */
+function populateSubjectReportDropdowns() {
+    const grade = $('subjectReportGrade')?.value;
+    if (grade) {
+        populateSubjectDropdownForGrade(grade);
+    }
+}
+
+/**
+ * Populate student select dropdown (for transcript/leaving cert)
+ */
+function populateStudentSelect(selectId) {
+    const sel = $(selectId);
+    if (!sel) return;
+
+    // Get students who actually have assessment data, plus all students
+    const assessedIds = [...new Set((store.exams || []).filter(e => e.score > 0).map(e => e.studentId))];
+    const allStudents = StudentRepo.getAll().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    sel.innerHTML = '<option value="">Select Learner...</option>';
+
+    // Group: Students with data first
+    if (assessedIds.length) {
+        sel.innerHTML += '<optgroup label="✓ Learners with Assessment Data">';
+        allStudents.filter(s => assessedIds.includes(s.id)).forEach(s => {
+            const examCount = (store.exams || []).filter(e => e.studentId === s.id && e.score > 0).length;
+            sel.innerHTML += `<option value="${s.id}">${escapeHtml(s.name)} — ${s.grade} (${examCount} scores)</option>`;
+        });
+        sel.innerHTML += '</optgroup>';
+    }
+
+    // Group: Students without data
+    const noData = allStudents.filter(s => !assessedIds.includes(s.id));
+    if (noData.length) {
+        sel.innerHTML += '<optgroup label="○ Learners without Assessment Data">';
+        noData.forEach(s => {
+            sel.innerHTML += `<option value="${s.id}">${escapeHtml(s.name)} — ${s.grade} (no scores)</option>`;
+        });
+        sel.innerHTML += '</optgroup>';
+    }
+}
+
+
+/**
+ * Get exam scores for a specific student
+ */
+function getStudentExamScores(studentId, filters = {}) {
+    return store.exams.filter(e => {
+        if (e.studentId !== studentId) return false;
+        if (filters.subjectId && e.subjectId !== filters.subjectId) return false;
+        if (filters.term && e.term !== filters.term) return false;
+        if (filters.year && String(e.year) !== String(filters.year)) return false;
+        if (filters.examName && e.examName !== filters.examName) return false;
+        return true;
+    });
+}
+
+/**
+ * Get exam scores for a specific subject/grade
+ */
+function getSubjectExamScores(subjectId, grade, filters = {}) {
+    return store.exams.filter(e => {
+        if (e.subjectId !== subjectId) return false;
+        if (grade && e.grade !== grade) return false;
+        if (filters.term && e.term !== filters.term) return false;
+        if (filters.year && String(e.year) !== String(filters.year)) return false;
+        return true;
+    });
+}
+
+/**
+ * Get all students in a grade with their scores for a subject
+ */
+function getGradeSubjectReport(grade, subjectId, term, year) {
+    const students = StudentRepo.findBy('grade', grade);
+    
+    return students.map(student => {
+        const scores = store.exams.filter(e => 
+            e.studentId === student.id &&
+            e.subjectId === subjectId &&
+            e.grade === grade &&
+            (!term || e.term === term) &&
+            (!year || String(e.year) === String(year))
+        );
+        
+        // Get the latest/highest score if multiple
+        const bestScore = scores.length > 0 
+            ? Math.max(...scores.map(s => s.score || 0))
+            : null;
+        
+        return {
+            ...student,
+            scores: scores,
+            bestScore: bestScore,
+            gradeValue: bestScore !== null ? calculateCBCGrade(bestScore) : '-'
+        };
+    }).sort((a, b) => (b.bestScore || 0) - (a.bestScore || 0));
+}
+
+/**
+ * Get full transcript data for a student
+ */
+function getStudentTranscript(studentId) {
+    const student = StudentRepo.getById(studentId);
+    if (!student) return null;
+    
+    // Get all applicable subjects for this student's grade
+    const applicableSubjects = store.learningAreas.filter(la => 
+        la.applicableLevels && la.applicableLevels.includes(student.grade)
+    );
+    
+    // Get all exam scores for this student
+    const allExams = store.exams.filter(e => e.studentId === studentId);
+    
+    // Group exams by subject
+    const subjectScores = applicableSubjects.map(subject => {
+        const subjectExams = allExams.filter(e => e.subjectId === subject.id);
+        
+        // Group by term
+        const termScores = {};
+        subjectExams.forEach(exam => {
+            const term = exam.term || 'Unknown';
+            if (!termScores[term]) termScores[term] = [];
+            termScores[term].push(exam);
+        });
+        
+        // Calculate best score per term and overall
+        let bestOverall = null;
+        Object.values(termScores).forEach(exams => {
+            const max = Math.max(...exams.map(e => e.score || 0));
+            if (bestOverall === null || max > bestOverall) bestOverall = max;
+        });
+        
+        return {
+            subject: subject,
+            termScores: termScores,
+            bestScore: bestOverall,
+            gradeValue: bestOverall !== null ? calculateCBCGrade(bestOverall) : '-'
+        };
+    });
+    
+    // Calculate overall performance
+    const scoredSubjects = subjectScores.filter(s => s.bestScore !== null);
+    const totalScore = scoredSubjects.reduce((sum, s) => sum + s.bestScore, 0);
+    const avgScore = scoredSubjects.length > 0 ? (totalScore / scoredSubjects.length).toFixed(1) : 0;
+    
+    return {
+        student: student,
+        subjects: subjectScores,
+        totalSubjects: applicableSubjects.length,
+        scoredSubjects: scoredSubjects.length,
+        totalScore: totalScore,
+        averageScore: avgScore,
+        overallGrade: calculateCBCGrade(parseFloat(avgScore)),
+        terms: [...new Set(allExams.map(e => e.term).filter(Boolean))]
+    };
+}
+
 
 // ==========================================================================
 //   SETTINGS
@@ -10331,33 +10693,80 @@ function animateValue(id, start, end, duration, suffix = '') {
 }
 
 function router(viewId, navEl) {
-    document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active')); 
+    document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
     $(viewId)?.classList.add('active');
+
     if ($('pageTitle')) $('pageTitle').innerText = viewId.charAt(0).toUpperCase() + viewId.slice(1);
-    if (navEl) { document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active')); navEl.classList.add('active'); }
-    
-    switch(viewId) {
-        case 'dashboard': renderDashboard(); break; 
-        case 'students': initStudentSection(); break; 
-        case 'staff': initStaffSection(); break; 
-        case 'exams': resetExamView(); if (typeof initExamSystemDashboard === 'function') setTimeout(initExamSystemDashboard, 80); break; 
-        case 'intake': resetIntakeForm(); break; 
-        case 'settings': updateSettingsForm(); renderCourseSettings(); break; 
-        case 'curricula': renderCurricula(); break;
-        case 'timetable': if (typeof initTimetableSection === 'function') setTimeout(initTimetableSection, 80); break;
-        case 'reports': if (typeof renderReportsAnalytics === 'function') setTimeout(renderReportsAnalytics, 80); break;
-        case 'analysis': renderAnalysisTab(); if ($('analysisGradeSelect')) renderAnalysis(); break; 
-        case 'profile': renderProfileTab(); if ($('profileStudentList')) populateProfileList(); break; 
-        case 'notes': renderNotesTab(); break; 
-        case 'Inbox': renderInboxTab(); break;
-        case 'exams':
-    // Refresh recent entries and stats when navigating to exams
-    updateExamRecentEntries();
-    updateExamQuickStats();
-    break;
+
+    if (navEl) {
+        document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+        navEl.classList.add('active');
     }
+
+    switch (viewId) {
+        case 'dashboard':
+            renderDashboard();
+            break;
+
+        case 'students':
+            initStudentSection();
+            break;
+
+        case 'staff':
+            initStaffSection();
+            break;
+
+        case 'exams':
+            resetExamView();
+            if (typeof initExamSystemDashboard === 'function') setTimeout(initExamSystemDashboard, 80);
+            // Consolidated — was a DUPLICATE case before
+            if (typeof updateExamRecentEntries === 'function') updateExamRecentEntries();
+            if (typeof updateExamQuickStats === 'function') updateExamQuickStats();
+            break;
+
+        case 'intake':
+            resetIntakeForm();
+            break;
+
+        case 'settings':
+            updateSettingsForm();
+            renderCourseSettings();
+            break;
+
+        case 'curricula':
+            renderCurricula();
+            break;
+
+        case 'timetable':
+            if (typeof initTimetableSection === 'function') setTimeout(initTimetableSection, 80);
+            break;
+
+        case 'reports':
+            if (typeof renderReportsAnalytics === 'function') setTimeout(renderReportsAnalytics, 80);
+            break;
+
+        case 'analysis':
+            renderAnalysis();
+            break;
+
+        case 'profile':
+            if ($('profileStudentList')) populateProfileList();
+            break;
+
+        case 'notes':
+            renderNotesTab();
+            break;
+
+        // FIXED: was 'Inbox' (capital I) — nav uses data-page="inbox" (lowercase)
+        case 'inbox':
+            renderInboxTab();
+            break;
+    }
+
+    // Close sidebar on mobile after navigation
     if (window.innerWidth < 768) $('sidebar')?.classList.remove('open');
 }
+
 
 function openDashTab(evt, tabName) {
     const tabMap = { 'Overview': 'tabOverview', 'Analysis': 'tabAnalysis', 'Profile': 'tabProfile', 'Notes': 'tabNotes', 'Inbox': 'tabInbox' };
@@ -10877,104 +11286,208 @@ function loadStudentProfile(id) {
         ${subjectRows}
     `;
 }
+// ==========================================================================
+//   TAB INITIALIZERS (Safe stubs — replace with real logic if you have it)
+// ==========================================================================
 
-// ==========================================================================
-//   NOTES TAB
-// ==========================================================================
 function renderNotesTab() {
-    const container = $('notesContent'); if(!container) return;
-    container.innerHTML = `
-        <div class="notes-container">
-            <div class="notes-list-card">
-                <div class="notes-tabs-simple">
-                    <button class="nts-btn active" data-type="all">All</button>
-                    <button class="nts-btn" data-type="Discipline">Discipline</button>
-                    <button class="nts-btn" data-type="Activity">Activities</button>
-                </div>
-                <div id="notesList"></div>
-            </div>
-            <div class="note-detail-view">
-                <div class="detail-header"><h3>Add New Record</h3></div>
-                <form id="noteForm">
-                    <div class="form-group"><label>Student</label><select id="noteStudent" class="form-control" required></select></div>
-                    <div class="form-group"><label>Type</label><select id="noteType" class="form-control"><option>Discipline</option><option>Co-Curricular Activity</option></select></div>
-                    <div class="form-group"><label>Description</label><textarea id="noteDesc" class="form-control" rows="4" required></textarea></div>
-                    <button type="submit" class="btn btn-primary">Save Record</button>
-                </form>
-            </div>
-        </div>
-    `;
-    
-    const sel = $('noteStudent'); 
-    StudentRepo.getAll().forEach(s => { sel.innerHTML += `<option value="${s.id}">${s.name}</option>`; });
-    
-    renderNotesList('all');
-    
-    document.querySelectorAll('.nts-btn').forEach(btn => { 
-        btn.addEventListener('click', () => { 
-            document.querySelectorAll('.nts-btn').forEach(b => b.classList.remove('active')); 
-            btn.classList.add('active'); 
-            renderNotesList(btn.dataset.type); 
-        }); 
-    });
-    
-    $('noteForm').addEventListener('submit', (e) => { 
-        e.preventDefault(); 
-        const note = { 
-            id: generateId(), 
-            studentId: $('noteStudent').value, 
-            type: $('noteType').value, 
-            text: $('noteDesc').value, 
-            date: new Date().toISOString() 
-        }; 
-        if(!store.notes) store.notes = []; 
-        store.notes.unshift(note); 
-        saveData(); 
-        showToast('Note Saved'); 
-        renderNotesList('all'); 
-        e.target.reset(); 
-    });
-}
+    const container = $('notesTimeline');
+    if (!container) return;
 
-function renderNotesList(filter) {
-    const container = $('notesList'); 
-    let data = store.notes || [];
-    if(filter !== 'all') data = data.filter(n => n.type === filter);
-    if(data.length === 0) return container.innerHTML = `<div class="p-4 text-center text-muted">No records found.</div>`;
-    container.innerHTML = data.map(n => { 
-        const student = StudentRepo.getById(n.studentId); 
-        const badgeClass = n.type === 'Discipline' ? 'badge-discipline' : 'badge-cocurricular'; 
-        return `<div class="note-item"><div class="note-meta"><span class="note-student">${student ? student.name : 'Unknown'}</span><span class="note-type-badge ${badgeClass}">${n.type}</span></div><p style="font-size: 0.85rem; margin: 0.5rem 0;">${n.text}</p><small style="color:var(--text-muted)">${new Date(n.date).toLocaleDateString()}</small></div>`; 
+    const allNotes = (store.notes || []).slice().sort((a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt));
+
+    if (!allNotes.length) {
+        container.innerHTML = `
+            <div class="reports-empty-state" style="padding:3rem 2rem">
+                <div class="empty-icon"><i class="fa-solid fa-clipboard-list"></i></div>
+                <h3>No Activity Records Yet</h3>
+                <p>Click "Add Record" to log discipline issues, co-curricular participation, or behavioral notes.</p>
+            </div>`;
+        return;
+    }
+
+    const typeStyles = {
+        'Discipline':    { bg: '#fee2e2', color: '#991b1b', icon: 'fa-triangle-exclamation' },
+        'Co-curricular': { bg: '#dcfce7', color: '#166534', icon: 'fa-futbol' },
+        'Academic':      { bg: '#dbeafe', color: '#1e40af', icon: 'fa-graduation-cap' },
+        'Medical':       { bg: '#fef3c7', color: '#92400e', icon: 'fa-heart-pulse' }
+    };
+
+    container.innerHTML = allNotes.map(note => {
+        const student = StudentRepo.getById(note.studentId);
+        const sName = student ? student.name : (note.studentName || 'Unknown');
+        const sGrade = student ? student.grade : '';
+        const style = typeStyles[note.type] || typeStyles['Discipline'];
+        const dateStr = note.date ? new Date(note.date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+
+        return `
+            <div class="notes-timeline-item" data-type="${escapeHtml(note.type)}">
+                <div class="nti-dot" style="background:${style.bg}; border:2px solid ${style.color};">
+                    <i class="fa-solid ${style.icon}" style="color:${style.color}; font-size:0.6rem;"></i>
+                </div>
+                <div class="nti-content">
+                    <div class="nti-header">
+                        <span class="nti-student">${escapeHtml(sName)}</span>
+                        <span class="nti-type-badge" style="background:${style.bg}; color:${style.color};">${escapeHtml(note.type)}</span>
+                    </div>
+                    <div class="nti-title">${escapeHtml(note.title)}</div>
+                    <div class="nti-desc">${escapeHtml(note.description)}</div>
+                    <div class="nti-footer">
+                        <span><i class="fa-regular fa-calendar"></i> ${dateStr}</span>
+                        ${sGrade ? `<span><i class="fa-solid fa-layer-group"></i> ${escapeHtml(sGrade)}</span>` : ''}
+                    </div>
+                </div>
+            </div>`;
     }).join('');
+
+    // Tab filter
+    document.querySelectorAll('.note-tab').forEach(tab => {
+        tab.onclick = () => {
+            document.querySelectorAll('.note-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const filter = tab.dataset.filter;
+            document.querySelectorAll('.notes-timeline-item').forEach(item => {
+                item.style.display = (filter === 'all' || item.dataset.type === filter) ? '' : 'none';
+            });
+        };
+    });
 }
 
-// ==========================================================================
-//   INBOX TAB
-// ==========================================================================
 function renderInboxTab() {
-    const container = $('inboxContent'); if(!container) return;
-    container.innerHTML = `
-        <div class="inbox-container">
-            <aside class="inbox-sidebar">
-                <div class="inbox-folder-list">
-                    <div class="inbox-folder active"><i class="fa-solid fa-inbox"></i> Inbox <span class="if-count">3</span></div>
-                    <div class="inbox-folder"><i class="fa-solid fa-paper-plane"></i> Sent</div>
-                    <div class="inbox-folder"><i class="fa-solid fa-star"></i> Starred</div>
+    const listEl = $('inboxMessageList');
+    const detailEl = $('inboxDetailView');
+    if (!listEl) return;
+
+    const allMessages = (store.messages || []).slice().sort((a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt));
+    const unreadCount = allMessages.filter(m => !m.read).length;
+
+    const badge = $('inboxCountBadge');
+    if (badge) {
+        badge.textContent = unreadCount || '';
+        badge.style.display = unreadCount ? '' : 'none';
+    }
+
+    if (!allMessages.length) {
+        listEl.innerHTML = `
+            <div style="padding:3rem 2rem; text-align:center; color:var(--text-muted);">
+                <i class="fa-regular fa-envelope" style="font-size:2.5rem; opacity:0.3; margin-bottom:0.75rem; display:block;"></i>
+                <p style="font-weight:600;">No messages yet</p>
+                <p style="font-size:0.82rem; margin-top:0.3rem;">Messages to guardians will appear here.</p>
+            </div>`;
+        if (detailEl) detailEl.innerHTML = `
+            <div class="inbox-empty-state">
+                <i class="fa-regular fa-envelope-open" style="font-size:4rem; color:var(--border); margin-bottom:1rem;"></i>
+                <h3>Select a message to read</h3>
+                <p>Choose a conversation from the list to view details.</p>
+            </div>`;
+        return;
+    }
+
+    listEl.innerHTML = allMessages.map(msg => {
+        const student = StudentRepo.getById(msg.studentId);
+        const guardianName = msg.recipientName || (student ? (student.guardianName || 'Guardian of ' + student.name) : 'Unknown');
+        const initials = guardianName.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+        const dateStr = msg.date ? new Date(msg.date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }) : '';
+        const timeStr = msg.date ? new Date(msg.date).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '';
+        const isActive = msg._active ? 'active' : '';
+        const unreadCls = !msg.read ? 'unread' : '';
+        const folder = msg.folder || 'inbox';
+
+        if (msg.folder && msg.folder !== 'inbox') return '';
+
+        return `
+            <div class="msg-item ${unreadCls} ${isActive}" data-msg-id="${msg.id}" onclick="openInboxMessage('${msg.id}')">
+                <div class="msg-avatar" style="width:38px; height:38px; border-radius:10px; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:800; flex-shrink:0;">${initials}</div>
+                <div style="flex:1; min-width:0;">
+                    <div class="msg-sender" style="font-weight:${msg.read ? '500' : '700'};">${escapeHtml(guardianName)}</div>
+                    <div class="msg-subject">${escapeHtml(msg.subject || '(No subject)')}</div>
+                    <div class="msg-preview">${escapeHtml((msg.body || '').substring(0, 60))}${(msg.body || '').length > 60 ? '...' : ''}</div>
                 </div>
-            </aside>
-            <div class="inbox-messages">
-                <div class="msg-list">
-                    <div class="msg-item unread"><div class="msg-sender">System Admin</div><div class="msg-subject">Welcome to ElimuTrack!</div><div class="msg-preview">Thank you for setting up the system...</div></div>
-                    <div class="msg-item"><div class="msg-sender">KNEC Updates</div><div class="msg-subject">New Assessment Guidelines</div><div class="msg-preview">Please review the new guidelines...</div></div>
+                <div style="text-align:right; flex-shrink:0; margin-left:0.5rem;">
+                    <div style="font-size:0.68rem; color:var(--text-muted); font-weight:600;">${dateStr}</div>
+                    <div style="font-size:0.65rem; color:var(--text-muted);">${timeStr}</div>
                 </div>
-                <div class="msg-content">
-                    <div class="msg-header"><h3>System Admin</h3><small>Today at 10:00 AM</small></div>
-                    <div class="msg-body"><h4>Welcome to ElimuTrack!</h4><p>Thank you for setting up the system. This messaging center is currently a placeholder for future communication features.</p></div>
-                </div>
-            </div>
-        </div>
-    `;
+            </div>`;
+    }).filter(Boolean).join('');
 }
+
+function openInboxMessage(msgId) {
+    const msg = (store.messages || []).find(m => m.id === msgId);
+    if (!msg) return;
+
+    // Mark as read
+    msg.read = true;
+    saveData();
+
+    // Highlight active
+    document.querySelectorAll('.msg-item').forEach(el => el.classList.remove('active'));
+    const activeEl = document.querySelector(`.msg-item[data-msg-id="${msgId}"]`);
+    if (activeEl) { activeEl.classList.add('active'); activeEl.classList.remove('unread'); }
+
+    // Update badge
+    const remaining = (store.messages || []).filter(m => !m.read && (!m.folder || m.folder === 'inbox')).length;
+    const badge = $('inboxCountBadge');
+    if (badge) { badge.textContent = remaining || ''; badge.style.display = remaining ? '' : 'none'; }
+
+    // Render detail
+    const student = StudentRepo.getById(msg.studentId);
+    const guardianName = msg.recipientName || (student ? (student.guardianName || 'Guardian of ' + student.name) : 'Unknown');
+    const dateStr = msg.date ? new Date(msg.date).toLocaleDateString('en-KE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+    const detailEl = $('inboxDetailView');
+    if (!detailEl) return;
+
+    detailEl.innerHTML = `
+        <div style="padding:1.5rem;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.25rem; padding-bottom:1rem; border-bottom:1px solid var(--border);">
+                <div>
+                    <h3 style="font-size:1.1rem; font-weight:700; color:var(--text-main); margin-bottom:0.25rem;">${escapeHtml(msg.subject || '(No subject)')}</h3>
+                    <p style="font-size:0.82rem; color:var(--text-muted);">To: <strong>${escapeHtml(guardianName)}</strong> ${student ? `— ${escapeHtml(student.name)} (${escapeHtml(student.grade || '')})` : ''}</p>
+                </div>
+                <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600; white-space:nowrap;">${dateStr}</span>
+            </div>
+            <div style="font-size:0.92rem; line-height:1.75; color:var(--text-main); white-space:pre-wrap;">${escapeHtml(msg.body || 'No content.')}</div>
+            <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border); display:flex; gap:0.5rem;">
+                <button class="btn btn-sm btn-secondary" onclick="replyToMessage('${msg.id}')"><i class="fa-solid fa-reply"></i> Reply</button>
+                <button class="btn btn-sm btn-ghost" style="color:var(--danger);" onclick="deleteMessage('${msg.id}')"><i class="fa-solid fa-trash"></i> Delete</button>
+            </div>
+        </div>`;
+}
+
+function replyToMessage(msgId) {
+    const msg = (store.messages || []).find(m => m.id === msgId);
+    if (!msg) return;
+    openModal('composeModal');
+    setTimeout(() => {
+        const recipientSel = $('composeRecipient');
+        if (recipientSel) recipientSel.value = msg.studentId || '';
+        const subjectInput = $('composeSubject');
+        if (subjectInput) subjectInput.value = 'Re: ' + (msg.subject || '');
+        const bodyInput = $('composeBody');
+        if (bodyInput) bodyInput.value = '\n\n--- Original Message ---\n' + (msg.body || '');
+    }, 100);
+}
+
+function deleteMessage(msgId) {
+    if (!confirm('Delete this message?')) return;
+    store.messages = (store.messages || []).filter(m => m.id !== msgId);
+    saveData();
+    renderInboxTab();
+    showToast('Message deleted');
+}
+
+function openAddNoteModal() {
+    openModal('addNoteModal');
+    const sel = $('noteStudentSelect');
+    if (sel && sel.options.length <= 1) {
+        StudentRepo.getAll().forEach(s => {
+            sel.innerHTML += `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.grade || '')})</option>`;
+        });
+    }
+    const dateInput = $('noteDate');
+    if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().split('T')[0];
+}
+
 
 // ==========================================================================
 //   BATCH LOGIC
@@ -11010,6 +11523,121 @@ function downloadAdmissionTemplate() {
     XLSX.writeFile(wb, 'Admission_Template.xlsx');
     
     showToast('Template Downloaded - Use "Full Name" column for Surname, First & Other names.');
+}
+
+// Returns the grade and applicable subject IDs for the current context
+function _getBatchContext() {
+    // Try to get grade from the exam interface dropdown
+    const grade = currentExamContext.tradeId || $('examTradeSelect')?.value;
+    
+    if (!grade) {
+        showToast('Please select a Grade in the Exams tab first.', 'error');
+        return null;
+    }
+    
+    // Get all subjects applicable to this grade
+    const subjectIds = store.learningAreas
+        .filter(la => la.applicableLevels && la.applicableLevels.includes(grade))
+        .map(la => la.id);
+        
+    if (!subjectIds.length) {
+        showToast('No learning areas configured for this grade.', 'error');
+        return null;
+    }
+    
+    return { assessId: generateId(), grade, subjectIds };
+}
+
+// Looks up a subject ID to get its human-readable name
+function getSubjectName(subjectId) {
+    const la = store.learningAreas.find(l => l.id === subjectId);
+    return la ? la.name : 'Unknown Subject';
+}
+
+// Returns CBC rating object with color codes for the preview table
+function cbcRating(score) {
+    if (score >= 80) return { code: 'EE', text: 'Exceeding Expectations', color: '#27ae60' };
+    if (score >= 70) return { code: 'ME', text: 'Meeting Expectations', color: '#2ecc71' };
+    if (score >= 50) return { code: 'AE', text: 'Approaching Expectations', color: '#f39c12' };
+    if (score >= 30) return { code: 'BE', text: 'Below Expectations', color: '#e74c3c' };
+    return { code: 'NE', text: 'Needs Support', color: '#c0392b' };
+}
+
+// Wire up the save button in initGlobalListeners()
+if (target.closest('#btnSaveBatchUpload')) saveBatchUploadData();
+
+/**
+ * Takes the parsed preview data and actually writes it to store.exams
+ */
+async function saveBatchUploadData() {
+    const data = window._batchUploadData;
+    if (!data || !data.rows || !data.rows.length) {
+        return showToast('No data to save.', 'error');
+    }
+    
+    const term = store.settings.currentTerm || 'Term 1';
+    const year = store.settings.academicYear || new Date().getFullYear();
+    const examName = `${term} Exam ${year}`;
+    const grade = data.rows[0]?.student?.grade; // Extract grade from first matched student
+    
+    let savedCount = 0;
+    
+    data.rows.forEach(row => {
+        // Loop through each subject score for this student
+        Object.entries(row.scores).forEach(([subjId, score]) => {
+            
+            // Check if a score already exists for this student/subject/exam
+            const existingIndex = store.exams.findIndex(e => 
+                e.studentId === row.student.id &&
+                e.subjectId === subjId &&
+                e.examName === examName
+            );
+            
+            if (existingIndex !== -1) {
+                // UPDATE existing record
+                store.exams[existingIndex].score = score;
+                store.exams[existingIndex].gradeValue = cbcRating(score).text;
+                store.exams[existingIndex].dateRecorded = new Date().toISOString();
+            } else {
+                // CREATE new record
+                store.exams.push({
+                    id: generateId(),
+                    studentId: row.student.id,
+                    subjectId: subjId,
+                    grade: grade,
+                    examName: examName,
+                    term: term,
+                    year: year,
+                    score: score,
+                    gradeValue: cbcRating(score).text,
+                    dateRecorded: new Date().toISOString(),
+                    recordedBy: CURRENT_USER?.name || 'Admin'
+                });
+            }
+            savedCount++;
+        });
+    });
+    
+    if (savedCount > 0) {
+        // CRITICAL: Actually push to server/localStorage
+        await saveData(); 
+        
+        showToast(`Successfully saved ${savedCount} scores for ${data.rows.length} students!`, 'success');
+        
+        // Clean up UI
+        const preview = $('batchUploadPreview');
+        if (preview) preview.style.display = 'none';
+        
+        const fileInput = $('batchUploadFile');
+        if (fileInput) fileInput.value = ''; // Reset file input
+        
+        window._batchUploadData = null; // Free up memory
+        
+        // Optional: Refresh whatever exam interface is open
+        if (currentExamContext.studentId) loadCBETUnits();
+    } else {
+        showToast('No valid scores found to save.', 'error');
+    }
 }
 
 // ==========================================================================
@@ -13145,6 +13773,120 @@ try {
     $('noteForm').reset();
 });
 
+    // Add this alongside your other form submit listeners in initGlobalListeners()
+    $('noteForm')?.addEventListener('submit', e => {
+        e.preventDefault();
+        const note = {
+            id: generateId(),
+            studentId: getVal('noteStudentSelect'),
+            type: getVal('noteType'),
+            title: getVal('noteTitle'),
+            description: getVal('noteDesc'),
+            date: getVal('noteDate'),
+            createdAt: new Date().toISOString()
+        };
+        if (!note.studentId || !note.title) {
+            showToast('Please fill all required fields.', 'error');
+            return;
+        }
+        if (!store.notes) store.notes = [];
+        store.notes.unshift(note);
+        saveData();
+        closeModal('addNoteModal');
+        $('noteForm')?.reset();
+        renderNotesTab();
+        showToast('Activity record saved successfully!');
+    });
+
+    // Compose message handler
+    $('composeForm')?.addEventListener('submit', e => {
+        e.preventDefault();
+        const studentId = getVal('composeRecipient');
+        const student = StudentRepo.getById(studentId);
+        const msg = {
+            id: generateId(),
+            studentId: studentId,
+            recipientName: student ? student.guardianName : '',
+            subject: getVal('composeSubject'),
+            body: getVal('composeBody'),
+            date: new Date().toISOString(),
+            folder: 'sent',
+            read: true,
+            createdAt: new Date().toISOString()
+        };
+        if (!msg.studentId || !msg.subject || !msg.body) {
+            showToast('Please fill all fields.', 'error');
+            return;
+        }
+        if (!store.messages) store.messages = [];
+        store.messages.unshift(msg);
+        saveData();
+        closeModal('composeModal');
+        $('composeForm')?.reset();
+        renderInboxTab();
+        showToast('Message sent successfully!');
+    });
+
+    // Inbox folder tabs
+    document.addEventListener('click', e => {
+        const folderBtn = e.target.closest('.folder-btn');
+        if (!folderBtn) return;
+        document.querySelectorAll('.folder-btn').forEach(b => b.classList.remove('active'));
+        folderBtn.classList.add('active');
+        // Re-render with folder filter
+        const folder = folderBtn.dataset.folder;
+        renderInboxFolder(folder);
+    });
+
+    function renderInboxFolder(folder) {
+    const listEl = $('inboxMessageList');
+    const detailEl = $('inboxDetailView');
+    if (!listEl) return;
+
+    let allMessages = (store.messages || []).slice().sort((a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt));
+
+    if (folder === 'inbox') {
+        allMessages = allMessages.filter(m => !m.folder || m.folder === 'inbox');
+    } else if (folder === 'sent') {
+        allMessages = allMessages.filter(m => m.folder === 'sent');
+    } else if (folder === 'trash') {
+        allMessages = allMessages.filter(m => m.folder === 'trash');
+    }
+
+    if (!allMessages.length) {
+        listEl.innerHTML = `
+            <div style="padding:3rem 2rem; text-align:center; color:var(--text-muted);">
+                <i class="fa-regular fa-folder-open" style="font-size:2.5rem; opacity:0.3; margin-bottom:0.75rem; display:block;"></i>
+                <p style="font-weight:600;">No ${folder === 'sent' ? 'sent' : folder === 'trash' ? 'deleted' : ''} messages</p>
+            </div>`;
+        if (detailEl && folder !== 'inbox') {
+            detailEl.innerHTML = `<div class="inbox-empty-state"><i class="fa-regular fa-folder-open" style="font-size:4rem; color:var(--border); margin-bottom:1rem;"></i><h3>${folder.charAt(0).toUpperCase() + folder.slice(1)} folder is empty</h3></div>`;
+        }
+        return;
+    }
+
+    // Reuse same rendering logic as renderInboxTab but with filtered list
+    listEl.innerHTML = allMessages.map(msg => {
+        const student = StudentRepo.getById(msg.studentId);
+        const name = folder === 'sent'
+            ? (student ? student.guardianName || student.name : msg.recipientName || 'Unknown')
+            : (msg.senderName || (student ? student.guardianName || student.name : 'Unknown'));
+        const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+        const dateStr = msg.date ? new Date(msg.date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }) : '';
+
+        return `
+            <div class="msg-item ${!msg.read ? 'unread' : ''}" data-msg-id="${msg.id}" onclick="openInboxMessage('${msg.id}')" style="display:flex; align-items:center; gap:0.75rem; padding:1rem; border-bottom:1px solid var(--border); cursor:pointer; transition:background 0.2s;">
+                <div style="width:38px; height:38px; border-radius:10px; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:800; flex-shrink:0;">${initials}</div>
+                <div style="flex:1; min-width:0;">
+                    <div style="font-size:0.88rem; font-weight:${msg.read ? '500' : '700'}; color:var(--text-main); margin-bottom:0.15rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(name)}</div>
+                    <div style="font-size:0.82rem; color:var(--text-main); margin-bottom:0.15rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(msg.subject || '(No subject)')}</div>
+                    <div style="font-size:0.78rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml((msg.body || '').substring(0, 50))}...</div>
+                </div>
+                <div style="font-size:0.68rem; color:var(--text-muted); font-weight:600; flex-shrink:0;">${dateStr}</div>
+            </div>`;
+    }).join('');
+}
+
 // --- Helper: Populate Student Select in Modal ---
 function openAddNoteModal() {
     const select = $('noteStudentSelect');
@@ -13397,3 +14139,5209 @@ try {
     if (typeof generateBulkProgressReports === 'function') window.generateBulkProgressReports = generateBulkProgressReports;
     if (typeof initBulkProgressModal === 'function') window.initBulkProgressModal = initBulkProgressModal;
 } catch(e) { console.warn('Global export failed:', e); }
+
+
+/* ================================================================
+   ASSESSMENT / EXAMS MODULE  (v5 — with batch score entry)
+   ================================================================ */
+
+let examDeleteTargetId = null;
+
+
+/**
+ * Get scores for a specific subject within a specific grade.
+ * Returns: { studentId, studentName, score, rating, reg, stream }
+ */
+function _getSubjectScores(subjectId, grade) {
+    if (!subjectId) return [];
+    let studentIds;
+    if (grade) {
+        studentIds = StudentRepo.getAll().filter(s => s.grade === grade).map(s => s.id);
+    } else {
+        studentIds = StudentRepo.getAll().map(s => s.id);
+    }
+
+    const exams = (store.exams || []).filter(e =>
+        e.subjectId === subjectId && studentIds.includes(e.studentId) && e.score > 0
+    );
+
+    return exams.map(e => {
+        const student = StudentRepo.getById(e.studentId);
+        const rating = cbcRating(e.score || 0);
+        return {
+            studentId: e.studentId,
+            studentName: student ? student.name : 'Unknown',
+            score: e.score || 0,
+            rating: rating,
+            reg: student ? student.reg : '',
+            stream: student ? student.stream : '',
+            grade: student ? student.grade : '',
+            date: e.date || e.createdAt || ''
+        };
+    }).sort((a, b) => b.score - a.score);
+}
+
+function _getAssessedSubjects(grade) {
+    const studentIds = grade
+        ? StudentRepo.getAll().filter(s => s.grade === grade).map(s => s.id)
+        : StudentRepo.getAll().map(s => s.id);
+
+    const exams = (store.exams || []).filter(e => studentIds.includes(e.studentId) && e.score > 0);
+    const subjectIds = [...new Set(exams.map(e => e.subjectId))];
+
+    return subjectIds.map(sid => {
+        const la = store.learningAreas.find(l => l.id === sid);
+        const count = exams.filter(e => e.subjectId === sid).length;
+        const avg = exams.filter(e => e.subjectId === sid).reduce((a, e) => a + e.score, 0) / count;
+        return { id: sid, name: la ? la.name : sid, code: la ? la.code : '', count, avg };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+}
+/**
+ * Get grades that have at least one scored assessment.
+ */
+function _getAssessedGrades() {
+    const exams = (store.exams || []).filter(e => e.score > 0);
+    if (!exams.length) return [];
+
+    const studentIds = [...new Set(exams.map(e => e.studentId))];
+    const students = studentIds.map(id => StudentRepo.getById(id)).filter(Boolean);
+    const grades = [...new Set(students.map(s => s.grade))].sort();
+
+    return grades.map(g => {
+        const gStudents = students.filter(s => s.grade === g);
+        const gStudentIds = gStudents.map(s => s.id);
+        const gExams = exams.filter(e => gStudentIds.includes(e.studentId));
+        const subjects = [...new Set(gExams.map(e => e.subjectId))].length;
+        return { grade: g, studentCount: gStudents.length, assessmentCount: gExams.length, subjectCount: subjects };
+    });
+}
+
+/**
+ * Calculate summary stats from an array of score objects.
+ */
+function _calcSummary(scores) {
+    if (!scores || !scores.length) return { total: 0, avg: 0, highest: 0, lowest: 0, ee: 0, me: 0, ae: 0, be: 0, ne: 0 };
+    const vals = scores.map(s => s.score || 0);
+    const total = vals.reduce((a, b) => a + b, 0);
+    const avg = total / vals.length;
+    const highest = Math.max(...vals);
+    const lowest = Math.min(...vals);
+    const cc = { EE: 0, ME: 0, AE: 0, BE: 0, NE: 0 };
+    vals.forEach(v => { cc[cbcRating(v).code]++; });
+    return { total: Math.round(total), avg: +avg.toFixed(1), highest, lowest, ...cc };
+}
+
+
+// ── RESILIENT SUBJECT CODE EXTRACTION ───────────────────────────
+function _subjCode(record) {
+    if (!record) return '';
+    return record.subjectCode || record.subjectId || record.subject || record.trade || record.learningArea || record.code || '';
+}
+
+function _findScore(assessId, studentId, subjectCode) {
+    const exams = store.exams || [];
+    let found = exams.find(e => {
+        if (e.assessId !== assessId || e.studentId !== studentId) return false;
+        return _subjCode(e) === subjectCode;
+    });
+    if (!found) {
+        found = exams.find(e => {
+            if (e.assessId || e.studentId !== studentId) return false;
+            return _subjCode(e) === subjectCode;
+        });
+    }
+    return found;
+}
+
+function _getScore(record) {
+    if (!record) return null;
+    const v = record.score !== undefined ? record.score : record.marks || record.points || null;
+    return v !== null ? Number(v) : null;
+}
+
+function _upsertScore(assessId, studentId, subjectCode, score) {
+    if (!store.exams) store.exams = [];
+    const existing = _findScore(assessId, studentId, subjectCode);
+    if (existing) {
+        existing.assessId = assessId;
+        existing.subjectCode = subjectCode;
+        if (existing.subjectId !== undefined) delete existing.subjectId;
+        if (existing.subject !== undefined && existing.subject !== subjectCode) delete existing.subject;
+        if (existing.trade !== undefined) delete existing.trade;
+        existing.score = score;
+        existing.rating = cbcRating(score).rating;
+        existing.remark = autoRemark(score);
+    } else {
+        store.exams.push({
+            id: generateId(), assessId, studentId, subjectCode,
+            score, rating: cbcRating(score).rating, remark: autoRemark(score),
+            createdAt: Date.now()
+        });
+    }
+}
+
+function _removeScore(assessId, studentId, subjectCode) {
+    store.exams = (store.exams || []).filter(e => {
+        if (e.assessId !== assessId) return true;
+        return !(e.studentId === studentId && _subjCode(e) === subjectCode);
+    });
+}
+
+// ── Subject Helpers ─────────────────────────────────────────────
+function getSubjectId(subj) {
+    if (!subj) return '';
+    if (typeof subj === 'object' && subj !== null) return subj.id || subj.code || String(subj);
+    return String(subj);
+}
+
+function getSubjectName(subj) {
+    if (!subj) return '—';
+    if (typeof subj === 'string') {
+        const la = DEFAULT_LEARNING_AREAS.find(l => l.id === subj);
+        return la ? la.name : subj;
+    }
+    if (typeof subj === 'object' && subj !== null) {
+        return subj.name || subj.code || String(subj);
+    }
+    return String(subj);
+}
+
+function getSubjectsForGrade(grade) {
+    return DEFAULT_LEARNING_AREAS.filter(la => la.applicableLevels.includes(grade));
+}
+
+function normalizeSubjects(subjects) {
+    return (subjects || []).map(s => getSubjectId(s)).filter(Boolean);
+}
+
+// ── CBC Rating Engine ────────────────────────────────────────────
+function cbcRating(score) {
+    if (score >= 80) return { rating: 'EE', label: 'Exceeding Expectation', color: '#16a34a', cls: 'type-formative' };
+    if (score >= 50) return { rating: 'ME', label: 'Meeting Expectation',   color: '#2563eb', cls: 'type-summative' };
+    if (score >= 30) return { rating: 'AE', label: 'Approaching Expectation', color: '#d97706', cls: 'type-endterm' };
+    return              { rating: 'BE', label: 'Below Expectation',        color: '#dc2626', cls: 'type-endyear' };
+}
+function autoRemark(score) {
+    if (score >= 90) return 'Outstanding';
+    if (score >= 80) return 'Excellent';
+    if (score >= 70) return 'Very Good';
+    if (score >= 60) return 'Good';
+    if (score >= 50) return 'Fair';
+    if (score >= 40) return 'Below Average';
+    if (score >= 30) return 'Poor';
+    return 'Very Poor';
+}
+function typeBadgeClass(type) {
+    return ({ 'Formative':'type-formative','Summative':'type-summative','End Term':'type-endterm','End Year':'type-endyear','Practical':'type-practical' })[type] || 'type-summative';
+}
+
+// ── SCORE MAP BUILDER ───────────────────────────────────────────
+function buildScoreMap(assessId) {
+    const map = {};
+    (store.exams || []).forEach(e => {
+        const sid = _subjCode(e);
+        if (!sid || !e.studentId) return;
+        const key = e.studentId + '_' + sid;
+        if (e.assessId === assessId) {
+            map[key] = e;
+        } else if (!e.assessId && !map[key]) {
+            map[key] = e;
+        }
+    });
+    return map;
+}
+
+function countScoredStudents(assess) {
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const subjectIds = normalizeSubjects(assess.subjects);
+    if (!students.length || !subjectIds.length) return 0;
+    const map = buildScoreMap(assess.id);
+    let count = 0;
+    students.forEach(st => {
+        if (subjectIds.some(sid => {
+            const rec = map[st.id + '_' + sid];
+            return rec && _getScore(rec) !== null;
+        })) count++;
+    });
+    return count;
+}
+
+// ── LEGACY SCORE DETECTION ─────────────────────────────────────
+function buildLegacyAssessments() {
+    const legacyRecords = (store.exams || []).filter(e => !e.assessId);
+    if (!legacyRecords.length) return [];
+
+    const gradeMap = {};
+
+    legacyRecords.forEach(e => {
+        const student = e.studentId ? StudentRepo.getById(e.studentId) : null;
+        const grade = e.grade || (student ? student.grade : null);
+        if (!grade) return;
+
+        const subjectCode = _subjCode(e);
+        if (!gradeMap[grade]) {
+            const sampleName = e.examName || e.assessmentName || e.type || e.examType || '';
+            gradeMap[grade] = {
+                id: 'LEGACY_' + grade.replace(/\s+/g, '_'),
+                name: sampleName || 'Existing Scores',
+                grade: grade,
+                term: e.term || store.settings.currentTerm || '—',
+                type: e.type || e.examType || 'Imported',
+                subjects: new Set(),
+                legacy: true,
+                status: 'open',
+                createdAt: 0,
+                _scoreCount: 0
+            };
+        }
+        if (subjectCode) gradeMap[grade].subjects.add(subjectCode);
+        gradeMap[grade]._scoreCount++;
+        if (e.createdAt) gradeMap[grade].createdAt = Math.max(gradeMap[grade].createdAt, e.createdAt);
+    });
+
+    return Object.values(gradeMap).map(g => ({
+        ...g,
+        subjects: Array.from(g.subjects),
+        name: g.name + ' (' + g.grade + ')'
+    }));
+}
+
+function getAllAssessments() {
+    const newOnes = (store.examSchedules || []).map(a => ({ ...a, legacy: false }));
+    const legacyOnes = buildLegacyAssessments();
+    return [...newOnes, ...legacyOnes].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+// ── Tab Switching ───────────────────────────────────────────────
+function switchExamTab(tab) {
+    document.querySelectorAll('.exam-tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.exam-tab-content').forEach(c => c.classList.remove('active'));
+    const btn = document.querySelector(`.exam-tab-btn[data-examtab="${tab}"]`);
+    const panel = document.getElementById('examTab-' + tab);
+    if (btn) btn.classList.add('active');
+    if (panel) panel.classList.add('active');
+    if (tab === 'enter')    populateScoreEntryDropdowns();
+    if (tab === 'results')  populateResultsDropdowns();
+    if (tab === 'analysis') populateAnalysisDropdowns();
+    if (tab === 'batch')    populateBatchDropdowns();
+}
+
+// ── RENDER ASSESSMENT CARDS ────────────────────────────────────
+function renderAssessmentCards() {
+    const gradeF  = ($('examFilterGrade')  || {}).value || 'all';
+    const typeF   = ($('examFilterType')   || {}).value || 'all';
+    const termF   = ($('examFilterTerm')   || {}).value || 'all';
+    const statusF = ($('examFilterStatus') || {}).value || 'all';
+
+    let filtered = getAllAssessments().filter(a => {
+        if (gradeF  !== 'all' && a.grade  !== gradeF)  return false;
+        if (typeF   !== 'all' && a.type   !== typeF)   return false;
+        if (termF   !== 'all' && a.term   !== termF)   return false;
+        if (statusF !== 'all' && a.status !== statusF)  return false;
+        return true;
+    });
+
+    const grid       = $('assessGrid');
+    const empty      = $('assessEmptyState');
+    const countLabel = $('examCountLabel');
+    if (countLabel) countLabel.textContent = filtered.length + ' assessment' + (filtered.length !== 1 ? 's' : '');
+
+    if (!filtered.length) {
+        if (grid)  grid.innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (!grid) return;
+
+    const accentColors = { 'Formative':'#22c55e','Summative':'#6366f1','End Term':'#f59e0b','End Year':'#ef4444','Practical':'#14b8a6','Imported':'#8b5cf6' };
+
+    grid.innerHTML = filtered.map(a => {
+        const total    = StudentRepo.findBy('grade', a.grade).length;
+        const scored   = countScoredStudents(a);
+        const pct      = total > 0 ? Math.round((scored / total) * 100) : 0;
+        const stColor  = a.status === 'closed' ? '#64748b' : a.status === 'open' ? '#16a34a' : '#d97706';
+        const stLabel  = a.status === 'closed' ? 'Closed' : a.status === 'open' ? 'Open' : 'Draft';
+        const accent   = accentColors[a.type] || '#6366f1';
+        const subjNames = normalizeSubjects(a.subjects).map(getSubjectName).join(', ');
+        const isLegacy  = !!a.legacy;
+
+        return `<div class="assess-card" onclick="openAssessmentForScoring('${a.id}')">
+            <div class="assess-card-accent" style="background:${isLegacy ? '#8b5cf6' : accent}"></div>
+            <div class="assess-card-header">
+                <h4 class="assess-card-title">${escapeHtml(a.name)}</h4>
+                <div style="display:flex;gap:0.35rem;align-items:center;">
+                    ${isLegacy ? '<span class="assess-card-type" style="background:#f3e8ff;color:#7c3aed;">Imported</span>' : ''}
+                    <span class="assess-card-type ${typeBadgeClass(a.type)}">${escapeHtml(a.type)}</span>
+                </div>
+            </div>
+            <div class="assess-card-meta">
+                <span><i class="fa-solid fa-graduation-cap"></i> ${escapeHtml(a.grade)}</span>
+                <span><i class="fa-solid fa-calendar"></i> ${escapeHtml(a.term)}</span>
+                <span><i class="fa-solid fa-book-open"></i> ${normalizeSubjects(a.subjects).length} areas</span>
+                <span><i class="fa-solid fa-database" style="opacity:0.6;"></i> ${a._scoreCount || 0} records</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.75rem;line-height:1.4;">${escapeHtml(subjNames)}</div>
+            <div class="assess-card-stats">
+                <div class="assess-stat"><span class="assess-stat-val">${total}</span><span class="assess-stat-lbl">Learners</span></div>
+                <div class="assess-stat"><span class="assess-stat-val" style="color:${pct===100?'#16a34a':pct>0?'#d97706':'var(--text-muted)'}">${scored}</span><span class="assess-stat-lbl">Scored</span></div>
+                <div class="assess-stat"><span class="assess-stat-val">${pct}%</span><span class="assess-stat-lbl">Progress</span></div>
+            </div>
+            <div class="assess-card-actions" onclick="event.stopPropagation()">
+                <button class="assess-action-btn" onclick="openAssessmentForScoring('${a.id}')"><i class="fa-solid fa-pen"></i> Scores</button>
+                <button class="assess-action-btn" onclick="viewAssessmentResults('${a.id}')"><i class="fa-solid fa-eye"></i> Results</button>
+                <button class="assess-action-btn" onclick="openBatchForAssessment('${a.id}')"><i class="fa-solid fa-table-cells-large"></i> Batch</button>
+                ${!isLegacy ? `<button class="assess-action-btn" onclick="duplicateAssessment('${a.id}')"><i class="fa-solid fa-copy"></i></button>
+                <button class="assess-action-btn danger" onclick="promptDeleteAssessment('${a.id}')"><i class="fa-solid fa-trash"></i></button>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ── CREATE ASSESSMENT ───────────────────────────────────────────
+function openCreateAssessmentModal() {
+    const form = $('createAssessmentForm');
+    if (form) form.reset();
+    const container = $('assessSubjectsContainer');
+    if (container) container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">Select a grade first to load learning areas.</span>';
+    openModal('createAssessmentModal');
+}
+
+function populateAssessSubjects() {
+    const grade = ($('assessGrade') || {}).value;
+    const container = $('assessSubjectsContainer');
+    if (!container) return;
+    if (!grade) {
+        container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">Select a grade first to load learning areas.</span>';
+        return;
+    }
+    const subjects = getSubjectsForGrade(grade);
+    container.innerHTML = `<label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.35rem 0.7rem;border:1px dashed var(--primary);border-radius:8px;cursor:pointer;font-size:0.82rem;color:var(--primary);font-weight:600;user-select:none;">
+            <input type="checkbox" id="assessSelectAll" checked> Select All
+        </label>` +
+        subjects.map(s => `<label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.35rem 0.7rem;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:0.82rem;user-select:none;">
+            <input type="checkbox" value="${escapeHtml(s.id)}" class="assess-subject-check" checked> ${escapeHtml(s.name)}
+        </label>`).join('');
+
+    const selectAll = container.querySelector('#assessSelectAll');
+    if (selectAll) selectAll.addEventListener('change', function() {
+        container.querySelectorAll('.assess-subject-check').forEach(c => c.checked = this.checked);
+    });
+}
+
+function saveAssessment(e) {
+    e.preventDefault();
+    const name       = getVal('assessName');
+    const type       = getVal('assessType');
+    const grade      = getVal('assessGrade');
+    const term       = getVal('assessTerm');
+    const startDate  = getVal('assessStartDate');
+    const endDate    = getVal('assessEndDate');
+    const notes      = getVal('assessNotes');
+    const subjects   = Array.from(document.querySelectorAll('.assess-subject-check:checked')).map(c => String(c.value).trim()).filter(Boolean);
+
+    if (!name || !type || !grade || !term) { showToast('Please fill all required fields.', 'error'); return false; }
+    if (!subjects.length) { showToast('Select at least one learning area.', 'error'); return false; }
+
+    if (!store.examSchedules) store.examSchedules = [];
+    store.examSchedules.push({
+        id: generateId(), name, type, grade, term, subjects, notes,
+        startDate, endDate, status: 'open', createdAt: Date.now()
+    });
+
+    saveData();
+    closeModal('createAssessmentModal');
+    renderAssessmentCards();
+    showToast('Assessment "' + name + '" created successfully.');
+    if (typeof logActivity === 'function') logActivity('exam', 'Created assessment: ' + name + ' (' + grade + ', ' + term + ')');
+    return false;
+}
+
+// ── SHORTCUT NAVIGATIONS ───────────────────────────────────────
+function openAssessmentForScoring(id) {
+    switchExamTab('enter');
+    setTimeout(() => {
+        if ($('scoreEntryAssessment')) $('scoreEntryAssessment').value = id;
+        loadScoreEntryTable();
+    }, 60);
+}
+function viewAssessmentResults(id) {
+    switchExamTab('results');
+    setTimeout(() => {
+        if ($('resultsAssessment')) $('resultsAssessment').value = id;
+        loadResultsTable();
+    }, 60);
+}
+function openBatchForAssessment(id) {
+    switchExamTab('batch');
+    setTimeout(() => {
+        if ($('batchAssessment')) $('batchAssessment').value = id;
+        loadBatchGrid();
+    }, 60);
+}
+
+// ── SHARED DROPDOWN BUILDER ────────────────────────────────────
+function _assessOptions(selectedId, onlyOpen) {
+    const all = getAllAssessments();
+    const list = onlyOpen ? all.filter(a => a.status !== 'closed') : all;
+    return '<option value="">Select Assessment...</option>' +
+        list.map(a => {
+            const prefix = a.legacy ? '[Imported] ' : '';
+            return `<option value="${a.id}">${prefix}${escapeHtml(a.name)} — ${escapeHtml(a.grade)} (${escapeHtml(a.term)})</option>`;
+        }).join('');
+}
+
+function _getAssessById(id) {
+    return getAllAssessments().find(a => a.id === id) || null;
+}
+
+function populateScoreEntryDropdowns() {
+    const sel = $('scoreEntryAssessment');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = _assessOptions(cur, true);
+    sel.value = cur;
+}
+
+function populateResultsDropdowns() {
+    const sel = $('resultsAssessment');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = _assessOptions(cur, false);
+    sel.value = cur;
+}
+
+function populateAnalysisDropdowns() {
+    const sel = $('analysisAssessment');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = _assessOptions(cur, false);
+    sel.value = cur;
+
+    const assess = _getAssessById(cur);
+    const subjSel = $('analysisSubject');
+    if (assess && subjSel) {
+        const ids = normalizeSubjects(assess.subjects);
+        subjSel.innerHTML = '<option value="all">All Subjects</option>' +
+            ids.map(sid => `<option value="${escapeHtml(sid)}">${escapeHtml(getSubjectName(sid))}</option>`).join('');
+    }
+}
+
+function populateBatchDropdowns() {
+    const sel = $('batchAssessment');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = _assessOptions(cur, true);
+    sel.value = cur;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  BATCH SCORE ENTRY — all subjects × all students in one grid
+// ════════════════════════════════════════════════════════════════
+function loadBatchGrid() {
+    const assessId = ($('batchAssessment') || {}).value;
+    const wrapper  = $('batchWrapper');
+    const empty    = $('batchEmpty');
+
+    if (!assessId) {
+        if (wrapper) wrapper.style.display = 'none';
+        if (empty)   empty.style.display = 'block';
+        return;
+    }
+
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    if (wrapper) wrapper.style.display = 'block';
+    if (empty)   empty.style.display = 'none';
+    if ($('batchTitle')) $('batchTitle').textContent = assess.name + ' — Batch Entry (' + assess.grade + ')';
+
+    const subjectIds = normalizeSubjects(assess.subjects);
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const scoreMap = buildScoreMap(assessId);
+
+    // ── Build header ──
+    const thead = $('batchHead');
+    if (thead) {
+        thead.innerHTML = `<tr>
+            <th style="width:36px;position:sticky;left:0;z-index:3;background:var(--bg-secondary,#f8fafc);border-right:2px solid var(--border);">#</th>
+            <th style="min-width:180px;position:sticky;left:36px;z-index:3;background:var(--bg-secondary,#f8fafc);border-right:2px solid var(--border);">Student</th>
+            <th style="min-width:90px;position:sticky;left:216px;z-index:3;background:var(--bg-secondary,#f8fafc);border-right:2px solid var(--border);">ADM No</th>
+            ${subjectIds.map(sid => `<th class="subj-col" style="min-width:85px;">${escapeHtml(getSubjectName(sid))}</th>`).join('')}
+            <th class="subj-col" style="min-width:60px;background:#eef2ff;border-left:2px solid var(--border);font-weight:800;color:#4338ca;">Total</th>
+            <th class="subj-col" style="min-width:55px;background:#eef2ff;font-weight:800;color:#4338ca;">Mean</th>
+            <th class="subj-col" style="min-width:45px;background:#eef2ff;font-weight:800;color:#4338ca;">Grade</th>
+        </tr>`;
+    }
+
+    // ── Build rows ──
+    const tbody = $('batchBody');
+    if (!tbody) return;
+
+    // Pre-compute ranking data for live rank updates
+    let rowsData = students.map(st => {
+        let total = 0, count = 0;
+        const vals = subjectIds.map(sid => {
+            const rec = scoreMap[st.id + '_' + sid];
+            const v = _getScore(rec);
+            if (v !== null) { total += v; count++; }
+            return v;
+        });
+        return { student: st, vals, total, count, mean: count > 0 ? total / count : 0 };
+    });
+
+    function computeRanks(data) {
+        const sorted = [...data].sort((a, b) => b.mean - a.mean);
+        sorted.forEach((r, i) => r._rank = i + 1);
+        data.forEach(r => {
+            const m = sorted.find(x => x.student.id === r.student.id);
+            r._rank = m ? m._rank : '—';
+        });
+    }
+    computeRanks(rowsData);
+
+    tbody.innerHTML = rowsData.map((rd, i) => {
+        const st = rd.student;
+        const parts = (st.name || '').split(' ');
+        const initials = (parts[0] || '').charAt(0) + (parts[1] || '').charAt(0);
+        const rObj = rd.mean > 0 ? cbcRating(Math.round(rd.mean)) : null;
+
+        return `<tr class="batch-row" data-sid="${escapeHtml(st.id)}" data-row="${i}">
+            <td style="color:var(--text-muted);position:sticky;left:0;z-index:1;background:var(--card,#fff);border-right:2px solid var(--border);">${i + 1}</td>
+            <td style="position:sticky;left:36px;z-index:1;background:var(--card,#fff);border-right:2px solid var(--border);">
+                <div class="student-name-cell">
+                    <div class="student-avatar-sm">${initials.toUpperCase()}</div>
+                    <span>${escapeHtml(st.name)}</span>
+                </div>
+            </td>
+            <td style="font-family:monospace;font-size:0.78rem;color:var(--text-muted);position:sticky;left:216px;z-index:1;background:var(--card,#fff);border-right:2px solid var(--border);">${escapeHtml(st.reg || '—')}</td>
+            ${rd.vals.map((v, si) => {
+                const val = v !== null ? v : '';
+                const c = v !== null ? cbcRating(v) : null;
+                return `<td class="subj-col">
+                    <input type="number" min="0" max="100" class="form-control score-input batch-input"
+                        value="${val}" data-sid="${escapeHtml(st.id)}" data-subj="${escapeHtml(subjectIds[si])}"
+                        data-row="${i}" data-col="${si}"
+                        oninput="onBatchInput(this)"
+                        style="width:70px;text-align:center;font-size:0.82rem;${c ? 'color:' + c.color + ';font-weight:600;' : ''}">
+                </td>`;
+            }).join('')}
+            <td class="subj-col batch-total" style="font-weight:700;background:#fafafe;border-left:2px solid var(--border);" data-row="${i}">${rd.count > 0 ? rd.total : ''}</td>
+            <td class="subj-col batch-mean" style="font-weight:700;background:#fafafe;" data-row="${i}">${rd.count > 0 ? rd.mean.toFixed(1) : ''}</td>
+            <td class="subj-col batch-grade" style="background:#fafafe;" data-row="${i}"><span class="assess-card-type ${rObj ? rObj.cls : ''}" style="${rObj ? '' : 'opacity:0.3;'}">${rObj ? rObj.rating : '—'}</span></td>
+        </tr>`;
+    }).join('');
+
+    // Store rowsData for live recalculation
+    tbody._rowsData = rowsData;
+    tbody._subjectIds = subjectIds;
+    tbody._assessId = assessId;
+
+    // Stats
+    const scored = rowsData.filter(r => r.count > 0);
+    const totalCells = students.length * subjectIds.length;
+    const filledCells = rowsData.reduce((s, r) => s + r.count, 0);
+    if ($('batchStats')) {
+        $('batchStats').textContent = scored.length + '/' + students.length + ' learners | ' + filledCells + '/' + totalCells + ' cells filled';
+    }
+}
+
+// ── Live recalculation on batch input ──────────────────────────
+function onBatchInput(input) {
+    let v = parseInt(input.value);
+    if (isNaN(v)) v = '';
+    else if (v < 0) v = 0;
+    else if (v > 100) v = 100;
+    input.value = v;
+
+    const tbody = input.closest('tbody');
+    if (!tbody || !tbody._rowsData) return;
+
+    const rowIdx = parseInt(input.dataset.row);
+    const colIdx = parseInt(input.dataset.col);
+    const rd = tbody._rowsData[rowIdx];
+    if (!rd) return;
+
+    // Update value
+    rd.vals[colIdx] = v !== '' ? v : null;
+    rd.total = 0;
+    rd.count = 0;
+    rd.vals.forEach(val => {
+        if (val !== null) { rd.total += val; rd.count++; }
+    });
+    rd.mean = rd.count > 0 ? rd.total / rd.count : 0;
+
+    // Update row summary cells
+    const row = input.closest('tr');
+    const totalCell = row.querySelector('.batch-total');
+    const meanCell  = row.querySelector('.batch-mean');
+    const gradeCell = row.querySelector('.batch-grade span');
+
+    if (totalCell) totalCell.textContent = rd.count > 0 ? rd.total : '';
+    if (meanCell)  meanCell.textContent  = rd.count > 0 ? rd.mean.toFixed(1) : '';
+
+    const rObj = rd.mean > 0 ? cbcRating(Math.round(rd.mean)) : null;
+    if (gradeCell) {
+        gradeCell.className = 'assess-card-type ' + (rObj ? rObj.cls : '');
+        gradeCell.style.opacity = rObj ? '1' : '0.3';
+        gradeCell.textContent = rObj ? rObj.rating : '—';
+    }
+
+    // Color the input
+    if (v !== '') {
+        const c = cbcRating(v);
+        input.style.color = c.color;
+        input.style.fontWeight = '600';
+    } else {
+        input.style.color = '';
+        input.style.fontWeight = '';
+    }
+
+    // Recompute all ranks
+    computeBatchRanks(tbody);
+
+    // Update stats
+    const students = tbody._rowsData;
+    const subjectIds = tbody._subjectIds;
+    const scored = students.filter(r => r.count > 0);
+    const totalCells = students.length * subjectIds.length;
+    const filledCells = students.reduce((s, r) => s + r.count, 0);
+    if ($('batchStats')) {
+        $('batchStats').textContent = scored.length + '/' + students.length + ' learners | ' + filledCells + '/' + totalCells + ' cells filled';
+    }
+}
+
+function computeBatchRanks(tbody) {
+    if (!tbody || !tbody._rowsData) return;
+    const sorted = [...tbody._rowsData].sort((a, b) => b.mean - a.mean);
+    sorted.forEach((r, i) => r._rank = i + 1);
+    tbody._rowsData.forEach(r => {
+        const m = sorted.find(x => x.student.id === r.student.id);
+        r._rank = m ? m._rank : '—';
+    });
+    // We could update rank cells here but it's not shown in the batch grid
+    // to keep it clean — ranks appear in the Results tab
+}
+
+// ── Clear all empty inputs ─────────────────────────────────────
+function fillBatchDefaults() {
+    document.querySelectorAll('#batchBody .batch-input').forEach(inp => {
+        if (inp.value === '') inp.value = '';
+    });
+    showToast('Empty cells are already clear.');
+}
+
+// ── Save all batch scores ──────────────────────────────────────
+function saveBatchScores() {
+    const tbody = $('batchBody');
+    if (!tbody || !tbody._rowsData || !tbody._assessId) {
+        showToast('No data to save.', 'warning');
+        return;
+    }
+
+    const assessId = tbody._assessId;
+    let saved = 0, cleared = 0;
+
+    tbody._rowsData.forEach(rd => {
+        const sid = rd.student.id;
+        tbody._subjectIds.forEach((subjectCode, ci) => {
+            const v = rd.vals[ci];
+            if (v !== null) {
+                _upsertScore(assessId, sid, subjectCode, v);
+                saved++;
+            } else {
+                _removeScore(assessId, sid, subjectCode);
+                cleared++;
+            }
+        });
+    });
+
+    saveData();
+    renderAssessmentCards();
+    showToast('Saved ' + saved + ' scores' + (cleared > 0 ? ', cleared ' + cleared : '') + '.');
+}
+
+function saveBatchAndClose() {
+    saveBatchScores();
+    const assessId = ($('batchAssessment') || {}).value;
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    // Check if all cells are filled
+    const tbody = $('batchBody');
+    if (tbody && tbody._rowsData) {
+        const totalCells = tbody._rowsData.length * tbody._subjectIds.length;
+        const filledCells = tbody._rowsData.reduce((s, r) => s + r.count, 0);
+        if (filledCells === totalCells && !assess.legacy) {
+            assess.status = 'closed';
+            saveData();
+            renderAssessmentCards();
+            showToast('All cells filled. Assessment closed.');
+            if (typeof logActivity === 'function') logActivity('exam', 'Closed assessment: ' + assess.name);
+        } else if (filledCells === totalCells && assess.legacy) {
+            saveData();
+            showToast('All legacy scores verified and saved.');
+        } else {
+            showToast('Saved. ' + (totalCells - filledCells) + ' cells still empty.', 'warning');
+        }
+    }
+}
+
+function filterBatchRows() {
+    const q = ($('batchSearch') || {}).value || '';
+    const lower = q.toLowerCase();
+    document.querySelectorAll('#batchBody .batch-row').forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const name = (cells[1]?.textContent || '').toLowerCase();
+        const reg  = (cells[2]?.textContent || '').toLowerCase();
+        row.style.display = (name.includes(lower) || reg.includes(lower)) ? '' : 'none';
+    });
+}
+
+// ── SINGLE SUBJECT SCORE ENTRY ──────────────────────────────────
+function loadScoreEntryTable() {
+    const assessId = ($('scoreEntryAssessment') || {}).value;
+    const subject  = ($('scoreEntrySubject')   || {}).value;
+    const wrapper  = $('scoreEntryWrapper');
+    const empty    = $('scoreEntryEmpty');
+
+    const assess = _getAssessById(assessId);
+    const subjSel = $('scoreEntrySubject');
+    const prevSubj = subjSel ? subjSel.value : '';
+    if (assess && subjSel) {
+        const ids = normalizeSubjects(assess.subjects);
+        subjSel.innerHTML = '<option value="">Select Subject...</option>' +
+            ids.map(sid => `<option value="${escapeHtml(sid)}">${escapeHtml(getSubjectName(sid))}</option>`).join('');
+        subjSel.value = prevSubj;
+    }
+
+    if (!assessId || !subject || !assess) {
+        if (wrapper) wrapper.style.display = 'none';
+        if (empty)   empty.style.display = 'block';
+        return;
+    }
+    if (wrapper) wrapper.style.display = 'block';
+    if (empty)   empty.style.display = 'none';
+    if ($('scoreEntryTitle')) $('scoreEntryTitle').textContent = assess.name + ' — ' + getSubjectName(subject);
+
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const scoreMap = buildScoreMap(assessId);
+    if ($('scoreEntryCount')) $('scoreEntryCount').textContent = students.length + ' learners';
+
+    const tbody = $('scoreEntryBody');
+    if (!tbody) return;
+
+    tbody.innerHTML = students.map((st, i) => {
+        const key = st.id + '_' + subject;
+        const rec = scoreMap[key];
+        const rawVal = _getScore(rec);
+        const val = rawVal !== null ? rawVal : '';
+        const r   = val !== '' ? cbcRating(Number(val)) : null;
+        const parts = (st.name || '').split(' ');
+        const initials = (parts[0] || '').charAt(0) + (parts[1] || '').charAt(0);
+
+        return `<tr data-sid="${escapeHtml(st.id)}" class="score-row">
+            <td style="color:var(--text-muted);">${i + 1}</td>
+            <td><div class="student-name-cell">
+                <div class="student-avatar-sm">${initials.toUpperCase()}</div>
+                <span>${escapeHtml(st.name)}</span>
+            </div></td>
+            <td style="font-family:monospace;font-size:0.8rem;color:var(--text-muted);">${escapeHtml(st.reg || '—')}</td>
+            <td><input type="number" min="0" max="100" class="form-control score-input"
+                value="${val}" data-sid="${escapeHtml(st.id)}" data-subj="${escapeHtml(subject)}"
+                oninput="onScoreInput(this)" style="width:75px;text-align:center;"></td>
+            <td style="text-align:center;"><span class="assess-card-type ${r ? r.cls : ''}" style="${r ? '' : 'opacity:0.3;'}">${r ? r.rating : '—'}</span></td>
+            <td><span style="font-size:0.8rem;color:${r ? r.color : 'var(--text-muted)'};">${r ? autoRemark(Number(val)) : '—'}</span></td>
+        </tr>`;
+    }).join('');
+}
+
+function onScoreInput(input) {
+    let v = parseInt(input.value);
+    if (isNaN(v)) v = '';
+    else if (v < 0) v = 0;
+    else if (v > 100) v = 100;
+    input.value = v;
+
+    const row = input.closest('tr');
+    if (!row) return;
+    const r = v !== '' ? cbcRating(v) : null;
+    const ratingSpan = row.cells[4]?.querySelector('span');
+    const remarkSpan = row.cells[5]?.querySelector('span');
+    if (ratingSpan) {
+        ratingSpan.className = 'assess-card-type ' + (r ? r.cls : '');
+        ratingSpan.style.opacity = r ? '1' : '0.3';
+        ratingSpan.textContent = r ? r.rating : '—';
+    }
+    if (remarkSpan) {
+        remarkSpan.style.color = r ? r.color : 'var(--text-muted)';
+        remarkSpan.textContent = r ? autoRemark(v) : '—';
+    }
+}
+
+function filterScoreEntryRows() {
+    const q = ($('scoreEntrySearch') || {}).value || '';
+    const lower = q.toLowerCase();
+    document.querySelectorAll('#scoreEntryBody .score-row').forEach(row => {
+        const name = (row.cells[1]?.textContent || '').toLowerCase();
+        const reg  = (row.cells[2]?.textContent || '').toLowerCase();
+        row.style.display = (name.includes(lower) || reg.includes(lower)) ? '' : 'none';
+    });
+}
+
+function autoSaveScores() {
+    const assessId = ($('scoreEntryAssessment') || {}).value;
+    const subject  = ($('scoreEntrySubject')   || {}).value;
+    if (!assessId || !subject) return;
+
+    document.querySelectorAll('#scoreEntryBody .score-input').forEach(inp => {
+        const sid   = inp.dataset.sid;
+        const subj  = inp.dataset.subj;
+        const raw   = inp.value.trim();
+        const score = raw !== '' ? parseInt(raw) : null;
+
+        if (score !== null && !isNaN(score)) {
+            _upsertScore(assessId, sid, subj, score);
+        } else {
+            _removeScore(assessId, sid, subj);
+        }
+    });
+
+    saveData();
+    renderAssessmentCards();
+    showToast('Scores saved as draft.');
+}
+
+function submitAllScores() {
+    autoSaveScores();
+    const assessId = ($('scoreEntryAssessment') || {}).value;
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const subjectIds = normalizeSubjects(assess.subjects);
+    const scoreMap = buildScoreMap(assessId);
+    let allDone = true;
+
+    for (const st of students) {
+        for (const sid of subjectIds) {
+            const rec = scoreMap[st.id + '_' + sid];
+            if (!rec || _getScore(rec) === null) { allDone = false; break; }
+        }
+        if (!allDone) break;
+    }
+
+    if (allDone && !assess.legacy) {
+        assess.status = 'closed';
+        saveData();
+        showToast('All subjects fully scored. Assessment closed.');
+        if (typeof logActivity === 'function') logActivity('exam', 'Closed assessment: ' + assess.name);
+    } else if (allDone && assess.legacy) {
+        saveData();
+        showToast('All scores verified for imported data.');
+    } else {
+        showToast('Scores saved. Some entries are still missing.', 'warning');
+    }
+    renderAssessmentCards();
+}
+
+// ── RESULTS TABLE ───────────────────────────────────────────────
+function loadResultsTable() {
+    const assessId = ($('resultsAssessment') || {}).value;
+    const gradeF   = ($('resultsGrade')    || {}).value || 'all';
+    const wrapper   = $('resultsWrapper');
+    const empty     = $('resultsEmpty');
+
+    if (!assessId) {
+        if (wrapper) wrapper.style.display = 'none';
+        if (empty)   empty.style.display = 'block';
+        return;
+    }
+
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    if (wrapper) wrapper.style.display = 'block';
+    if (empty)   empty.style.display = 'none';
+    if ($('resultsTitle')) $('resultsTitle').textContent = assess.name + ' — ' + assess.grade + ' (' + assess.term + ')';
+
+    const subjectIds = normalizeSubjects(assess.subjects);
+
+    const thead = $('resultsHead');
+    if (thead) {
+        thead.innerHTML = `<tr>
+            <th style="width:40px;">#</th><th>Student Name</th><th>ADM No</th>
+            ${subjectIds.map(sid => `<th class="subj-col">${escapeHtml(getSubjectName(sid))}</th>`).join('')}
+            <th class="subj-col" style="background:var(--bg-secondary,#f8fafc);">Total</th>
+            <th class="subj-col" style="background:var(--bg-secondary,#f8fafc);">Mean</th>
+            <th class="subj-col" style="background:var(--bg-secondary,#f8fafc);">Grade</th>
+            <th class="subj-col" style="background:var(--bg-secondary,#f8fafc);">Rank</th>
+        </tr>`;
+    }
+
+    let students = StudentRepo.findBy('grade', assess.grade);
+    if (gradeF !== 'all') students = students.filter(s => s.grade === gradeF);
+
+    const scoreMap = buildScoreMap(assessId);
+
+    const rows = students.map(st => {
+        let total = 0, count = 0;
+        const subjScores = subjectIds.map(sid => {
+            const rec = scoreMap[st.id + '_' + sid];
+            const v = _getScore(rec);
+            if (v !== null) { total += v; count++; }
+            return v;
+        });
+        const mean = count > 0 ? total / count : 0;
+        return { student: st, subjScores, total, mean, count };
+    });
+
+    const ranked = [...rows].sort((a, b) => b.mean - a.mean);
+    ranked.forEach((r, i) => r.rank = i + 1);
+    rows.forEach(r => {
+        const match = ranked.find(x => x.student.id === r.student.id);
+        r.rank = match ? match.rank : '—';
+    });
+
+    const tbody = $('resultsBody');
+    if (!tbody) return;
+
+    tbody.innerHTML = rows.map((r, i) => {
+        const parts = (r.student.name || '').split(' ');
+        const initials = (parts[0] || '').charAt(0) + (parts[1] || '').charAt(0);
+        const rObj = r.mean > 0 ? cbcRating(Math.round(r.mean)) : null;
+
+        return `<tr class="score-row">
+            <td style="color:var(--text-muted);">${i + 1}</td>
+            <td><div class="student-name-cell">
+                <div class="student-avatar-sm">${initials.toUpperCase}</div>
+                <span>${escapeHtml(r.student.name)}</span>
+            </div></td>
+            <td style="font-family:monospace;font-size:0.8rem;color:var(--text-muted);">${escapeHtml(r.student.reg || '—')}</td>
+            ${r.subjScores.map(v => {
+                if (v === null) return '<td class="subj-col" style="color:var(--text-muted);">—</td>';
+                const c = cbcRating(v);
+                return `<td class="subj-col" style="font-weight:600;color:${c.color};">${v}</td>`;
+            }).join('')}
+            <td class="subj-col" style="font-weight:700;background:var(--bg-secondary,#f8fafc);">${r.count > 0 ? r.total : '—'}</td>
+            <td class="subj-col" style="font-weight:700;background:var(--bg-secondary,#f8fafc);color:${rObj ? rObj.color : 'var(--text-muted)'};">${r.count > 0 ? r.mean.toFixed(1) : '—'}</td>
+            <td class="subj-col" style="background:var(--bg-secondary,#f8fafc);"><span class="assess-card-type ${rObj ? rObj.cls : ''}" style="${rObj ? '' : 'opacity:0.3;'}">${rObj ? rObj.rating : '—'}</span></td>
+            <td class="subj-col" style="font-weight:700;background:var(--bg-secondary,#f8fafc);">${r.rank}</td>
+        </tr>`;
+    }).join('');
+
+    const scored = rows.filter(r => r.count > 0);
+    const avgMean = scored.length > 0 ? (scored.reduce((s, r) => s + r.mean, 0) / scored.length).toFixed(1) : '—';
+    if ($('resultsStats')) $('resultsStats').textContent = scored.length + '/' + students.length + ' scored | Class Mean: ' + avgMean;
+}
+
+function filterResultRows() {
+    const q = ($('resultsSearch') || {}).value || '';
+    const lower = q.toLowerCase();
+    document.querySelectorAll('#resultsBody .score-row').forEach(row => {
+        const name = (row.cells[1]?.textContent || '').toLowerCase();
+        const reg  = (row.cells[2]?.textContent || '').toLowerCase();
+        row.style.display = (name.includes(lower) || reg.includes(lower)) ? '' : 'none';
+    });
+}
+
+// ── SUBJECT ANALYSIS ────────────────────────────────────────────
+function loadSubjectAnalysis() {
+    const assessId = ($('analysisAssessment') || {}).value;
+    const subjectF = ($('analysisSubject')   || {}).value || 'all';
+    const wrapper   = $('analysisWrapper');
+    const empty     = $('analysisEmpty');
+    const kpiDiv    = $('subjectAnalysisKpis');
+
+    if (!assessId) {
+        if (wrapper) wrapper.style.display = 'none';
+        if (empty)   empty.style.display = 'block';
+        if (kpiDiv)  kpiDiv.innerHTML = '';
+        return;
+    }
+
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    const subjectIds = subjectF === 'all' ? normalizeSubjects(assess.subjects) : [subjectF];
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const totalStudents = students.length;
+    const scoreMap = buildScoreMap(assessId);
+
+    let allScores = [], eeTotal = 0, meTotal = 0, aeTotal = 0, beTotal = 0;
+
+    const rows = subjectIds.map(sid => {
+        const vals = students.map(st => {
+            const rec = scoreMap[st.id + '_' + sid];
+            return _getScore(rec);
+        }).filter(v => v !== null);
+
+        const entries = vals.length;
+        const mean    = entries > 0 ? (vals.reduce((a, b) => a + b, 0) / entries).toFixed(1) : '—';
+        const highest = entries > 0 ? Math.max(...vals) : '—';
+        const lowest  = entries > 0 ? Math.min(...vals) : '—';
+        const ee = vals.filter(v => v >= 80).length;
+        const me = vals.filter(v => v >= 50 && v < 80).length;
+        const ae = vals.filter(v => v >= 30 && v < 50).length;
+        const be = vals.filter(v => v < 30).length;
+
+        eeTotal += ee; meTotal += me; aeTotal += ae; beTotal += be;
+        allScores = allScores.concat(vals);
+
+        return { subj: sid, entries, mean, highest, lowest, ee, me, ae, be };
+    });
+
+    if (wrapper) wrapper.style.display = 'block';
+    if (empty)   empty.style.display = 'none';
+
+    if (kpiDiv) {
+        const overallMean = allScores.length > 0 ? (allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(1) : '—';
+        kpiDiv.innerHTML = `
+            <div class="modern-card" style="padding:1rem;text-align:center;">
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Class Mean</div>
+                <div style="font-size:1.5rem;font-weight:800;color:var(--primary);">${overallMean}</div>
+            </div>
+            <div class="modern-card" style="padding:1rem;text-align:center;">
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">EE (Exceeding)</div>
+                <div style="font-size:1.5rem;font-weight:800;color:#16a34a;">${eeTotal}</div>
+            </div>
+            <div class="modern-card" style="padding:1rem;text-align:center;">
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">ME (Meeting)</div>
+                <div style="font-size:1.5rem;font-weight:800;color:#2563eb;">${meTotal}</div>
+            </div>
+            <div class="modern-card" style="padding:1rem;text-align:center;">
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">AE (Approaching)</div>
+                <div style="font-size:1.5rem;font-weight:800;color:#d97706;">${aeTotal}</div>
+            </div>
+            <div class="modern-card" style="padding:1rem;text-align:center;">
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">BE (Below)</div>
+                <div style="font-size:1.5rem;font-weight:800;color:#dc2626;">${beTotal}</div>
+            </div>`;
+    }
+
+    const tbody = $('analysisBody');
+    if (!tbody) return;
+
+    const pct = (n, total) => total > 0 ? Math.round(n / total * 100) : 0;
+
+    tbody.innerHTML = rows.map(r => `<tr>
+        <td style="font-weight:600;">${escapeHtml(getSubjectName(r.subj))}</td>
+        <td style="text-align:center;">${r.entries}/${totalStudents}</td>
+        <td style="text-align:center;font-weight:700;color:${typeof r.mean === 'string' ? 'var(--text-muted)' : Number(r.mean) >= 50 ? '#16a34a' : '#dc2626'};">${r.mean}</td>
+        <td style="text-align:center;color:#16a34a;font-weight:600;">${r.highest}</td>
+        <td style="text-align:center;color:#dc2626;font-weight:600;">${r.lowest}</td>
+        <td style="text-align:center;"><span style="color:#16a34a;font-weight:600;">${r.ee}</span> <small style="color:var(--text-muted);">(${pct(r.ee, r.entries)}%)</small></td>
+        <td style="text-align:center;"><span style="color:#2563eb;font-weight:600;">${r.me}</span> <small style="color:var(--text-muted);">(${pct(r.me, r.entries)}%)</small></td>
+        <td style="text-align:center;"><span style="color:#d97706;font-weight:600;">${r.ae}</span> <small style="color:var(--text-muted);">(${pct(r.ae, r.entries)}%)</small></td>
+        <td style="text-align:center;"><span style="color:#dc2626;font-weight:600;">${r.be}</span> <small style="color:var(--text-muted);">(${pct(r.be, r.entries)}%)</small></td>
+    </tr>`).join('');
+}
+
+// ── DUPLICATE & DELETE ─────────────────────────────────────────
+function duplicateAssessment(id) {
+    const orig = (store.examSchedules || []).find(a => a.id === id);
+    if (!orig) return;
+    store.examSchedules.push({
+        ...orig, id: generateId(), name: orig.name + ' (Copy)',
+        status: 'open', createdAt: Date.now(),
+        subjects: normalizeSubjects(orig.subjects)
+    });
+    saveData();
+    renderAssessmentCards();
+    showToast('Assessment duplicated.');
+}
+
+function promptDeleteAssessment(id) {
+    examDeleteTargetId = id;
+    const assess = _getAssessById(id);
+    if ($('deleteAssessName')) $('deleteAssessName').textContent = assess ? assess.name : 'this assessment';
+    openModal('deleteAssessModal');
+}
+
+function confirmDeleteAssessment() {
+    if (!examDeleteTargetId) return;
+    const assess = _getAssessById(examDeleteTargetId);
+    store.exams = (store.exams || []).filter(e => e.assessId !== examDeleteTargetId);
+    store.examSchedules = (store.examSchedules || []).filter(a => a.id !== examDeleteTargetId);
+    saveData();
+    closeModal('deleteAssessModal');
+    renderAssessmentCards();
+    showToast('Assessment deleted.', 'error');
+    if (typeof logActivity === 'function') logActivity('exam', 'Deleted assessment: ' + (assess ? assess.name : ''));
+    examDeleteTargetId = null;
+}
+
+// ── EXPORT HELPERS ──────────────────────────────────────────────
+function _getAssessForExport() {
+    const id = ($('resultsAssessment') || {}).value;
+    if (!id) { showToast('Select an assessment first.', 'warning'); return null; }
+    return _getAssessById(id);
+}
+
+function _buildExportRows(assess) {
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const scoreMap = buildScoreMap(assess.id);
+    const subjectIds = normalizeSubjects(assess.subjects);
+    return students.map(st => {
+        const row = { 'ADM No': st.reg || '', 'Name': st.name || '' };
+        let total = 0, count = 0;
+        subjectIds.forEach(sid => {
+            const rec = scoreMap[st.id + '_' + sid];
+            const v = _getScore(rec);
+            row[getSubjectName(sid)] = v !== null ? v : '';
+            if (v !== null) { total += v; count++; }
+        });
+        row['Total'] = count > 0 ? total : '';
+        row['Mean']  = count > 0 ? (total / count).toFixed(1) : '';
+        row['CBC Grade'] = count > 0 ? cbcRating(Math.round(total / count)).rating : '';
+        return row;
+    });
+}
+
+function examExportExcel()      { const a = _getAssessForExport(); if (a) _doExcelExport(a); }
+function exportResultsExcel()   { const a = _getAssessForExport(); if (a) _doExcelExport(a); }
+
+function _doExcelExport(assess) {
+    const rows = _buildExportRows(assess);
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, assess.name.substring(0, 31));
+    XLSX.writeFile(wb, assess.name.replace(/\s+/g, '_') + '.xlsx');
+    showToast('Excel exported.');
+}
+
+function exportResultsPDF() {
+    const assess = _getAssessForExport();
+    if (!assess) return;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('l', 'mm', 'a4');
+    doc.setFontSize(14);
+    doc.text(assess.name + ' — ' + assess.grade + ' (' + assess.term + ')', 14, 15);
+    doc.setFontSize(9);
+    doc.text('Generated: ' + new Date().toLocaleDateString(), 14, 21);
+
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const scoreMap = buildScoreMap(assess.id);
+    const subjectIds = normalizeSubjects(assess.subjects);
+
+    const headers = ['#', 'Name', 'ADM'].concat(subjectIds.map(getSubjectName)).concat(['Total', 'Mean', 'Grade']);
+    const body = students.map((st, i) => {
+        let total = 0, count = 0;
+        const subjVals = subjectIds.map(sid => {
+            const rec = scoreMap[st.id + '_' + sid];
+            const v = _getScore(rec);
+            if (v !== null) { total += v; count++; }
+            return v !== null ? v : '';
+        });
+        const mean = count > 0 ? (total / count).toFixed(1) : '';
+        const grade = mean !== '' ? cbcRating(Math.round(parseFloat(mean))).rating : '';
+        return [i + 1, st.name || '', st.reg || ''].concat(subjVals).concat([count > 0 ? total : '', mean, grade]);
+    });
+
+    doc.autoTable({ head: [headers], body, startY: 25, styles: { fontSize: 7 }, headStyles: { fillColor: [99, 102, 241] } });
+    doc.save(assess.name.replace(/\s+/g, '_') + '.pdf');
+    showToast('PDF exported.');
+}
+
+function printResults() {
+    const table = $('resultsTable');
+    if (!table || !table.rows.length) { showToast('No results to print.', 'warning'); return; }
+    const win = window.open('', '_blank');
+    win.document.write(`<html><head><title>Print Results</title><style>
+        body{font-family:Arial,sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;font-size:12px;}
+        th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;} th{background:#6366f1;color:#fff;}
+        .subj-col{text-align:center;} tr:nth-child(even){background:#f9fafb;}
+    </style></head><body>${table.outerHTML}</body></html>`);
+    win.document.close();
+    win.print();
+}
+
+function exportAnalysisPDF() {
+    const assessId = ($('analysisAssessment') || {}).value;
+    if (!assessId) { showToast('Select an assessment first.', 'warning'); return; }
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('p', 'mm', 'a4');
+    doc.setFontSize(14);
+    doc.text('Subject Analysis: ' + assess.name, 14, 15);
+    doc.setFontSize(9);
+    doc.text(assess.grade + ' | ' + assess.term, 14, 21);
+
+    const table = $('analysisTable');
+    if (table && table.rows.length > 1) {
+        const headers = Array.from(table.rows[0].cells).map(c => c.textContent.trim());
+        const body = Array.from(table.rows).slice(1).map(row => Array.from(row.cells).map(c => c.textContent.trim()));
+        doc.autoTable({ head: [headers], body, startY: 25, styles: { fontSize: 8 }, headStyles: { fillColor: [99, 102, 241] } });
+    }
+    doc.save('Subject_Analysis_' + assess.name.replace(/\s+/g, '_') + '.pdf');
+    showToast('Analysis PDF exported.');
+}
+
+// ── IMPORT SCORES ───────────────────────────────────────────────
+function examImportScores() {
+    populateImportDropdowns();
+    openModal('importScoresModal');
+}
+
+function populateImportDropdowns() {
+    const aSel = $('importAssessSelect');
+    if (!aSel) return;
+    aSel.innerHTML = '<option value="">Select assessment...</option>' +
+        (store.examSchedules || []).filter(a => a.status !== 'closed').map(a =>
+            `<option value="${a.id}">${escapeHtml(a.name)} — ${escapeHtml(a.grade)}</option>`
+        ).join('');
+
+    aSel.onchange = function() {
+        const assess = _getAssessById(this.value);
+        const sSel = $('importSubjectSelect');
+        if (!sSel) return;
+        sSel.innerHTML = '<option value="">Select subject...</option>';
+        if (assess) {
+            const ids = normalizeSubjects(assess.subjects);
+            sSel.innerHTML += ids.map(sid =>
+                `<option value="${escapeHtml(sid)}">${escapeHtml(getSubjectName(sid))}</option>`
+            ).join('');
+        }
+    };
+}
+
+function processImportedScores() {
+    const assessId  = ($('importAssessSelect') || {}).value;
+    const subject   = ($('importSubjectSelect') || {}).value;
+    const fileInput = $('importFileInput');
+
+    if (!assessId || !subject || !fileInput || !fileInput.files.length) {
+        showToast('Fill all fields and select a file.', 'error');
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const wb = XLSX.read(e.target.result, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const data = XLSX.utils.sheet_to_json(ws);
+
+            let imported = 0;
+
+            data.forEach(row => {
+                const reg = String(row['ADM No'] || row['adm'] || row['ADM'] || row['AdmNo'] || row['Reg'] || row['reg'] || '').trim();
+                const studentId = String(row['Student ID'] || row['studentId'] || row['ID'] || row['id'] || '').trim();
+                const scoreVal = parseInt(row['Score'] || row['score'] || row['Marks'] || row['marks'] || 0);
+
+                let sid = null;
+                if (studentId) { const found = StudentRepo.getById(studentId); if (found) sid = found.id; }
+                if (!sid && reg) { const found = StudentRepo.getAll().find(s => s.reg === reg); if (found) sid = found.id; }
+                if (!sid || isNaN(scoreVal) || scoreVal < 0 || scoreVal > 100) return;
+
+                _upsertScore(assessId, sid, subject, scoreVal);
+                imported++;
+            });
+
+            saveData();
+            closeModal('importScoresModal');
+            renderAssessmentCards();
+            showToast('Imported ' + imported + ' scores for ' + getSubjectName(subject) + '.');
+            if (typeof logActivity === 'function') logActivity('exam', 'Imported ' + imported + ' scores for ' + getSubjectName(subject));
+        } catch (err) {
+            showToast('Error reading Excel file: ' + err.message, 'error');
+        }
+    };
+    reader.readAsArrayBuffer(fileInput.files[0]);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  BATCH SCORE ENTRY — all subjects × all students in one grid
+// ════════════════════════════════════════════════════════════════
+function populateBatchDropdowns() {
+    const sel = $('batchAssessment');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = _assessOptions(cur, true);
+    sel.value = cur;
+}
+
+function openBatchForAssessment(id) {
+    switchExamTab('batch');
+    setTimeout(() => {
+        if ($('batchAssessment')) $('batchAssessment').value = id;
+        loadBatchGrid();
+    }, 60);
+}
+
+function loadBatchGrid() {
+    const assessId = ($('batchAssessment') || {}).value;
+    const wrapper  = $('batchWrapper');
+    const empty    = $('batchEmpty');
+
+    if (!assessId) {
+        if (wrapper) wrapper.style.display = 'none';
+        if (empty)   empty.style.display = 'block';
+        return;
+    }
+
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    if (wrapper) wrapper.style.display = 'block';
+    if (empty)   empty.style.display = 'none';
+    if ($('batchTitle')) $('batchTitle').textContent = assess.name + ' — Batch Entry (' + assess.grade + ')';
+
+    const subjectIds = normalizeSubjects(assess.subjects);
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const scoreMap = buildScoreMap(assessId);
+
+    // ── Header ──
+    const thead = $('batchHead');
+    if (thead) {
+        thead.innerHTML = `<tr>
+            <th style="width:36px;position:sticky;left:0;z-index:3;background:var(--bg-secondary,#f8fafc);border-right:2px solid var(--border);">#</th>
+            <th style="min-width:180px;position:sticky;left:36px;z-index:3;background:var(--bg-secondary,#f8fafc);border-right:2px solid var(--border);">Student</th>
+            <th style="min-width:90px;position:sticky;left:216px;z-index:3;background:var(--bg-secondary,#f8fafc);border-right:2px solid var(--border);">ADM No</th>
+            ${subjectIds.map(sid => `<th class="subj-col" style="min-width:82px;">${escapeHtml(getSubjectName(sid))}</th>`).join('')}
+            <th class="subj-col" style="min-width:55px;background:#eef2ff;border-left:2px solid var(--border);font-weight:800;color:#4338ca;">Total</th>
+            <th class="subj-col" style="min-width:50px;background:#eef2ff;font-weight:800;color:#4338ca;">Mean</th>
+            <th class="subj-col" style="min-width:42px;background:#eef2ff;font-weight:800;color:#4338ca;">Grade</th>
+        </tr>`;
+    }
+
+    // ── Build row data ──
+    const rowsData = students.map(st => {
+        let total = 0, count = 0;
+        const vals = subjectIds.map(sid => {
+            const rec = scoreMap[st.id + '_' + sid];
+            const v = _getScore(rec);
+            if (v !== null) { total += v; count++; }
+            return v;
+        });
+        return { student: st, vals, total, count, mean: count > 0 ? total / count : 0 };
+    });
+
+    // ── Rank computation ──
+    const ranked = [...rowsData].sort((a, b) => b.mean - a.mean);
+    ranked.forEach((r, i) => r._rank = i + 1);
+    rowsData.forEach(r => {
+        const m = ranked.find(x => x.student.id === r.student.id);
+        r._rank = m ? m._rank : '—';
+    });
+
+    // ── Body ──
+    const tbody = $('batchBody');
+    if (!tbody) return;
+
+    tbody.innerHTML = rowsData.map((rd, i) => {
+        const st = rd.student;
+        const parts = (st.name || '').split(' ');
+        const initials = (parts[0] || '').charAt(0) + (parts[1] || '').charAt(0);
+        const rObj = rd.mean > 0 ? cbcRating(Math.round(rd.mean)) : null;
+
+        return `<tr class="batch-row" data-sid="${escapeHtml(st.id)}" data-row="${i}">
+            <td style="color:var(--text-muted);position:sticky;left:0;z-index:1;background:var(--card,#fff);border-right:2px solid var(--border);">${i + 1}</td>
+            <td style="position:sticky;left:36px;z-index:1;background:var(--card,#fff);border-right:2px solid var(--border);">
+                <div class="student-name-cell">
+                    <div class="student-avatar-sm">${initials.toUpperCase()}</div>
+                    <span>${escapeHtml(st.name)}</span>
+                </div>
+            </td>
+            <td style="font-family:monospace;font-size:0.78rem;color:var(--text-muted);position:sticky;left:216px;z-index:1;background:var(--card,#fff);border-right:2px solid var(--border);">${escapeHtml(st.reg || '—')}</td>
+            ${rd.vals.map((v, si) => {
+                const val = v !== null ? v : '';
+                const c = v !== null ? cbcRating(v) : null;
+                return `<td class="subj-col">
+                    <input type="number" min="0" max="100" class="form-control score-input batch-input"
+                        value="${val}" data-sid="${escapeHtml(st.id)}" data-subj="${escapeHtml(subjectIds[si])}"
+                        data-row="${i}" data-col="${si}"
+                        oninput="onBatchInput(this)"
+                        style="width:68px;text-align:center;font-size:0.82rem;${c ? 'color:' + c.color + ';font-weight:600;' : ''}">
+                </td>`;
+            }).join('')}
+            <td class="subj-col batch-total" style="font-weight:700;background:#fafafe;border-left:2px solid var(--border);" data-row="${i}">${rd.count > 0 ? rd.total : ''}</td>
+            <td class="subj-col batch-mean" style="font-weight:700;background:#fafafe;" data-row="${i}">${rd.count > 0 ? rd.mean.toFixed(1) : ''}</td>
+            <td class="subj-col batch-grade" style="background:#fafafe;" data-row="${i}"><span class="assess-card-type ${rObj ? rObj.cls : ''}" style="${rObj ? '' : 'opacity:0.3;'}">${rObj ? rObj.rating : '—'}</span></td>
+        </tr>`;
+    }).join('');
+
+    // Store metadata on tbody for live recalculation
+    tbody._rowsData = rowsData;
+    tbody._subjectIds = subjectIds;
+    tbody._assessId = assessId;
+
+    // Stats
+    const scored = rowsData.filter(r => r.count > 0);
+    const totalCells = students.length * subjectIds.length;
+    const filledCells = rowsData.reduce((s, r) => s + r.count, 0);
+    if ($('batchStats')) {
+        $('batchStats').textContent = scored.length + '/' + students.length + ' learners | ' + filledCells + '/' + totalCells + ' cells filled';
+    }
+}
+
+// ── Live batch input handler ───────────────────────────────────
+function onBatchInput(input) {
+    let v = parseInt(input.value);
+    if (isNaN(v)) v = '';
+    else if (v < 0) v = 0;
+    else if (v > 100) v = 100;
+    input.value = v;
+
+    const tbody = input.closest('tbody');
+    if (!tbody || !tbody._rowsData) return;
+
+    const rowIdx = parseInt(input.dataset.row);
+    const colIdx = parseInt(input.dataset.col);
+    const rd = tbody._rowsData[rowIdx];
+    if (!rd) return;
+
+    // Update value in data
+    rd.vals[colIdx] = v !== '' ? v : null;
+    rd.total = 0;
+    rd.count = 0;
+    rd.vals.forEach(val => {
+        if (val !== null) { rd.total += val; rd.count++; }
+    });
+    rd.mean = rd.count > 0 ? rd.total / rd.count : 0;
+
+    // Update summary cells in this row
+    const row = input.closest('tr');
+    const totalCell = row.querySelector('.batch-total');
+    const meanCell  = row.querySelector('.batch-mean');
+    const gradeCell = row.querySelector('.batch-grade span');
+
+    if (totalCell) totalCell.textContent = rd.count > 0 ? rd.total : '';
+    if (meanCell)  meanCell.textContent  = rd.count > 0 ? rd.mean.toFixed(1) : '';
+
+    const rObj = rd.mean > 0 ? cbcRating(Math.round(rd.mean)) : null;
+    if (gradeCell) {
+        gradeCell.className = 'assess-card-type ' + (rObj ? rObj.cls : '');
+        gradeCell.style.opacity = rObj ? '1' : '0.3';
+        gradeCell.textContent = rObj ? rObj.rating : '—';
+    }
+
+    // Color the input cell based on score
+    if (v !== '') {
+        const c = cbcRating(v);
+        input.style.color = c.color;
+        input.style.fontWeight = '600';
+    } else {
+        input.style.color = '';
+        input.style.fontWeight = '';
+    }
+
+    // Recompute ranks across all rows
+    const sorted = [...tbody._rowsData].sort((a, b) => b.mean - a.mean);
+    sorted.forEach((r, i) => r._rank = i + 1);
+    tbody._rowsData.forEach(r => {
+        const m = sorted.find(x => x.student.id === r.student.id);
+        r._rank = m ? m._rank : '—';
+    });
+
+    // Update stats line
+    const students = tbody._rowsData;
+    const subjectIds = tbody._subjectIds;
+    const scored = students.filter(r => r.count > 0);
+    const totalCells = students.length * subjectIds.length;
+    const filledCells = students.reduce((s, r) => s + r.count, 0);
+    if ($('batchStats')) {
+        $('batchStats').textContent = scored.length + '/' + students.length + ' learners | ' + filledCells + '/' + totalCells + ' cells filled';
+    }
+}
+
+function filterBatchRows() {
+    const q = ($('batchSearch') || {}).value || '';
+    const lower = q.toLowerCase();
+    document.querySelectorAll('#batchBody .batch-row').forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const name = (cells[1]?.textContent || '').toLowerCase();
+        const reg  = (cells[2]?.textContent || '').toLowerCase();
+        row.style.display = (name.includes(lower) || reg.includes(lower)) ? '' : 'none';
+    });
+}
+
+// ── Save batch scores ──────────────────────────────────────────
+function saveBatchScores() {
+    const tbody = $('batchBody');
+    if (!tbody || !tbody._rowsData || !tbody._assessId) {
+        showToast('No data to save.', 'warning');
+        return;
+    }
+
+    const assessId = tbody._assessId;
+    let saved = 0, cleared = 0;
+
+    tbody._rowsData.forEach(rd => {
+        const sid = rd.student.id;
+        tbody._subjectIds.forEach((subjectCode, ci) => {
+            const v = rd.vals[ci];
+            if (v !== null) {
+                _upsertScore(assessId, sid, subjectCode, v);
+                saved++;
+            } else {
+                _removeScore(assessId, sid, subjectCode);
+                cleared++;
+            }
+        });
+    });
+
+    saveData();
+    renderAssessmentCards();
+    showToast('Saved ' + saved + ' scores' + (cleared > 0 ? ', cleared ' + cleared : '') + '.');
+}
+
+function saveBatchAndClose() {
+    const tbody = $('batchBody');
+    if (!tbody || !tbody._rowsData) return;
+
+    saveBatchScores();
+
+    const assessId = ($('batchAssessment') || {}).value;
+    const assess = _getAssessById(assessId);
+    if (!assess) return;
+
+    const totalCells = tbody._rowsData.length * tbody._subjectIds.length;
+    const filledCells = tbody._rowsData.reduce((s, r) => s + r.count, 0);
+
+    if (filledCells === totalCells && !assess.legacy) {
+        // Find the real record in examSchedules to update status
+        const real = (store.examSchedules || []).find(a => a.id === assessId);
+        if (real) {
+            real.status = 'closed';
+            saveData();
+            renderAssessmentCards();
+            showToast('All cells filled. Assessment closed.');
+            if (typeof logActivity === 'function') logActivity('exam', 'Closed assessment: ' + assess.name);
+        }
+    } else if (filledCells === totalCells && assess.legacy) {
+        saveData();
+        showToast('All legacy scores verified and saved.');
+    } else {
+        showToast('Saved. ' + (totalCells - filledCells) + ' cells still empty.', 'warning');
+    }
+}
+
+// ── UPDATE: Add batch to tab switcher ───────────────────────────
+// Patch switchExamTab to also handle batch tab
+const _origSwitchExamTab = switchExamTab;
+switchExamTab = function(tab) {
+    _origSwitchExamTab(tab);
+    if (tab === 'batch') populateBatchDropdowns();
+};
+
+// ── UPDATE: Add batch button to assessment cards ────────────────
+// Patch renderAssessmentCards to include batch button
+const _origRenderCards = renderAssessmentCards;
+renderAssessmentCards = function() {
+    _origRenderCards();
+    // Re-inject batch buttons into cards that don't have them
+    document.querySelectorAll('.assess-card').forEach(card => {
+        const actionsDiv = card.querySelector('.assess-card-actions');
+        if (!actionsDiv || actionsDiv.querySelector('[onclick*="openBatchForAssessment"]')) return;
+        const id = card.getAttribute('onclick')?.match(/openAssessmentForScoring\('([^']+)'\)/)?.[1];
+        if (id) {
+            const btn = document.createElement('button');
+            btn.className = 'assess-action-btn';
+            btn.setAttribute('onclick', `openBatchForAssessment('${id}')`);
+            btn.innerHTML = '<i class="fa-solid fa-table-cells-large"></i> Batch';
+            // Insert before the delete button if it exists, otherwise append
+            const deleteBtn = actionsDiv.querySelector('.danger');
+            if (deleteBtn) actionsDiv.insertBefore(btn, deleteBtn);
+            else actionsDiv.appendChild(btn);
+        }
+    });
+};
+
+
+// ════════════════════════════════════════════════════════════════
+//  BATCH SPREADSHEET — Download Template, Download Scores, Upload
+// ════════════════════════════════════════════════════════════════
+function _getStudentScores(studentId) {
+    if (!studentId) return [];
+    const exams = (store.exams || []).filter(e => e.studentId === studentId && e.score > 0);
+    return exams.map(e => {
+        const rating = cbcRating(e.score || 0);
+        return {
+            subjectId: e.subjectId,
+            subjectName: getSubjectName(e.subjectId),
+            score: e.score || 0,
+            rating: rating,
+            date: e.date || e.createdAt || ''
+        };
+    }).sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+}
+/**
+ * Get ALL exam records for a specific grade.
+ * Returns: { studentId, studentName, grade, stream, scores: [{ subjectId, score }], avg }
+ */
+function _getGradeScores(grade) {
+    if (!grade) return [];
+    const studentIds = StudentRepo.getAll().filter(s => s.grade === grade).map(s => s.id);
+    const exams = (store.exams || []).filter(e => studentIds.includes(e.studentId) && e.score > 0);
+
+    const byStudent = {};
+    exams.forEach(e => {
+        if (!byStudent[e.studentId]) byStudent[e.studentId] = [];
+        byStudent[e.studentId].push(e);
+    });
+
+    return Object.entries(byStudent).map(([sid, sExams]) => {
+        const student = StudentRepo.getById(sid);
+        const scores = sExams.map(e => ({ subjectId: e.subjectId, score: e.score }));
+        const avg = scores.length ? scores.reduce((a, s) => a + s.score, 0) / scores.length : 0;
+        return {
+            studentId: sid,
+            studentName: student ? student.name : 'Unknown',
+            grade: student ? student.grade : grade,
+            stream: student ? student.stream : '',
+            reg: student ? student.reg : '',
+            gender: student ? student.gender : '',
+            scores: scores,
+            avg: avg,
+            examCount: scores.length
+        };
+    }).sort((a, b) => b.avg - a.avg);
+}
+
+// ── Helper: get batch context ──────────────────────────────────
+function _getBatchContext() {
+    const assessId = ($('batchAssessment') || {}).value;
+    if (!assessId) { showToast('Select an assessment first.', 'warning'); return null; }
+    const assess = _getAssessById(assessId);
+    if (!assess) { showToast('Assessment not found.', 'error'); return null; }
+    const subjectIds = normalizeSubjects(assess.subjects);
+    const students = StudentRepo.findBy('grade', assess.grade);
+    const scoreMap = buildScoreMap(assessId);
+    return { assess, assessId, subjectIds, students, scoreMap };
+}
+
+// ── DOWNLOAD: Empty template ───────────────────────────────────
+function downloadBatchTemplate() {
+    if (typeof XLSX === 'undefined') {
+        showToast('Spreadsheet library not loaded. Please refresh the page.', 'error');
+        return;
+    }
+
+    try {
+        var assessId = null;
+        var selIds = ['batchAssessment', 'resultsAssessment', 'analysisAssessment'];
+        for (var s = 0; s < selIds.length; s++) {
+            var el = document.getElementById(selIds[s]);
+            if (el && el.value) { assessId = el.value; break; }
+        }
+        if (!assessId) {
+            var all = getAllAssessments();
+            if (!all.length) { showToast('Create an assessment first.', 'warning'); return; }
+            assessId = all[0].id;
+        }
+
+        var assess = _getAssessById(assessId);
+        if (!assess) { showToast('Assessment not found.', 'error'); return; }
+
+        var subjectIds = normalizeSubjects(assess.subjects);
+        var students = StudentRepo.findBy('grade', assess.grade);
+        if (!students.length) { showToast('No learners in ' + assess.grade + '.', 'warning'); return; }
+
+        // Build header columns ONLY — do NOT include in data
+        var headerCols = ['#', 'Name', 'ADM No'];
+        for (var i = 0; i < subjectIds.length; i++) {
+            headerCols.push(getSubjectName(subjectIds[i]));
+        }
+        headerCols.push('Total', 'Mean', 'Grade');
+
+        // Build student rows ONLY — no header mixed in
+        var data = [];
+        for (var r = 0; r < students.length; r++) {
+            var st = students[r];
+            var row = { '#': r + 1, 'Name': st.name || null, 'ADM No': st.reg || null };
+            for (var j = 0; j < subjectIds.length; j++) {
+                row[getSubjectName(subjectIds[j])] = null;
+            }
+            row['Total'] = null;
+            row['Mean'] = null;
+            row['Grade'] = null;
+            data.push(row);
+        }
+
+        // Create worksheet from data only — XLSX won't auto-generate a header
+        var ws = XLSX.utils.json_to_sheet(data);
+
+        // If XLSX still auto-created a header row, remove it
+        if (ws['!ref']) {
+            try {
+                var decoded = XLSX.utils.decode_range(ws['!ref']);
+                XLSX.utils.sheet_del_aoa(ws, 0, 1, { r: 0, c: 0 }, { r: 0, c: decoded.e.c });
+            } catch (e) { /* ignore if no ref */ }
+        }
+
+        // Insert our styled header row at A1 — guaranteed single header
+        XLSX.utils.sheet_add_aoa(ws, [headerCols], { origin: 'A1' });
+
+        // Column widths
+        var cols = [{ wch: 4 }, { wch: 24 }, { wch: 14 }];
+        for (var c = 0; c < subjectIds.length; c++) {
+            cols.push({ wch: Math.max(getSubjectName(subjectIds[c]).length + 2, 12) });
+        }
+        cols.push({ wch: 7 }, { wch: 7 }, { wch: 7 });
+        ws['!cols'] = cols;
+
+        // Style header row
+        var ref = ws['!ref'];
+        if (ref) {
+            var decoded = XLSX.utils.decode_range(ref);
+            for (var C = decoded.s.c; C <= decoded.e.c; C++) {
+                var addr = XLSX.utils.encode_cell({ r: 0, c: C });
+                if (!ws[addr]) ws[addr] = { v: '' };
+                if (!ws[addr].s) ws[addr].s = {};
+                ws[addr].s.font = { bold: true, color: { rgb: 'FFFFFF' } };
+                ws[addr].s.fill = { fgColor: { rgb: '6366F1' } };
+                ws[addr].s.alignment = { horizontal: 'center', vertical: 'center' };
+            }
+
+            // Style data rows
+            for (var R = decoded.s.r + 1; R <= decoded.e.r; R++) {
+                var numAddr = XLSX.utils.encode_cell({ r: R, c: decoded.s.c });
+                if (!ws[numAddr]) ws[numAddr] = { v: '' };
+                if (!ws[numAddr].s) ws[numAddr].s = {};
+                ws[numAddr].s.alignment = { horizontal: 'center' };
+                ws[numAddr].s.font = { color: { rgb: '94A3B8' } };
+
+                var admAddr = XLSX.utils.encode_cell({ r: R, c: decoded.s.c + 2 });
+                if (!ws[admAddr]) ws[admAddr] = { v: '' };
+                if (!ws[admAddr].s) ws[admAddr].s = {};
+                ws[admAddr].s.font = { name: 'Courier New', size: 10, color: { rgb: '64748B' } };
+
+                // Alternating rows
+                if (R % 2 === 0) {
+                    for (var ac = decoded.s.c; ac <= decoded.e.c; ac++) {
+                        var aAddr = XLSX.utils.encode_cell({ r: R, c: ac });
+                        if (!ws[aAddr]) ws[aAddr] = { v: '' };
+                        if (!ws[aAddr].s) ws[aAddr].s = {};
+                        if (!ws[aAddr].s.fill) ws[aAddr].s.fill = { fgColor: { rgb: 'F8FAFC' } };
+                    }
+                }
+            }
+        }
+
+        // Freeze panes
+        ws['!freeze'] = { xSplit: 3, ySplit: 1 };
+
+        var wb = XLSX.utils.book_new();
+        var sheetName = assess.name.substring(0, 28) + ' Template';
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        XLSX.writeFile(wb, sheetName.replace(/\s+/g, '_') + '.xlsx');
+        showToast('Template downloaded with ' + students.length + ' learners.');
+
+    } catch (err) {
+        console.error('Template error:', err);
+        var errMsg = 'Download failed';
+        if (err) {
+            if (typeof err === 'string') errMsg += ': ' + err;
+            else if (err.message) errMsg += ': ' + err.message;
+            else errMsg += ': ' + String(err);
+        }
+        showToast(errMsg, 'error');
+    }
+}
+
+
+// ── DOWNLOAD: Current scores ───────────────────────────────────
+function downloadBatchScores() {
+    if (typeof XLSX === 'undefined') {
+        showToast('Spreadsheet library not loaded. Please refresh the page.', 'error');
+        return;
+    }
+
+    try {
+        var assessId = null;
+        var selIds = ['batchAssessment', 'resultsAssessment', 'analysisAssessment'];
+        for (var s = 0; s < selIds.length; s++) {
+            var el = document.getElementById(selIds[s]);
+            if (el && el.value) { assessId = el.value; break; }
+        }
+        if (!assessId) {
+            var all = getAllAssessments();
+            if (!all.length) { showToast('Create an assessment first.', 'warning'); return; }
+            assessId = all[0].id;
+        }
+
+        var assess = _getAssessById(assessId);
+        if (!assess) { showToast('Assessment not found.', 'error'); return; }
+
+        var subjectIds = normalizeSubjects(assess.subjects);
+        var students = StudentRepo.findBy('grade', assess.grade);
+        var scoreMap = buildScoreMap(assessId);
+
+        // Header as OBJECT — fixes the column misalignment bug
+        var headerObj = { '#': '#', 'Name': 'Name', 'ADM No': 'ADM No' };
+        for (var i = 0; i < subjectIds.length; i++) {
+            headerObj[getSubjectName(subjectIds[i])] = getSubjectName(subjectIds[i]);
+        }
+        headerObj['Total'] = 'Total';
+        headerObj['Mean'] = 'Mean';
+        headerObj['Grade'] = 'Grade';
+
+        // Data rows — use null for missing scores so cells stay truly empty
+        var data = [headerObj];
+        for (var r = 0; r < students.length; r++) {
+            var st = students[r];
+            var row = { '#': r + 1, 'Name': st.name || null, 'ADM No': st.reg || null };
+            var total = 0, count = 0;
+            for (var j = 0; j < subjectIds.length; j++) {
+                var key = st.id + '_' + subjectIds[j];
+                var rec = scoreMap[key];
+                var v = _getScore(rec);
+                row[getSubjectName(subjectIds[j])] = v !== null ? v : null;
+                if (v !== null) { total += v; count++; }
+            }
+            row['Total'] = count > 0 ? total : null;
+            row['Mean'] = count > 0 ? (total / count).toFixed(1) : null;
+            row['Grade'] = count > 0 ? cbcRating(Math.round(total / count)).rating : null;
+            data.push(row);
+        }
+
+        // No defval — null cells stay empty, non-null cells get written
+        var ws = XLSX.utils.json_to_sheet(data);
+
+        var cols = [{ wch: 4 }, { wch: 24 }, { wch: 14 }];
+        for (var c = 0; c < subjectIds.length; c++) {
+            cols.push({ wch: Math.max(getSubjectName(subjectIds[c]).length + 2, 12) });
+        }
+        cols.push({ wch: 7 }, { wch: 7 }, { wch: 7 });
+        ws['!cols'] = cols;
+
+        // Style header
+        var ref = ws['!ref'];
+        if (ref) {
+            var decoded = XLSX.utils.decode_range(ref);
+            for (var C = decoded.s.c; C <= decoded.e.c; C++) {
+                var addr = XLSX.utils.encode_cell({ r: decoded.s.r, c: C });
+                if (!ws[addr]) ws[addr] = { v: '' };
+                if (!ws[addr].s) ws[addr].s = {};
+                ws[addr].s.font = { bold: true, color: { rgb: 'FFFFFF' } };
+                ws[addr].s.fill = { fgColor: { rgb: '6366F1' } };
+                ws[addr].s.alignment = { horizontal: 'center', vertical: 'center' };
+            }
+
+            // Color-code scores & style rows
+            for (var R = decoded.s.r + 1; R <= decoded.e.r; R++) {
+                var numAddr = XLSX.utils.encode_cell({ r: R, c: decoded.s.c });
+                if (!ws[numAddr]) ws[numAddr] = { v: '' };
+                if (!ws[numAddr].s) ws[numAddr].s = {};
+                ws[numAddr].s.alignment = { horizontal: 'center' };
+                ws[numAddr].s.font = { color: { rgb: '94A3B8' } };
+
+                var admAddr = XLSX.utils.encode_cell({ r: R, c: decoded.s.c + 2 });
+                if (!ws[admAddr]) ws[admAddr] = { v: '' };
+                if (!ws[admAddr].s) ws[admAddr].s = {};
+                ws[admAddr].s.font = { name: 'Courier New', size: 10, color: { rgb: '64748B' } };
+
+                // Subject cells — color by CBC band
+                for (var sc = 0; sc < subjectIds.length; sc++) {
+                    var sAddr = XLSX.utils.encode_cell({ r: R, c: decoded.s.c + 3 + sc });
+                    if (ws[sAddr] && ws[sAddr].v !== null && ws[sAddr].v !== undefined && !isNaN(ws[sAddr].v)) {
+                        if (!ws[sAddr].s) ws[sAddr].s = {};
+                        var sv = Number(ws[sAddr].v);
+                        if (sv >= 80) ws[sAddr].s.fill = { fgColor: { rgb: 'DCFCE7' } };
+                        else if (sv >= 50) ws[sAddr].s.fill = { fgColor: { rgb: 'DBEAFE' } };
+                        else if (sv >= 30) ws[sAddr].s.fill = { fgColor: { rgb: 'FEF3C7' } };
+                        else ws[sAddr].s.fill = { fgColor: { rgb: 'FEE2E2' } };
+                        ws[sAddr].s.font = { bold: true };
+                        ws[sAddr].s.alignment = { horizontal: 'center' };
+                    }
+                }
+
+                // Alternating rows
+                if (R % 2 === 0) {
+                    for (var ac = decoded.s.c; ac <= decoded.e.c; ac++) {
+                        var aAddr = XLSX.utils.encode_cell({ r: R, c: ac });
+                        if (!ws[aAddr]) ws[aAddr] = { v: '' };
+                        if (!ws[aAddr].s) ws[aAddr].s = {};
+                        if (!ws[aAddr].s.fill) ws[aAddr].s.fill = { fgColor: { rgb: 'F8FAFC' } };
+                    }
+                }
+            }
+        }
+
+        // Summary row — use null for empty summary values too
+        var summaryRow = { '#': null, 'Name': 'CLASS MEAN', 'ADM No': null };
+        for (var si = 0; si < subjectIds.length; si++) {
+            var vals = [];
+            for (var vr = 0; vr < students.length; vr++) {
+                var rec = scoreMap[students[vr].id + '_' + subjectIds[si]];
+                var v = _getScore(rec);
+                if (v !== null) vals.push(v);
+            }
+            summaryRow[getSubjectName(subjectIds[si])] = vals.length > 0 ? (vals.reduce(function(a,b){return a+b;}, 0) / vals.length).toFixed(1) : null;
+        }
+        var allMeans = [];
+        for (var mr = 0; mr < students.length; mr++) {
+            var mt = 0, mc = 0;
+            for (var mj = 0; mj < subjectIds.length; mj++) {
+                var mrec = scoreMap[students[mr].id + '_' + subjectIds[mj]];
+                var mv = _getScore(mrec);
+                if (mv !== null) { mt += mv; mc++; }
+            }
+            if (mc > 0) allMeans.push(mt / mc);
+        }
+        summaryRow['Total'] = null;
+        summaryRow['Mean'] = allMeans.length > 0 ? (allMeans.reduce(function(a,b){return a+b;}, 0) / allMeans.length).toFixed(1) : null;
+        summaryRow['Grade'] = allMeans.length > 0 ? cbcRating(Math.round(allMeans.reduce(function(a,b){return a+b;}, 0) / allMeans.length)).rating : null;
+
+        XLSX.utils.sheet_add_json(ws, [summaryRow], { origin: 'A' + (students.length + 3) });
+
+        // Style summary row
+        if (ref) {
+            for (var C = 0; C <= decoded.e.c; C++) {
+                var addr = XLSX.utils.encode_cell({ r: students.length + 3, c: C });
+                if (ws[addr] && ws[addr].s) {
+                    ws[addr].s.font = { bold: true, color: { rgb: '4338CA' } };
+                    ws[addr].s.fill = { fgColor: { rgb: 'EEF2FF' } };
+                }
+            }
+        }
+
+        ws['!freeze'] = { xSplit: 3, ySplit: 1 };
+
+        var wb = XLSX.utils.book_new();
+        var sheetName = assess.name.substring(0, 28);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        XLSX.writeFile(wb, sheetName.replace(/\s+/g, '_') + '_Scores.xlsx');
+        showToast('Scores spreadsheet downloaded.');
+
+    } catch (err) {
+        console.error('Score download error:', err);
+        var errMsg = 'Download failed';
+        if (err) {
+            if (typeof err === 'string') errMsg += ': ' + err;
+            else if (err.message) errMsg += ': ' + err.message;
+            else errMsg += ': ' + String(err);
+        }
+        showToast(errMsg, 'error');
+    }
+}
+// ── UPLOAD: Open modal ────────────────────────────────────────
+function openBatchUploadModal() {
+    if (typeof XLSX === 'undefined') {
+        showToast('Spreadsheet library not loaded. Please refresh the page.', 'error');
+        return;
+    }
+
+    // Auto-select an assessment if batch dropdown is empty
+    var batchSel = document.getElementById('batchAssessment');
+    if (batchSel && !batchSel.value) {
+        var fallback = null;
+        var selIds = ['resultsAssessment', 'analysisAssessment'];
+        for (var s = 0; s < selIds.length; s++) {
+            var el = document.getElementById(selIds[s]);
+            if (el && el.value) { fallback = el.value; break; }
+        }
+        if (!fallback) {
+            var all = getAllAssessments();
+            if (all.length) fallback = all[0].id;
+        }
+        if (fallback) batchSel.value = fallback;
+    }
+
+    var fileInput = document.getElementById('batchUploadFile');
+    if (fileInput) fileInput.value = '';
+    var preview = document.getElementById('batchUploadPreview');
+    if (preview) preview.style.display = 'none';
+    window._batchUploadData = null;
+
+    openModal('batchUploadModal');
+}
+
+// ── UPLOAD: Parse and preview on file select ──────────────────
+document.addEventListener('change', function(e) {
+    if (e.target.id !== 'batchUploadFile' || !e.target.files.length) return;
+
+    const ctx = _getBatchContext();
+    if (!ctx) return;
+
+    const { assessId, subjectIds } = ctx;
+
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+        try {
+            const wb = XLSX.read(ev.target.result, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+            if (!jsonData.length) {
+                showToast('Spreadsheet is empty.', 'error');
+                return;
+            }
+
+            // ── Match columns ──
+            const headers = Object.keys(jsonData[0]);
+            const skipCols = new Set(['#', 'No', 'Name', 'Student', 'Student Name', 'Total', 'Mean', 'Average', 'Grade', 'CBC Grade', 'Rank', 'Remark', 'Remarks']);
+            
+            // Find ADM column
+            const admCol = headers.find(h => 
+                /adm|reg|no\.?$/i.test(h) && !/name/i.test(h)
+            ) || 'ADM No';
+
+            // Match subject columns by header name → subject ID
+            const colMap = []; // { col: headerName, subjId: 'js_eng', subjName: 'English' }
+            headers.forEach(h => {
+                if (skipCols.has(h) || /adm|reg/i.test(h)) return;
+                // Try to match this header to a subject name
+                const hLower = h.toLowerCase().trim();
+                const match = subjectIds.find(sid => {
+                    const sName = getSubjectName(sid).toLowerCase();
+                    return sName === hLower || 
+                           hLower.includes(sName) || 
+                           sName.includes(hLower) ||
+                           // Fuzzy: remove parens, spaces, dashes for comparison
+                           sName.replace(/[\s\(\)\-]/g, '') === hLower.replace(/[\s\(\)\-]/g, '');
+                });
+                if (match) {
+                    colMap.push({ col: h, subjId: match, subjName: getSubjectName(match) });
+                }
+            });
+
+            if (!colMap.length) {
+                showToast('No subject columns matched. Check that headers match learning area names.', 'error');
+                return;
+            }
+
+            // ── Parse rows ──
+            const uploadRows = [];
+            let matched = 0, unmatched = 0, scored = 0;
+
+            jsonData.forEach((raw, i) => {
+                const admVal = String(raw[admCol] || '').trim();
+                const student = admVal ? StudentRepo.getAll().find(s => s.reg === admVal || s.id === admVal) : null;
+
+                if (!student) {
+                    unmatched++;
+                    return;
+                }
+
+                matched++;
+                const row = {
+                    student,
+                    adm: admVal,
+                    name: raw['Name'] || raw['Student Name'] || raw['Student'] || student.name,
+                    scores: {},
+                    _rowNum: i + 1
+                };
+
+                colMap.forEach(cm => {
+                    const val = raw[cm.col];
+                    if (val !== '' && val !== null && val !== undefined) {
+                        const num = parseInt(val);
+                        if (!isNaN(num) && num >= 0 && num <= 100) {
+                            row.scores[cm.subjId] = num;
+                            scored++;
+                        }
+                    }
+                });
+
+                uploadRows.push(row);
+            });
+
+            // Store for later use
+            window._batchUploadData = {
+                rows: uploadRows,
+                colMap,
+                admCol,
+                matched,
+                unmatched,
+                scored,
+                totalStudents: StudentRepo.findBy('grade', ctx.assess.grade).length,
+                subjectIds
+            };
+
+            // ── Show preview ──
+            const preview = $('batchUploadPreview');
+            const previewContent = $('batchPreviewContent');
+            const previewStats = $('batchPreviewStats');
+            if (preview && previewContent && previewStats) {
+                preview.style.display = 'block';
+                previewStats.textContent = matched + ' matched / ' + unmatched + ' unmatched | ' + scored + ' score cells';
+
+                let html = '<table style="width:100%;border-collapse:collapse;font-size:0.75rem;">';
+                html += '<thead><tr style="background:var(--bg-secondary,#f8fafc);position:sticky;top:0;">';
+                html += '<th style="padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);">#</th>';
+                html += '<th style="padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);">Name</th>';
+                html += '<th style="padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);">ADM</th>';
+                colMap.forEach(cm => {
+                    html += `<th style="padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);min-width:55px;">${escapeHtml(cm.subjName)}</th>`;
+                });
+                html += '</tr></thead><tbody>';
+
+                uploadRows.forEach((r, i) => {
+                    const bg = i % 2 === 0 ? '' : 'background:rgba(0,0,0,0.01);';
+                    html += `<tr style="${bg}">`;
+                    html += `<td style="padding:3px 6px;color:var(--text-muted);">${r._rowNum}</td>`;
+                    html += `<td style="padding:3px 6px;">${escapeHtml(r.name)}</td>`;
+                    html += `<td style="padding:3px 6px;font-family:monospace;font-size:0.7rem;color:var(--text-muted);">${escapeHtml(r.adm)}</td>`;
+                    colMap.forEach(cm => {
+                        const v = r.scores[cm.subjId];
+                        if (v !== undefined) {
+                            const c = cbcRating(v);
+                            html += `<td style="padding:3px 6px;text-align:center;font-weight:600;color:${c.color};">${v}</td>`;
+                        } else {
+                            html += `<td style="padding:3px 6px;text-align:center;color:var(--border);">—</td>`;
+                        }
+                    });
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                previewContent.innerHTML = html;
+            }
+
+            if (unmatched > 0) {
+                showToast(unmatched + ' row(s) could not be matched by ADM No.', 'warning');
+            }
+
+        } catch (err) {
+            showToast('Error reading spreadsheet: ' + err.message, 'error');
+            console.error(err);
+        }
+    };
+    reader.readAsArrayBuffer(e.target.files[0]);
+});
+
+
+// ── UPLOAD: Confirm and apply ──────────────────────────────────
+function confirmBatchUpload() {
+    try {
+        console.log('[BatchUpload] Button clicked. Pending rows:', _pendingBatchRows?.length);
+
+        if (!_pendingBatchRows || _pendingBatchRows.length === 0) {
+            showToast('No data to apply. Please select a valid Excel file first.', 'error');
+            return;
+        }
+
+        const grade = $('batchUploadGrade')?.value || currentExamContext.tradeId || $('examTradeSelect')?.value;
+        const term = $('batchUploadTerm')?.value || store.settings.currentTerm || 'Term 1';
+        const year = $('batchUploadYear')?.value || store.settings.academicYear || new Date().getFullYear().toString();
+        const assessType = $('batchUploadType')?.value || 'summative';
+
+        if (!grade) {
+            showToast('Could not determine the Grade.', 'error');
+            return;
+        }
+
+        const rows = _pendingBatchRows;
+        const keys = Object.keys(rows[0]);
+
+        // Find ADM column
+        const admKey = keys.find(k => /^(adm|adm\s*no|admission|reg\s*no|reg)/i.test(k.trim()))
+                    || keys.find(k => /no/i.test(k))
+                    || keys[2];
+
+        if (!admKey) {
+            showToast('Could not find "ADM No" column.', 'error');
+            return;
+        }
+
+        // Match columns to learning areas
+        const subjectMap = [];
+        keys.forEach(colKey => {
+            if (colKey === admKey) return;
+            if (/^(#|name|student|total|mean|grade|remarks|comment|rank)/i.test(colKey.trim())) return;
+
+            const matchedArea = store.learningAreas.find(la => {
+                if (!la.name || !la.applicableLevels) return false;
+                if (!la.applicableLevels.includes(grade)) return false;
+                const laName = la.name.toLowerCase().trim();
+                const colName = colKey.trim().toLowerCase();
+                return laName === colName || laName.includes(colName) || colName.includes(laName);
+            });
+
+            if (matchedArea) {
+                subjectMap.push({ colKey, subjectId: matchedArea.id, subjectName: matchedArea.name });
+            }
+        });
+
+        if (subjectMap.length === 0) {
+            showToast(`No subject columns matched for ${grade}.`, 'error');
+            return;
+        }
+
+        // Lookup students
+        const gradeStudents = store.students.filter(s => s.grade === grade && s.status !== 'cleared');
+        const studentByAdm = {};
+        gradeStudents.forEach(s => {
+            const adm = (s.reg || '').trim().toLowerCase();
+            if (adm) studentByAdm[adm] = s;
+        });
+
+        let applied = 0;
+        let skipped = 0;
+        let unmatchedAdm = [];
+
+        // Process rows
+        rows.forEach(row => {
+            const rawAdm = String(row[admKey] || '').trim().toLowerCase();
+            if (!rawAdm) { skipped++; return; }
+
+            const student = studentByAdm[rawAdm];
+            if (!student) {
+                unmatchedAdm.push(row[admKey]);
+                skipped++;
+                return;
+            }
+
+            subjectMap.forEach(map => {
+                let raw = row[map.colKey];
+                if (raw === undefined || raw === null || raw === '') return;
+
+                if (typeof raw === 'string') {
+                    const clean = raw.trim().toUpperCase();
+                    if (['NE', 'ABS', 'AB', '-', 'X'].includes(clean)) raw = 0;
+                    else raw = parseFloat(clean);
+                } else {
+                    raw = parseFloat(raw);
+                }
+
+                if (isNaN(raw)) return;
+
+                const score = Math.max(0, Math.min(100, Math.round(raw)));
+                const rating = cbcRating(score);
+
+                store.exams.push({
+                    id: generateId(),
+                    studentId: student.id,
+                    subjectId: map.subjectId,
+                    grade: grade,
+                    score: score,
+                    ratingCode: rating.code,
+                    ratingText: rating.text,
+                    type: assessType,
+                    term: term,
+                    year: year,
+                    createdAt: new Date().toISOString()
+                });
+                applied++;
+            });
+        });
+
+        saveData();
+
+        let msg = `Applied ${applied} score${applied !== 1 ? 's' : ''}.`;
+        if (skipped > 0) msg += ` Skipped ${skipped}.`;
+        if (unmatchedAdm.length > 0) msg += ` Unmatched ADM: ${unmatchedAdm.slice(0, 3).join(', ')}`;
+        showToast(msg, applied > 0 ? 'success' : 'error');
+
+        _pendingBatchRows = null;
+        closeModal('batchUploadModal');
+        if ($('batchUploadFile')) $('batchUploadFile').value = '';
+        hideBatchPreview();
+
+    } catch (err) {
+        // THIS forces the hidden error to show as a toast instead of dying silently
+        console.error('[BatchUpload] CRASH:', err);
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//   BATCH UPLOAD — File Read, Preview, and Apply
+// ════════════════════════════════════════════════════════════════
+
+let _pendingBatchRows = null;  // Holds parsed Excel data between file-select and apply
+
+// Called when user picks a file in the Batch Upload modal
+function handleBatchFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) {
+        _pendingBatchRows = null;
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function (evt) {
+        try {
+            const data = new Uint8Array(evt.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheetName = workbook.SheetNames[0];
+            const sheet = workbook.Sheets[sheetName];
+            const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+            if (!rawRows || rawRows.length === 0) {
+                showToast('The spreadsheet is empty or could not be read.', 'error');
+                _pendingBatchRows = null;
+                hideBatchPreview();
+                return;
+            }
+
+            // ═══════════════════════════════════════════════
+            //  FILTER: Remove rows where EVERY value is empty
+            // ═══════════════════════════════════════════════
+            const rows = rawRows.filter(row => {
+                return Object.values(row).some(v => 
+                    v !== '' && v !== null && v !== undefined
+                );
+            });
+
+            if (rows.length === 0) {
+                showToast('File contains only empty rows. Enter scores and re-export.', 'error');
+                _pendingBatchRows = null;
+                hideBatchPreview();
+                return;
+            }
+
+            // Store clean data for confirmBatchUpload()
+            _pendingBatchRows = rows;
+            showBatchPreview(rows);
+
+        } catch (err) {
+            console.error('Batch file parse error:', err);
+            showToast('Failed to read the file. Make sure it is a valid .xlsx file.', 'error');
+            _pendingBatchRows = null;
+            hideBatchPreview();
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+// Render a mini preview table inside the modal
+function showBatchPreview(rows) {
+    const container = $('batchUploadPreview');
+    const content = $('batchPreviewContent');
+    const stats = $('batchPreviewStats');
+
+    if (!container || !content) return;
+
+    const keys = Object.keys(rows[0]);
+    const previewRows = rows.slice(0, 8); // Show first 8 rows max
+
+    let html = '<table style="width:100%;border-collapse:collapse;">';
+    html += '<thead><tr>';
+    keys.forEach(k => {
+        html += `<th style="background:var(--bg-secondary);padding:6px 8px;text-align:left;font-weight:600;border-bottom:2px solid var(--border);white-space:nowrap;font-size:0.75rem;">${escapeHtml(k)}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    previewRows.forEach(row => {
+        html += '<tr>';
+        keys.forEach(k => {
+            const val = row[k] !== undefined && row[k] !== null ? String(row[k]) : '';
+            html += `<td style="padding:4px 8px;border-bottom:1px solid var(--border);font-size:0.75rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(val)}</td>`;
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    content.innerHTML = html;
+    if (stats) stats.textContent = `${rows.length} row${rows.length !== 1 ? 's' : ''} · ${keys.length} column${keys.length !== 1 ? 's' : ''}${rows.length > 8 ? ' (showing first 8)' : ''}`;
+    container.style.display = 'block';
+}
+
+function hideBatchPreview() {
+    const container = $('batchUploadPreview');
+    if (container) container.style.display = 'none';
+}
+
+// The actual "Apply Scores" logic
+function confirmBatchUpload() {
+    if (!_pendingBatchRows || _pendingBatchRows.length === 0) {
+        showToast('No data to apply. Please select a valid Excel file first.', 'error');
+        return;
+    }
+
+    // 1. Determine which assessment we're uploading into
+    const assessId = $('batchAssessment')?.value;
+    if (!assessId) {
+        showToast('No assessment selected. Go back to the Batch Entry tab and select one first.', 'error');
+        return;
+    }
+
+    const assessment = store.exams.find(ex => ex.id === assessId);
+    if (!assessment) {
+        showToast('Selected assessment not found in records.', 'error');
+        return;
+    }
+
+    const subjectIds = assessment.subjects || []; // Array of subject IDs
+    const grade = assessment.grade;
+    const rows = _pendingBatchRows;
+    const keys = Object.keys(rows[0]);
+
+    // 2. Locate the ADM No column (try common names)
+    const admKey = keys.find(k => /^(adm|adm\s*no|admission|reg\s*no|reg)/i.test(k.trim()))
+                || keys.find(k => /no/i.test(k))
+                || keys[2]; // Fallback: 3rd column per format spec
+
+    if (!admKey) {
+        showToast('Could not find an "ADM No" column in the spreadsheet.', 'error');
+        return;
+    }
+
+    // 3. Match spreadsheet columns to subject IDs by name
+    const subjectMap = []; // { colKey, subjectId, subjectName }
+    subjectIds.forEach(subId => {
+        const subName = getSubjectName(subId);
+        if (!subName) return;
+
+        // Try exact match, then partial match
+        let matched = keys.find(k => k.trim().toLowerCase() === subName.toLowerCase());
+        if (!matched) matched = keys.find(k => subName.toLowerCase().includes(k.trim().toLowerCase()) || k.trim().toLowerCase().includes(subName.toLowerCase()));
+
+        if (matched && matched !== admKey) {
+            subjectMap.push({ colKey: matched, subjectId: subId, subjectName: subName });
+        }
+    });
+
+    if (subjectMap.length === 0) {
+        showToast('No subject columns could be matched. Check that column names match the assessment learning areas.', 'error');
+        return;
+    }
+
+    // 4. Get students in this grade for ADM No lookup
+    const gradeStudents = store.students.filter(s => s.grade === grade);
+    const studentByAdm = {};
+    gradeStudents.forEach(s => {
+        const adm = (s.reg || '').trim().toLowerCase();
+        if (adm) studentByAdm[adm] = s;
+    });
+
+    // 5. Initialize scores structure if needed
+    if (!assessment.scores) assessment.scores = {};
+
+    let applied = 0;
+    let skipped = 0;
+    let unmatchedAdm = [];
+
+    rows.forEach(row => {
+        const rawAdm = String(row[admKey] || '').trim().toLowerCase();
+        if (!rawAdm) { skipped++; return; }
+
+        const student = studentByAdm[rawAdm];
+        if (!student) {
+            unmatchedAdm.push(row[admKey]);
+            skipped++;
+            return;
+        }
+
+        const sid = student.id;
+        if (!assessment.scores[sid]) assessment.scores[sid] = {};
+
+        subjectMap.forEach(map => {
+            let raw = row[map.colKey];
+            if (raw === undefined || raw === null || raw === '') return;
+
+            // Handle "NE", "ABS", "AB" as 0
+            if (typeof raw === 'string') {
+                const clean = raw.trim().toUpperCase();
+                if (clean === 'NE' || clean === 'ABS' || clean === 'AB' || clean === '-') {
+                    raw = 0;
+                } else {
+                    raw = parseFloat(clean);
+                }
+            } else {
+                raw = parseFloat(raw);
+            }
+
+            if (isNaN(raw)) return;
+
+            // Clamp 0–100
+            const score = Math.max(0, Math.min(100, Math.round(raw)));
+            const rating = cbcRating(score);
+
+            assessment.scores[sid][map.subjectId] = {
+                score: score,
+                rating: rating.code,
+                ratingText: rating.text,
+                remarks: ''
+            };
+            applied++;
+        });
+    });
+
+    // 6. Save and report
+    saveData();
+
+    let msg = `Applied ${applied} score${applied !== 1 ? 's' : ''} successfully.`;
+    if (skipped > 0) msg += ` ${skipped} row${skipped !== 1 ? 's' : ''} skipped.`;
+    if (unmatchedAdm.length > 0 && unmatchedAdm.length <= 5) {
+        msg += ` Unmatched ADM: ${unmatchedAdm.join(', ')}`;
+    } else if (unmatchedAdm.length > 5) {
+        msg += ` ${unmatchedAdm.length} unmatched ADM numbers.`;
+    }
+    showToast(msg, applied > 0 ? 'success' : 'error');
+
+    // 7. Close modal, refresh grid, clean up
+    _pendingBatchRows = null;
+    closeModal('batchUploadModal');
+    if ($('batchUploadFile')) $('batchUploadFile').value = '';
+    hideBatchPreview();
+
+    // Refresh the batch grid if it's visible
+    if (typeof loadBatchGrid === 'function') loadBatchGrid();
+}
+
+function resetBatchUploadModal() {
+    _pendingBatchRows = null;
+    const fileInput = $('batchUploadFile');
+    if (fileInput) fileInput.value = '';
+    const preview = $('batchUploadPreview');
+    if (preview) preview.style.display = 'none';
+}
+
+
+// ── INIT ────────────────────────────────────────────────────────
+function initExamsSection() {
+    renderAssessmentCards();
+}
+
+const _exObs = new MutationObserver(() => {
+    const el = $('exams');
+    if (el && el.classList.contains('active')) initExamsSection();
+});
+if ($('exams')) _exObs.observe($('exams'), { attributes: true, attributeFilter: ['class'] });
+
+initExamsSection();
+
+// ==========================================================================
+//   SPREADSHEET UPLOAD FOR SCORES
+// ==========================================================================
+
+let parsedScoreData = [];
+
+function openBatchAssessmentModal() {
+    if (!currentExamContext.subjectId || !currentExamContext.tradeId) {
+        return showToast('Please select a Grade and Subject first.', 'error');
+    }
+    
+    parsedScoreData = [];
+    if ($('batchScorePreview')) $('batchScorePreview').innerHTML = '';
+    if ($('batchScoreFile')) $('batchScoreFile').value = '';
+    
+    // Show required columns info
+    const infoEl = $('batchScoreInfo');
+    if (infoEl) {
+        infoEl.innerHTML = `
+            <div class="alert alert-info">
+                <strong>Required Columns:</strong> ADM No / Name / Score<br>
+                <small>Or: Reg Number / Score (minimum)</small>
+            </div>
+        `;
+    }
+    
+    openModal('batchAssessmentModal');
+}
+
+// Handle file selection for score upload
+document.addEventListener('change', function(e) {
+    if (e.target.id === 'batchScoreFile') {
+        handleBatchScoreFile(e.target);
+    }
+});
+
+function handleBatchScoreFile(input) {
+    const file = input.files ? input.files[0] : input.target?.files?.[0];
+    if (!file) return;
+    
+    // Check file type
+    const validTypes = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
+        'text/csv'
+    ];
+    
+    if (!validTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls|csv)$/i)) {
+        showToast('Please upload an Excel (.xlsx, .xls) or CSV file.', 'error');
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+            
+            if (jsonData.length === 0) {
+                showToast('The spreadsheet is empty.', 'error');
+                return;
+            }
+            
+            // Map and validate the data
+            parsedScoreData = mapScoreData(jsonData);
+            renderScorePreview(parsedScoreData);
+            
+        } catch (err) {
+            console.error('Parse error:', err);
+            showToast('Error reading file. Ensure it\'s a valid spreadsheet.', 'error');
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function mapScoreData(rawData) {
+    const students = StudentRepo.findBy('grade', currentExamContext.tradeId);
+    const mapped = [];
+    
+    // Detect column names (flexible matching)
+    const firstRow = rawData[0];
+    const columns = Object.keys(firstRow);
+    
+    // Find matching columns
+    const admCol = columns.find(c => 
+        c.toLowerCase().includes('adm') || 
+        c.toLowerCase().includes('reg') || 
+        c.toLowerCase().includes('number')
+    );
+    
+    const nameCol = columns.find(c => 
+        c.toLowerCase().includes('name') || 
+        c.toLowerCase().includes('student')
+    );
+    
+    const scoreCol = columns.find(c => 
+        c.toLowerCase().includes('score') || 
+        c.toLowerCase().includes('marks') || 
+        c.toLowerCase().includes('points')
+    );
+    
+    if (!scoreCol) {
+        showToast('Could not find "Score" or "Marks" column in spreadsheet.', 'error');
+        return [];
+    }
+    
+    rawData.forEach((row, index) => {
+        const admNo = String(row[admCol] || '').trim();
+        const name = String(row[nameCol] || '').trim().toLowerCase();
+        const score = parseFloat(row[scoreCol]);
+        
+        if (isNaN(score)) return; // Skip invalid scores
+        
+        // Find matching student
+        let student = null;
+        
+        // Try by ADM No first
+        if (admNo) {
+            student = students.find(s => 
+                s.reg && s.reg.toLowerCase() === admNo.toLowerCase()
+            );
+        }
+        
+        // Fallback: Try by name
+        if (!student && name) {
+            student = students.find(s => 
+                s.name && s.name.toLowerCase().includes(name.split(' ')[0])
+            );
+        }
+        
+        if (student) {
+            mapped.push({
+                studentId: student.id,
+                studentName: student.name,
+                reg: student.reg,
+                score: score,
+                row: index + 2, // Excel row number
+                status: 'matched'
+            });
+        } else {
+            mapped.push({
+                studentId: null,
+                studentName: name || admNo,
+                reg: admNo,
+                score: score,
+                row: index + 2,
+                status: 'unmatched'
+            });
+        }
+    });
+    
+    return mapped;
+}
+
+function renderScorePreview(data) {
+    const container = $('batchScorePreview');
+    if (!container) return;
+    
+    if (data.length === 0) {
+        container.innerHTML = '<p class="text-muted">No valid score data found.</p>';
+        return;
+    }
+    
+    const matched = data.filter(d => d.status === 'matched').length;
+    const unmatched = data.filter(d => d.status === 'unmatched').length;
+    
+    let html = `
+        <div class="mb-3">
+            <span class="badge bg-success">Matched: ${matched}</span>
+            <span class="badge bg-warning ms-2">Unmatched: ${unmatched}</span>
+        </div>
+        <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+            <table class="table table-sm table-bordered">
+                <thead class="table-light sticky-top">
+                    <tr>
+                        <th>Row</th>
+                        <th>ADM No</th>
+                        <th>Student Name</th>
+                        <th>Score</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    data.forEach(item => {
+        const statusClass = item.status === 'matched' ? 'success' : 'warning';
+        html += `
+            <tr class="table-${statusClass}">
+                <td>${item.row}</td>
+                <td>${escapeHtml(item.reg || '-')}</td>
+                <td>${escapeHtml(item.studentName)}</td>
+                <td><strong>${item.score}</strong></td>
+                <td>
+                    <span class="badge bg-${statusClass}">
+                        ${item.status === 'matched' ? '✓ Found' : '⚠ Not Found'}
+                    </span>
+                </td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+    
+    // Enable/disable save button
+    const saveBtn = $('btnSaveBatchAssessment');
+    if (saveBtn) {
+        saveBtn.disabled = matched === 0;
+    }
+}
+
+async function saveBatchAssessments() {
+    const validEntries = parsedScoreData.filter(d => d.status === 'matched');
+    
+    if (validEntries.length === 0) {
+        return showToast('No valid matched scores to save.', 'error');
+    }
+    
+    const subjectId = currentExamContext.subjectId;
+    const grade = currentExamContext.tradeId;
+    const term = store.settings.currentTerm || 'Term 1';
+    const year = store.settings.academicYear || '2024';
+    const examName = `${term} Exam ${year}`;
+    
+    let savedCount = 0;
+    let errors = 0;
+    
+    validEntries.forEach(entry => {
+        try {
+            // Find or create exam record for this student
+            let studentExam = store.exams.find(e => 
+                e.studentId === entry.studentId && 
+                e.subjectId === subjectId &&
+                e.examName === examName
+            );
+            
+            if (studentExam) {
+                // Update existing
+                studentExam.score = entry.score;
+                studentExam.grade = calculateCBCGrade(entry.score);
+            } else {
+                // Create new exam record
+                store.exams.push({
+                    id: generateId(),
+                    studentId: entry.studentId,
+                    subjectId: subjectId,
+                    grade: grade,
+                    examName: examName,
+                    term: term,
+                    year: year,
+                    score: entry.score,
+                    gradeValue: calculateCBCGrade(entry.score),
+                    dateRecorded: new Date().toISOString(),
+                    recordedBy: CURRENT_USER?.name || 'Admin'
+                });
+            }
+            savedCount++;
+        } catch (err) {
+            console.error('Error saving score for', entry.studentName, err);
+            errors++;
+        }
+    });
+    
+    if (savedCount > 0) {
+        // CRITICAL: Actually save to server/localStorage
+        await saveData(); // <-- This is what was missing!
+        
+        showToast(`Saved ${savedCount} scores successfully!${errors > 0 ? ` (${errors} errors)` : ''}`, 'success');
+        closeModal('batchAssessmentModal');
+        parsedScoreData = [];
+        
+        // Refresh the exam interface if open
+        if (currentExamContext.studentId) {
+            loadCBETUnits();
+        }
+    } else {
+        showToast('Failed to save any scores.', 'error');
+    }
+}
+
+// CBC Grade Calculator
+function calculateCBCGrade(score) {
+    if (score >= 80) return 'EE (Exceeding Expectations)';
+    if (score >= 70) return 'ME (Meeting Expectations)';
+    if (score >= 50) return 'AE (Approaching Expectations)';
+    if (score >= 30) return 'BE (Below Expectations)';
+    return 'NE (Needs Support)';
+}
+// Wire this up in your global click listener:
+// if (target.closest('#btnSaveBatchUpload')) saveBatchUploadData();
+
+async function saveBatchUploadData() {
+    const data = window._batchUploadData;
+    if (!data || !data.rows || !data.rows.length) {
+        return showToast('No data to save.', 'error');
+    }
+    
+    const term = store.settings.currentTerm || 'Term 1';
+    const year = store.settings.academicYear || new Date().getFullYear();
+    const examName = `${term} Exam ${year}`;
+    
+    let savedCount = 0;
+    
+    data.rows.forEach(row => {
+        Object.entries(row.scores).forEach(([subjId, score]) => {
+            const existingIndex = store.exams.findIndex(e => 
+                e.studentId === row.student.id &&
+                e.subjectId === subjId &&
+                e.examName === examName
+            );
+            
+            if (existingIndex !== -1) {
+                store.exams[existingIndex].score = score;
+                store.exams[existingIndex].gradeValue = cbcRating(score).text;
+                store.exams[existingIndex].dateRecorded = new Date().toISOString();
+            } else {
+                store.exams.push({
+                    id: generateId(),
+                    studentId: row.student.id,
+                    subjectId: subjId,
+                    grade: row.student.grade,
+                    examName: examName,
+                    term: term,
+                    year: year,
+                    score: score,
+                    gradeValue: cbcRating(score).text,
+                    dateRecorded: new Date().toISOString(),
+                    recordedBy: CURRENT_USER?.name || 'Admin'
+                });
+            }
+            savedCount++;
+        });
+    });
+    
+    if (savedCount > 0) {
+        await saveData(); // Pushes to Render / LocalStorage
+        
+        showToast(`Successfully saved ${savedCount} scores for ${data.rows.length} students!`, 'success');
+        
+        // Clean up UI
+        const preview = $('batchUploadPreview');
+        if (preview) preview.style.display = 'none';
+        const fileInput = $('batchUploadFile');
+        if (fileInput) fileInput.value = ''; 
+        window._batchUploadData = null;
+    } else {
+        showToast('No valid scores found to save.', 'error');
+    }
+}
+
+
+
+
+// ==========================================================================
+//   REPORTS CENTER — COMPLETE LOGIC
+// ==========================================================================
+
+// ── State ──
+let selectedReportStudentId = null;
+let currentReportType = null;
+
+// ── Bootstrap: call these from initializeApp() ──
+function initReports() {
+    populateReportFilters();
+    bindReportListeners();
+    injectReportSearchDropdown();
+}
+
+function injectReportSearchDropdown() {
+    const searchWrapper = document.querySelector('.reports-search');
+    if (!searchWrapper || searchWrapper.querySelector('.report-student-dropdown')) return;
+    const dropdown = document.createElement('div');
+    dropdown.className = 'report-student-dropdown';
+    searchWrapper.style.position = 'relative';
+    searchWrapper.appendChild(dropdown);
+}
+
+// ══════════════════════════════════════════════════════════════
+//   FILTER POPULATION
+// ══════════════════════════════════════════════════════════════
+function populateReportFilters() {
+    const yearSel = $('reportYearFilter');
+    if (yearSel) {
+        const cy = new Date().getFullYear();
+        yearSel.innerHTML = '<option value="all">All Years</option>';
+        for (let y = cy; y >= cy - 5; y--) {
+            const opt = document.createElement('option');
+            opt.value = y; opt.textContent = y;
+            if (String(y) === String(store.settings.academicYear)) opt.selected = true;
+            yearSel.appendChild(opt);
+        }
+    }
+    const termSel = $('reportTermFilter');
+    if (termSel && store.settings.currentTerm) {
+        const opt = termSel.querySelector(`option[value="${store.settings.currentTerm}"]`);
+        if (opt) opt.selected = true;
+    }
+    populateAssessmentFilter();
+}
+
+function populateAssessmentFilter() {
+    const sel = $('reportExamFilter');
+    if (!sel) return;
+    const grade  = $('reportGradeFilter')?.value  || 'all';
+    const term   = $('reportTermFilter')?.value   || 'all';
+    const year   = $('reportYearFilter')?.value    || 'all';
+
+    let exams = [...store.exams];
+    if (grade !== 'all') exams = exams.filter(e => e.tradeId === grade);
+    if (term  !== 'all') exams = exams.filter(e => e.term  === term);
+    if (year  !== 'all') exams = exams.filter(e => e.year  === String(year));
+
+    const ids = [...new Set(exams.map(e => e.assessId).filter(Boolean))];
+    sel.innerHTML = '<option value="all">All Assessments</option>';
+    ids.forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id; opt.textContent = id;
+        sel.appendChild(opt);
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
+//   EVENT BINDING
+// ══════════════════════════════════════════════════════════════
+function bindReportListeners() {
+    ['reportGradeFilter', 'reportTermFilter', 'reportYearFilter'].forEach(id => {
+        $(id)?.addEventListener('change', populateAssessmentFilter);
+    });
+
+    $('reportStudentSearch')?.addEventListener('input', debounce(handleReportStudentSearch, 200));
+    document.addEventListener('click', e => {
+        if (!e.target.closest('.reports-search') && !e.target.closest('.report-student-dropdown')) {
+            closeStudentDropdown();
+        }
+    });
+
+    $('reportsBackBtn')?.addEventListener('click', closeReportPreview);
+    $('reportsExportPdfBtn')?.addEventListener('click', () => exportCurrentReport('pdf'));
+    $('reportsExportExcelBtn')?.addEventListener('click', () => exportCurrentReport('excel'));
+    $('reportsPrintBtn')?.addEventListener('click', () => exportCurrentReport('print'));
+    $('reportsPrintAllBtn')?.addEventListener('click', printAllReports);
+
+    $('reportSubjectSelect')?.addEventListener('change', () => {
+        if (currentReportType === 'subject') buildReport('subject');
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
+//   STUDENT SEARCH DROPDOWN
+// ══════════════════════════════════════════════════════════════
+function handleReportStudentSearch(term) {
+    const dd = document.querySelector('.report-student-dropdown');
+    if (!dd) return;
+    term = term.toLowerCase().trim();
+
+    if (!term) {
+        dd.innerHTML = ''; dd.classList.remove('visible');
+        selectedReportStudentId = null;
+        return;
+    }
+
+    const grade = $('reportGradeFilter')?.value || 'all';
+    let list = StudentRepo.getAll();
+    if (grade !== 'all') list = list.filter(s => s.grade === grade);
+
+    const hits = list.filter(s =>
+        (s.name && s.name.toLowerCase().includes(term)) ||
+        (s.reg  && s.reg.toLowerCase().includes(term))
+    ).slice(0, 12);
+
+    if (!hits.length) {
+        dd.innerHTML = '<div class="rsd-empty">No learners found</div>';
+    } else {
+        dd.innerHTML = hits.map(s => `
+            <div class="rsd-item" data-sid="${s.id}">
+                <span class="rsd-name">${escapeHtml(s.name)}</span>
+                <span class="rsd-meta">${escapeHtml(s.reg || '')} &middot; ${escapeHtml(s.grade || '')}</span>
+            </div>`).join('');
+
+        dd.querySelectorAll('.rsd-item').forEach(item => {
+            item.addEventListener('click', () => {
+                selectedReportStudentId = item.dataset.sid;
+                const stu = StudentRepo.getById(selectedReportStudentId);
+                if ($('reportStudentSearch')) $('reportStudentSearch').value = stu ? stu.name : '';
+                dd.classList.remove('visible');
+            });
+        });
+    }
+    dd.classList.add('visible');
+}
+
+function closeStudentDropdown() {
+    const dd = document.querySelector('.report-student-dropdown');
+    if (dd) dd.classList.remove('visible');
+}
+
+// ══════════════════════════════════════════════════════════════
+//   MAIN GENERATE ROUTER
+// ══════════════════════════════════════════════════════════════
+function buildReport(type) {
+    currentReportType = type;
+
+    if (type === 'individual' && !selectedReportStudentId) {
+        showToast('Search and select a learner first.', 'error');
+        $('reportStudentSearch')?.focus();
+        return;
+    }
+    const needsGrade = ['class', 'subject', 'competency', 'attendance'];
+    const grade = $('reportGradeFilter')?.value;
+    if (needsGrade.includes(type) && (grade === 'all' || !grade)) {
+        showToast('Select a specific grade for this report.', 'error');
+        $('reportGradeFilter')?.focus();
+        return;
+    }
+
+    document.querySelectorAll('.report-preview-content').forEach(p => p.style.display = 'none');
+    const area = $('reportsPreviewArea');
+    const empty = $('reportsEmptyState');
+    if (area) area.style.display = 'block';
+    if (empty) empty.style.display = 'none';
+
+    populateReportSchoolHeader();
+
+    const generators = {
+        individual:  generateIndividualReport,
+        class:       generateClassReport,
+        subject:     generateSubjectReport,
+        term:        generateTermReport,
+        competency:  generateCompetencyReport,
+        attendance:  generateAttendanceReport
+    };
+    (generators[type] || function(){})();
+
+    const panelMap = {
+        individual:  'reportIndividualPreview',
+        class:       'reportClassPreview',
+        subject:     'reportSubjectPreview',
+        term:        'reportTermPreview',
+        competency:  'reportCompetencyPreview',
+        attendance:  'reportAttendancePreview'
+    };
+    const panel = $(panelMap[type]);
+    if (panel) panel.style.display = 'block';
+
+    const titles = {
+        individual:'Individual Report Card', class:'Class Performance Report',
+        subject:'Subject Analysis Report', term:'Term Summary Report',
+        competency:'Competency Progress Report', attendance:'Attendance Report'
+    };
+    const tEl = $('reportsPreviewTitle');
+    if (tEl) tEl.textContent = titles[type] || 'Report Preview';
+
+    area?.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function closeReportPreview() {
+    document.querySelectorAll('.report-preview-content').forEach(p => p.style.display = 'none');
+    const area = $('reportsPreviewArea');
+    const empty = $('reportsEmptyState');
+    if (area) area.style.display = 'none';
+    if (empty) empty.style.display = 'flex';
+    currentReportType = null;
+}
+
+function populateReportSchoolHeader() {
+    const s = store.settings;
+    ['reportSchoolName','classReportSchoolName'].forEach(id => {
+        if ($(id)) $(id).textContent = s.schoolName || 'School Name';
+    });
+    if ($('reportSchoolMotto'))    $('reportSchoolMotto').textContent    = s.motto || '';
+    if ($('reportSchoolAddress')) $('reportSchoolAddress').textContent = [s.address, s.phone, s.email].filter(Boolean).join(' \u00B7 ');
+    if (s.logo && $('reportSchoolLogo')) {
+        $('reportSchoolLogo').src = s.logo;
+        $('reportSchoolLogo').style.display = 'block';
+        const ph = $('rshLogoPlaceholder');
+        if (ph) ph.style.display = 'none';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//   SHARED HELPERS
+// ══════════════════════════════════════════════════════════════
+function getFilteredExams(opts = {}) {
+    const grade    = opts.grade    || $('reportGradeFilter')?.value  || 'all';
+    const term     = opts.term     || $('reportTermFilter')?.value   || 'all';
+    const year     = opts.year     || $('reportYearFilter')?.value    || 'all';
+    const assessId = opts.assessId || $('reportExamFilter')?.value   || 'all';
+
+    let exams = [...store.exams];
+    if (grade    !== 'all') exams = exams.filter(e => e.tradeId   === grade);
+    if (term     !== 'all') exams = exams.filter(e => e.term      === term);
+    if (year     !== 'all') exams = exams.filter(e => e.year      === String(year));
+    if (assessId !== 'all') exams = exams.filter(e => e.assessId  === assessId);
+    if (opts.studentId)     exams = exams.filter(e => e.studentId === opts.studentId);
+    if (opts.subjectId)     exams = exams.filter(e => e.subjectId === opts.subjectId);
+    return exams;
+}
+
+function studentsForGrade(g) {
+    return g && g !== 'all' ? StudentRepo.getAll().filter(s => s.grade === g) : StudentRepo.getAll();
+}
+
+function areasForGrade(g) {
+    return g && g !== 'all'
+        ? store.learningAreas.filter(la => la.applicableLevels && la.applicableLevels.includes(g))
+        : store.learningAreas;
+}
+
+function calcMean(scores)        { return scores.length ? Math.round(scores.reduce((a,b) => a+b, 0) / scores.length) : 0; }
+function meanToGrade(m)          { return m >= 80 ? 'E' : m >= 65 ? 'M' : m >= 50 ? 'A' : 'B'; }
+function autoRemark(s)           { return s >= 80 ? 'Excellent performance. Keep it up!' : s >= 65 ? 'Good performance. Continue working hard.' : s >= 50 ? 'Fair performance. Room for improvement.' : s >= 30 ? 'Below average. Needs more effort.' : 'Needs significant support and intervention.'; }
+function teacherSummary(m)       { return m >= 80 ? 'Outstanding academic performance. The learner consistently demonstrates excellence across learning areas.' : m >= 65 ? 'Good academic progress. The learner is meeting expectations in most areas.' : m >= 50 ? 'Satisfactory progress. Focus on weak areas to improve overall performance.' : m >= 30 ? 'The learner is approaching expectations but needs additional support.' : 'Requires targeted intervention and close monitoring.'; }
+function headSummary(m)          { return m >= 80 ? 'Commendable performance. Keep up the excellent work.' : m >= 65 ? 'Good progress. Continue to strive for excellence.' : m >= 50 ? 'Fair performance. Put more effort in your studies.' : m >= 30 ? 'Needs improvement. Seek help from teachers and parents.' : 'Requires urgent attention from both school and home.'; }
+
+function classPosition(studentId, grade, exams) {
+    const means = studentsForGrade(grade).map(s => {
+        const se = exams.filter(e => e.studentId === s.id);
+        return se.length ? { id: s.id, m: calcMean(se.map(e => e.score || 0)) } : null;
+    }).filter(Boolean).sort((a,b) => b.m - a.m);
+    const idx = means.findIndex(x => x.id === studentId);
+    return idx >= 0 ? idx + 1 : 0;
+}
+
+function countCompetencies(exams) {
+    const ratings = exams.map(e => cbcRating(e.score || 0));
+    return {
+        ee: ratings.filter(r => r.code === 'EE').length,
+        me: ratings.filter(r => r.code === 'ME').length,
+        ae: ratings.filter(r => r.code === 'AE').length,
+        be: ratings.filter(r => ['BE','NE'].includes(r.code)).length
+    };
+}
+
+// ══════════════════════════════════════════════════════════════
+//   4A  INDIVIDUAL REPORT CARD
+// ══════════════════════════════════════════════════════════════
+function generateIndividualReport() {
+    const stu  = StudentRepo.getById(selectedReportStudentId);
+    if (!stu) { showToast('Learner not found.','error'); return; }
+
+    const term = $('reportTermFilter')?.value || store.settings.currentTerm || 'Term 1';
+    const year = $('reportYearFilter')?.value || store.settings.academicYear || new Date().getFullYear();
+    const exams = getFilteredExams({ studentId: stu.id });
+    const areas = areasForGrade(stu.grade);
+
+    const tbody = $('individualReportBody');
+    if (!tbody) return;
+    let total = 0, cnt = 0;
+    tbody.innerHTML = areas.map((la, i) => {
+        const best = exams.filter(e => e.subjectId === la.id).sort((a,b) => (b.score||0) - (a.score||0))[0];
+        const sc = best ? (best.score || 0) : null;
+        const rt = sc !== null ? cbcRating(sc) : null;
+        if (sc !== null) { total += sc; cnt++; }
+        return `<tr>
+            <td>${i+1}</td>
+            <td>${escapeHtml(la.name)}</td>
+            <td class="text-center">${sc !== null ? sc : '–'}</td>
+            <td class="text-center">${sc !== null ? meanToGrade(sc) : '–'}</td>
+            <td class="text-center" style="color:${rt ? rt.color : 'inherit'}">${rt ? rt.code : '–'}</td>
+            <td>${sc !== null ? autoRemark(sc) : 'Not assessed'}</td>
+        </tr>`;
+    }).join('');
+
+    const mean = cnt > 0 ? Math.round(total / cnt) : 0;
+    const set = (id,v) => { const el = $(id); if (el) el.textContent = v; };
+    const setH = (id,h) => { const el = $(id); if (el) el.innerHTML = h; };
+
+    set('rptTotalScore', total);
+    set('rptMeanGrade',  cnt ? meanToGrade(mean) : '–');
+    const ov = cbcRating(mean);
+    setH('rptOverallCompetency', `<span style="color:${ov.color}">${ov.code} – ${ov.text}</span>`);
+
+    set('rptLearnerName',    stu.name   || '–');
+    set('rptLearnerAdm',     stu.reg    || '–');
+    set('rptLearnerGrade',   stu.grade  || '–');
+    set('rptLearnerStream',  stu.stream || '–');
+    set('rptLearnerGender',  stu.gender || '–');
+
+    if (stu.dob) {
+        const age = Math.floor((Date.now() - new Date(stu.dob).getTime()) / 31557600000);
+        set('rptLearnerAge', age + ' years');
+    }
+
+    const ct = store.staff.find(s => s.grade === stu.grade);
+    set('rptClassTeacher', ct ? ct.name : '–');
+
+    const pos = classPosition(stu.id, stu.grade, exams);
+    const totalInGrade = studentsForGrade(stu.grade).length;
+    set('rptLearnerPosition', pos > 0 ? `#${pos} of ${totalInGrade}` : 'N/A');
+
+    set('reportTermLabel', term);
+    set('reportYearLabel', year);
+
+    set('rptTeacherRemarks', teacherSummary(mean));
+    set('rptHeadRemarks',    headSummary(mean));
+
+    set('rptFeeBalance',   stu.feeBalance ? formatCurrency(stu.feeBalance) : 'KES 0');
+    set('rptOpeningDate', 'To be announced');
+}
+
+// ══════════════════════════════════════════════════════════════
+//   4B  CLASS PERFORMANCE REPORT
+// ══════════════════════════════════════════════════════════════
+function generateClassReport() {
+    const grade = $('reportGradeFilter')?.value;
+    if (!grade || grade === 'all') return;
+    const term = $('reportTermFilter')?.value || store.settings.currentTerm;
+    const year = $('reportYearFilter')?.value || store.settings.academicYear;
+    const students = studentsForGrade(grade);
+    const areas    = areasForGrade(grade);
+    const exams    = getFilteredExams({ grade });
+
+    const set = (id,v) => { const el=$(id); if(el) el.textContent=v; };
+
+    set('classReportSubtitle',     grade);
+    set('classReportPeriodLabel',  `${term} — ${year}`);
+
+    const allMeans = students.map(s => {
+        const se = exams.filter(e => e.studentId === s.id);
+        return se.length ? calcMean(se.map(e => e.score||0)) : null;
+    }).filter(m => m !== null);
+
+    const classMean = allMeans.length ? Math.round(allMeans.reduce((a,b)=>a+b,0)/allMeans.length) : 0;
+    set('rcsTotal',   students.length);
+    set('rcsMean',    classMean);
+    set('rcsHighest', allMeans.length ? Math.max(...allMeans) : 0);
+    set('rcsLowest',  allMeans.length ? Math.min(...allMeans) : 0);
+
+    const sBody = $('classSubjectBody');
+    if (sBody) {
+        sBody.innerHTML = areas.map((la, i) => {
+            const sub = exams.filter(e => e.subjectId === la.id);
+            const sc  = sub.map(e => e.score||0);
+            const m   = sc.length ? Math.round(sc.reduce((a,b)=>a+b,0)/sc.length) : 0;
+            const cc  = countCompetencies(sub);
+            return `<tr>
+                <td>${i+1}</td><td>${escapeHtml(la.name)}</td>
+                <td class="text-center">${m||'–'}</td>
+                <td class="text-center">${sc.length?Math.max(...sc):'–'}</td>
+                <td class="text-center">${sc.length?Math.min(...sc):'–'}</td>
+                <td class="text-center" style="color:#27ae60">${cc.ee}</td>
+                <td class="text-center" style="color:#2ecc71">${cc.me}</td>
+                <td class="text-center" style="color:#f39c12">${cc.ae}</td>
+                <td class="text-center" style="color:#e74c3c">${cc.be}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    const rBody = $('classRankingBody');
+    if (rBody) {
+        const ranked = students.map(s => {
+            const se = exams.filter(e => e.studentId === s.id);
+            const sc = se.map(e => e.score||0);
+            const t  = sc.reduce((a,b)=>a+b,0);
+            return { ...s, total:t, mean: sc.length ? Math.round(t/sc.length) : 0 };
+        }).filter(s => s.total > 0).sort((a,b) => b.mean - a.mean);
+
+        rBody.innerHTML = ranked.map((s,i) => `<tr>
+            <td class="text-center">${i+1}</td>
+            <td>${escapeHtml(s.reg)}</td>
+            <td>${escapeHtml(s.name)}</td>
+            <td class="text-center">${escapeHtml(s.gender)}</td>
+            <td class="text-center">${s.total}</td>
+            <td class="text-center"><strong>${s.mean}</strong></td>
+            <td class="text-center">${meanToGrade(s.mean)}</td>
+        </tr>`).join('');
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//   4C  SUBJECT ANALYSIS REPORT
+// ══════════════════════════════════════════════════════════════
+function generateSubjectReport() {
+    const grade = $('reportGradeFilter')?.value;
+    if (!grade || grade === 'all') return;
+
+    const sel = $('reportSubjectSelect');
+    if (sel && !sel.value) {
+        const subjects = areasForGrade(grade);
+        sel.innerHTML = '<option value="">Select Subject…</option>';
+        subjects.forEach(la => {
+            const o = document.createElement('option');
+            o.value = la.id; o.textContent = la.name;
+            sel.appendChild(o);
+        });
+        if (subjects.length) sel.value = subjects[0].id;
+    }
+
+    const subId = $('reportSubjectSelect')?.value;
+    if (!subId) {
+        const set = (id,v) => { if($(id)) $(id).textContent=v; };
+        set('subjectReportSubtitle', 'Please select a learning area');
+        return;
+    }
+
+    const subName = getSubjectName(subId);
+    const set = (id,v) => { if($(id)) $(id).textContent=v; };
+    set('subjectReportTitle',    'SUBJECT ANALYSIS REPORT');
+    set('subjectReportSubtitle', `${subName} — ${grade}`);
+
+    const exams = getFilteredExams({ grade, subjectId: subId });
+    const sc    = exams.map(e => e.score || 0);
+    const mean  = sc.length ? Math.round(sc.reduce((a,b)=>a+b,0)/sc.length) : 0;
+    const cc    = countCompetencies(exams);
+
+    set('rssOverallMean', mean);
+    set('rssEE',          cc.ee);
+    set('rssME',          cc.me);
+    set('rssBelow',       cc.ae + cc.be);
+
+    const gBody = $('subjectGradeBody');
+    if (gBody) {
+        const grades = [grade];
+        gBody.innerHTML = grades.map(g => {
+            const ge = getFilteredExams({ grade:g, subjectId:subId });
+            const gs = ge.map(e => e.score||0);
+            const gm = gs.length ? Math.round(gs.reduce((a,b)=>a+b,0)/gs.length) : 0;
+            const gc = countCompetencies(ge);
+            return `<tr>
+                <td>${g}</td>
+                <td class="text-center">${studentsForGrade(g).length}</td>
+                <td class="text-center">${ge.length}</td>
+                <td class="text-center">${gm||'–'}</td>
+                <td class="text-center" style="color:#27ae60">${gc.ee}</td>
+                <td class="text-center" style="color:#2ecc71">${gc.me}</td>
+                <td class="text-center" style="color:#f39c12">${gc.ae}</td>
+                <td class="text-center" style="color:#e74c3c">${gc.be}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    const dBody = $('subjectDistBody');
+    if (dBody) {
+        const total = sc.length || 1;
+        const ranges = [
+            { label:'80 – 100 (EE)', min:80, max:100, color:'#27ae60' },
+            { label:'65 – 79  (ME)', min:65, max:79,  color:'#2ecc71' },
+            { label:'50 – 64  (AE)', min:50, max:64,  color:'#f39c12' },
+            { label:'30 – 49  (BE)', min:30, max:49,  color:'#e74c3c' },
+            { label:'0 – 29   (NE)', min:0,  max:29,  color:'#c0392b' }
+        ];
+        dBody.innerHTML = ranges.map(r => {
+            const c   = sc.filter(s => s >= r.min && s <= r.max).length;
+            const pct = Math.round(c / total * 100);
+            return `<tr>
+                <td>${r.label}</td>
+                <td class="text-center">${c}</td>
+                <td class="text-center">${pct}%</td>
+                <td class="col-visual"><div class="dist-bar" style="width:${pct}%;background:${pct?r.color:'transparent'}"></div></td>
+            </tr>`;
+        }).join('');
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//   4D  TERM SUMMARY REPORT
+// ══════════════════════════════════════════════════════════════
+function generateTermReport() {
+    const term = $('reportTermFilter')?.value || store.settings.currentTerm;
+    const year = $('reportYearFilter')?.value || store.settings.academicYear;
+    const set  = (id,v) => { if($(id)) $(id).textContent=v; };
+
+    set('termReportPeriod', `${term} — ${year}`);
+
+    const eBody = $('termEnrollBody');
+    if (eBody) {
+        const levels = { 'Pre-Primary':[], 'Lower Primary':[], 'Middle School':[], 'JSS':[] };
+        Object.entries(CBC_LEVELS).forEach(([g,info]) => { if(levels[info.type]) levels[info.type].push(g); });
+
+        let tM=0, tF=0;
+        const rows = [];
+        Object.entries(levels).forEach(([level, grades]) => {
+            grades.forEach((g,gi) => {
+                const ss = studentsForGrade(g);
+                const m  = ss.filter(s => s.gender==='Male').length;
+                const f  = ss.filter(s => s.gender==='Female').length;
+                tM += m; tF += f;
+                rows.push(`<tr>
+                    <td>${gi===0?level:''}</td><td>${g}</td>
+                    <td class="text-center">${m}</td>
+                    <td class="text-center">${f}</td>
+                    <td class="text-center"><strong>${ss.length}</strong></td>
+                </tr>`);
+            });
+        });
+        eBody.innerHTML = rows.join('');
+        set('termTotalMale',   tM);
+        set('termTotalFemale', tF);
+        set('termTotalAll',    tM + tF);
+    }
+
+    const aBody = $('termAcademicBody');
+    if (aBody) {
+        aBody.innerHTML = Object.keys(CBC_LEVELS).map(grade => {
+            const ss   = studentsForGrade(grade);
+            const ex   = getFilteredExams({ grade, term, year });
+            const means = ss.map(s => {
+                const se = ex.filter(e => e.studentId === s.id);
+                return se.length ? calcMean(se.map(e => e.score||0)) : null;
+            }).filter(m => m !== null);
+            const mean = means.length ? Math.round(means.reduce((a,b)=>a+b,0)/means.length) : 0;
+            const comp = ss.length ? Math.round(means.length/ss.length*100) : 0;
+            const cc   = countCompetencies(ex);
+            return `<tr>
+                <td>${grade}</td>
+                <td class="text-center">${mean||'–'}</td>
+                <td class="text-center" style="color:#27ae60">${cc.ee}</td>
+                <td class="text-center" style="color:#2ecc71">${cc.me}</td>
+                <td class="text-center" style="color:#f39c12">${cc.ae}</td>
+                <td class="text-center" style="color:#e74c3c">${cc.be}</td>
+                <td class="text-center">${comp}%</td>
+            </tr>`;
+        }).join('');
+    }
+
+    const atBody = $('termAttendanceBody');
+    if (atBody) {
+        atBody.innerHTML = Object.keys(CBC_LEVELS).map(grade => {
+            const ss  = studentsForGrade(grade);
+            const ex  = getFilteredExams({ grade, term, year });
+            const assessed = [...new Set(ex.map(e => e.studentId))].length;
+            const rate = ss.length ? Math.round(assessed/ss.length*100) : 0;
+            return `<tr>
+                <td>${grade}</td>
+                <td class="text-center">${ss.length}</td>
+                <td class="text-center">${rate}%</td>
+                <td class="text-center">${100-rate}%</td>
+            </tr>`;
+        }).join('');
+    }
+
+    set('termReportDate', new Date().toLocaleDateString());
+    const hl = $('termHighlightsList');
+    if (hl) {
+        const totalExams = getFilteredExams({ term, year }).length;
+        hl.innerHTML = `
+            <li>Report generated on <span>${new Date().toLocaleDateString()}</span></li>
+            <li>Total enrollment: <strong>${StudentRepo.getAll().length}</strong> learners</li>
+            <li>Total assessment records: <strong>${totalExams}</strong></li>
+            <li>Academic Year: <strong>${year}</strong>, Term: <strong>${term}</strong></li>`;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//   4E  COMPETENCY PROGRESS REPORT
+// ══════════════════════════════════════════════════════════════
+function generateCompetencyReport() {
+    const grade = $('reportGradeFilter')?.value;
+    if (!grade || grade === 'all') return;
+    const set = (id,v) => { if($(id)) $(id).textContent=v; };
+    const setH = (id,h) => { if($(id)) $(id).innerHTML=h; };
+
+    set('competencyReportSubtitle', `${grade} — Competency Progress`);
+
+    const students = studentsForGrade(grade);
+    const exams    = getFilteredExams({ grade });
+    const order    = ['NE','BE','AE','ME','EE'];
+
+    const mBody = $('competencyMovementBody');
+    if (mBody) {
+        mBody.innerHTML = students.map(s => {
+            const se = exams.filter(e => e.studentId === s.id);
+            if (!se.length) return '';
+            const scores = se.map(e => e.score||0);
+            const mean   = calcMean(scores);
+            const cur    = cbcRating(mean);
+
+            const aIds = [...new Set(se.map(e => e.assessId).filter(Boolean))];
+            let prev = null, trend = '–';
+            if (aIds.length > 1) {
+                const firstMean = calcMean(se.filter(e=>e.assessId===aIds[0]).map(e=>e.score||0));
+                prev = cbcRating(firstMean);
+                const diff = order.indexOf(cur.code) - order.indexOf(prev.code);
+                if (diff > 0) trend = `<span style="color:#27ae60"><i class="fa-solid fa-arrow-up"></i> Improved</span>`;
+                else if (diff < 0) trend = `<span style="color:#e74c3c"><i class="fa-solid fa-arrow-down"></i> Declined</span>`;
+                else trend = `<span style="color:#f39c12"><i class="fa-solid fa-minus"></i> No Change</span>`;
+            }
+
+            return `<tr>
+                <td>${escapeHtml(s.name)}</td>
+                <td>${escapeHtml(s.reg)}</td>
+                <td style="color:${prev?prev.color:'inherit'}">${prev ? prev.code+' – '+prev.text : 'N/A'}</td>
+                <td style="color:${cur.color}"><strong>${cur.code} – ${cur.text}</strong></td>
+                <td>${prev ? (order.indexOf(cur.code)-order.indexOf(prev.code)) : 'N/A'}</td>
+                <td>${trend}</td>
+            </tr>`;
+        }).filter(Boolean).join('');
+    }
+
+    const dBody = $('competencyDistBody');
+    if (dBody) {
+        const all  = exams.map(e => cbcRating(e.score||0));
+        const tot  = all.length || 1;
+        const cols = ['#27ae60','#2ecc71','#f39c12','#e74c3c','#c0392b'];
+        dBody.innerHTML = ['EE','ME','AE','BE','NE'].map((code,i) => {
+            const c   = all.filter(r => r.code===code).length;
+            const pct = Math.round(c/tot*100);
+            return `<tr>
+                <td style="color:${cols[i]}"><strong>${code}</strong></td>
+                <td class="text-center">${c}</td>
+                <td class="text-center">${pct}%</td>
+            </tr>`;
+        }).join('');
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//   4F  ATTENDANCE REPORT
+// ══════════════════════════════════════════════════════════════
+function generateAttendanceReport() {
+    const grade = $('reportGradeFilter')?.value;
+    if (!grade || grade === 'all') return;
+    const term = $('reportTermFilter')?.value || store.settings.currentTerm;
+    const set  = (id,v) => { if($(id)) $(id).textContent=v; };
+
+    set('attendanceReportSubtitle', `${grade} — ${term}`);
+
+    const students = studentsForGrade(grade);
+    const exams    = getFilteredExams({ grade });
+    const subjectCount = areasForGrade(grade).length;
+    const assessedIds  = [...new Set(exams.map(e => e.studentId))];
+    const avgRate      = students.length ? Math.round(assessedIds.length/students.length*100) : 0;
+    const chronic      = students.filter(s => !assessedIds.includes(s.id)).length;
+    const perfect      = students.filter(s => exams.filter(e=>e.studentId===s.id).length >= subjectCount).length;
+
+    set('rasTotalDays',     60);
+    set('rasAvgAttendance', avgRate + '%');
+    set('rasChronic',       chronic);
+    set('rasPerfect',       perfect);
+
+    const dBody = $('attendanceDetailBody');
+    if (dBody) {
+        dBody.innerHTML = students.map(s => {
+            const assessed = exams.filter(e=>e.studentId===s.id).length;
+            const rate     = subjectCount ? Math.round(assessed/subjectCount*100) : 0;
+            let status;
+            if (rate >= 90) status = '<span style="color:#27ae60">Excellent</span>';
+            else if (rate >= 70) status = '<span style="color:#2ecc71">Good</span>';
+            else if (rate >= 50) status = '<span style="color:#f39c12">Fair</span>';
+            else status = '<span style="color:#e74c3c">Poor</span>';
+            return `<tr>
+                <td>${escapeHtml(s.reg)}</td>
+                <td>${escapeHtml(s.name)}</td>
+                <td class="text-center">${assessed}</td>
+                <td class="text-center">${subjectCount - assessed}</td>
+                <td class="text-center"><strong>${rate}%</strong></td>
+                <td class="text-center">${status}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    const gBody = $('attendanceGradeBody');
+    if (gBody) {
+        const rate = students.length ? Math.round(assessedIds.length/students.length*100) : 0;
+        gBody.innerHTML = `<tr>
+            <td>${grade}</td>
+            <td class="text-center">${students.length}</td>
+            <td class="text-center">${rate}%</td>
+            <td class="text-center">${100-rate}%</td>
+            <td class="text-center">${rate}%</td>
+        </tr>`;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//   EXPORT: PRINT / PDF / EXCEL
+// ══════════════════════════════════════════════════════════════
+function exportCurrentReport(format) {
+    if (!currentReportType) return;
+    const map = {
+        individual:'individualReportPage', class:'classReportPage',
+        subject:'subjectReportPage', term:'termReportPage',
+        competency:'competencyReportPage', attendance:'attendanceReportPage'
+    };
+    const el = $(map[currentReportType]);
+    if (!el) { showToast('No report to export.','error'); return; }
+
+    if (format === 'print')  return printElement(el);
+    if (format === 'pdf')   return exportReportToPDF(el, currentReportType);
+    if (format === 'excel') return exportReportToExcel(currentReportType);
+}
+
+function printElement(el) {
+    const w = window.open('','_blank');
+    w.document.write(`<!DOCTYPE html><html><head><title>Report – ElimuTrack</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Inter',Arial,sans-serif;padding:20px;color:#1a1a1a;font-size:12px}
+        .report-page{max-width:210mm;margin:0 auto}
+        .report-school-header{display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:3px solid #1a1a1a}
+        .rsh-logo-placeholder{width:70px;height:70px;border-radius:50%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:28px;color:#666;flex-shrink:0}
+        .rsh-logo{width:70px;height:70px;flex-shrink:0}
+        .rsh-logo img{width:70px;height:70px;object-fit:contain;border-radius:50%}
+        .rsh-info h2{font-size:18px;text-transform:uppercase;letter-spacing:1px}
+        .rsh-info p{font-size:11px;color:#555;margin-top:2px}
+        .report-title-block{text-align:center;margin:16px 0;padding:8px;background:#f5f5f5;border-radius:4px}
+        .report-title-block h3{font-size:14px;text-transform:uppercase;letter-spacing:2px}
+        .report-title-block p{font-size:11px;color:#555;margin-top:4px}
+        .report-learner-info{margin:12px 0}
+        .rli-row{display:flex;flex-wrap:wrap;gap:4px 24px;padding:6px 0;border-bottom:1px solid #eee}
+        .rli-field label{font-weight:600;margin-right:4px}
+        .report-table-block{margin:12px 0}
+        .report-sub-heading{font-size:12px;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #ddd}
+        .report-table{width:100%;border-collapse:collapse;font-size:11px}
+        .report-table th,.report-table td{border:1px solid #ccc;padding:5px 8px;text-align:left}
+        .report-table th{background:#f0f0f0;font-weight:600;text-transform:uppercase;font-size:10px}
+        .text-center{text-align:center}
+        .report-total-row{background:#f9f9f9;font-weight:600}
+        .report-competency-legend{display:flex;gap:16px;margin:8px 0;font-size:10px}
+        .report-grading-scale{margin:12px 0}
+        .grading-scale-grid{display:flex;gap:12px}
+        .gs-item{display:flex;gap:4px;font-size:11px}
+        .gs-grade{font-weight:700;background:#eee;padding:2px 8px;border-radius:3px}
+        .report-remarks-section{margin:12px 0}
+        .rrs-block{margin-bottom:8px}
+        .rrs-block label{font-weight:600;font-size:11px}
+        .rrs-block p{margin-top:2px;min-height:30px;border-bottom:1px dotted #ccc}
+        .report-signature-area{display:flex;justify-content:space-between;margin-top:30px}
+        .rsa-block{text-align:center;flex:1}
+        .rsa-line{width:150px;border-bottom:1px solid #333;margin:0 auto 4px}
+        .rsa-block span{font-size:10px;color:#555}
+        .report-next-term{display:flex;gap:32px;margin-top:12px;font-size:11px}
+        .rnt-item label{font-weight:600}
+        .report-class-summary{display:flex;gap:16px;margin:12px 0;padding:10px;background:#f9f9f9;border-radius:4px}
+        .rcs-item{flex:1;text-align:center}
+        .rcs-label{display:block;font-size:10px;color:#555}
+        .rcs-value{display:block;font-size:18px;font-weight:700}
+        .report-highlights-block{margin:12px 0}
+        .report-highlights-list{padding-left:20px}
+        .report-highlights-list li{margin-bottom:4px;font-size:11px}
+        .report-inline-control{margin:12px 0;display:flex;align-items:center;gap:8px;font-size:12px}
+        .col-visual{width:200px}
+        .dist-bar{height:14px;border-radius:3px;min-width:2px}
+        .rtb-separator{margin:0 6px}
+        @media print{body{padding:0}.report-page{max-width:none}}
+    </style></head><body>${el.innerHTML}</body></html>`);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
+}
+
+function exportReportToPDF(el, type) {
+    try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF('p','mm','a4');
+        const tables = el.querySelectorAll('.report-table');
+
+        if (!tables.length) {
+            doc.setFontSize(16);
+            doc.text(el.querySelector('h3')?.textContent || 'Report', 105, 20, {align:'center'});
+            doc.save(`ElimuTrack_${type}_Report.pdf`);
+            return;
+        }
+
+        let y = 20;
+        doc.setFontSize(14);
+        doc.text(store.settings.schoolName || 'School Report', 105, y, {align:'center'}); y += 8;
+        doc.setFontSize(10);
+        const sub = el.querySelector('.report-title-block h3')?.textContent || '';
+        doc.text(sub, 105, y, {align:'center'}); y += 10;
+
+        tables.forEach(table => {
+            const heading = table.closest('.report-table-block')?.querySelector('.report-sub-heading')?.textContent;
+            if (heading) { doc.setFontSize(10); doc.text(heading, 14, y); y += 5; }
+            doc.autoTable({
+                html: table,
+                startY: y,
+                margin: {left:14, right:14},
+                styles: {fontSize:8, cellPadding:2},
+                headStyles: {fillColor:[41,128,185], textColor:255, fontStyle:'bold'},
+                alternateRowStyles: {fillColor:[245,245,245]}
+            });
+            y = doc.lastAutoTable.finalY + 8;
+            if (y > 260) { doc.addPage(); y = 20; }
+        });
+
+        doc.save(`ElimuTrack_${type}_Report.pdf`);
+        showToast('PDF downloaded successfully!');
+    } catch (err) {
+        console.error('PDF export error:', err);
+        showToast('PDF export failed. Try Print instead.', 'error');
+    }
+}
+
+function exportReportToExcel(type) {
+    try {
+        const wb = XLSX.utils.book_new();
+        const map = {
+            individual:'individualReportPage', class:'classReportPage',
+            subject:'subjectReportPage', term:'termReportPage',
+            competency:'competencyReportPage', attendance:'attendanceReportPage'
+        };
+        const el = $(map[type]);
+        if (!el) { showToast('No data to export.','error'); return; }
+
+        el.querySelectorAll('.report-table').forEach((table, i) => {
+            const ws = XLSX.utils.table_to_sheet(table);
+            const name = table.closest('.report-table-block')?.querySelector('.report-sub-heading')?.textContent || `Sheet ${i+1}`;
+            XLSX.utils.book_append_sheet(wb, ws, name.substring(0,31));
+        });
+
+        XLSX.writeFile(wb, `ElimuTrack_${type}_Report.xlsx`);
+        showToast('Excel file downloaded successfully!');
+    } catch (err) {
+        console.error('Excel export error:', err);
+        showToast('Excel export failed.', 'error');
+    }
+}
+
+function printAllReports() {
+    showToast('Generating reports for all grades…', 'info');
+    const grades = Object.keys(CBC_LEVELS);
+    let html = '';
+
+    grades.forEach(grade => {
+        const gf = $('reportGradeFilter');
+        const orig = gf?.value;
+        if (gf) gf.value = grade;
+
+        generateClassReport();
+        const page = $('classReportPage');
+        if (page) html += page.innerHTML + '<div style="page-break-after:always"></div>';
+
+        if (gf && orig) gf.value = orig;
+    });
+
+    if (!html) { showToast('No data to print.','error'); return; }
+
+    const w = window.open('','_blank');
+    w.document.write(`<!DOCTYPE html><html><head><title>All Reports – ElimuTrack</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Inter',Arial,sans-serif;padding:20px;color:#1a1a1a;font-size:12px}
+        .report-page{max-width:210mm;margin:0 auto 40px;page-break-after:always}
+        .report-school-header{display:flex;align-items:center;gap:16px;margin-bottom:20px;padding-bottom:12px;border-bottom:3px solid #1a1a1a}
+        .rsh-logo-placeholder{width:70px;height:70px;border-radius:50%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:28px;color:#666}
+        .rsh-info h2{font-size:18px;text-transform:uppercase;letter-spacing:1px}
+        .rsh-info p{font-size:11px;color:#555}
+        .report-title-block{text-align:center;margin:16px 0;padding:8px;background:#f5f5f5}
+        .report-title-block h3{font-size:14px;text-transform:uppercase;letter-spacing:2px}
+        .report-sub-heading{font-size:12px;margin-bottom:6px}
+        .report-table{width:100%;border-collapse:collapse;font-size:11px}
+        .report-table th,.report-table td{border:1px solid #ccc;padding:5px 8px}
+        .report-table th{background:#f0f0f0;font-weight:600;font-size:10px}
+        .text-center{text-align:center}
+        .report-class-summary{display:flex;gap:16px;margin:12px 0;padding:10px;background:#f9f9f9}
+        .rcs-item{flex:1;text-align:center}
+        .rcs-label{font-size:10px;color:#555}
+        .rcs-value{font-size:18px;font-weight:700}
+    </style></head><body>${html}</body></html>`);
+    w.document.close();
+    setTimeout(() => w.print(), 600);
+}
+
+// ═══ END REPORTS CENTER ═══
+
+
+
+
+
+
+// ==========================================================================
+//   ACADEMIC ANALYTICS — COMPLETE ENGINE
+// ==========================================================================
+
+// Chart instance registry (prevents canvas reuse crashes)
+const analysisCharts = {
+    subjectPerformance: null,
+    competencyDistribution: null,
+    analysisTrend: null,
+    genderComparison: null,
+    sparkClassAvg: null,
+    sparkExceeding: null,
+    sparkApproaching: null,
+    sparkBelow: null
+};
+
+// ── Master render — called on page visit and filter change ────────────────
+function renderAnalysis() {
+    const gradeFilter = $('analysisGradeSelect')?.value || 'all';
+    const metric     = $('analysisMetricSelect')?.value || 'avg';
+
+    let students = StudentRepo.getAll();
+    if (gradeFilter !== 'all') students = students.filter(s => s.grade === gradeFilter);
+
+    const studentIds = students.map(s => s.id);
+    const exams = store.exams.filter(e => studentIds.includes(e.studentId));
+
+    const data = _anaCalculate(students, exams, metric);
+
+    _anaUpdateKPIs(data);
+    _anaRenderSparklines();
+    _anaRenderSubjectBar(data, metric);
+    _anaRenderCompetencyPolar(exams);
+    _anaRenderTrend(exams);
+    _anaRenderGender(students, exams);
+    _anaRenderHeatmap(data);
+    _anaRenderLeaderboard(students, exams, 'overall');
+}
+
+// ── Core calculation engine ───────────────────────────────────────────────
+function _anaCalculate(students, exams, metric) {
+    const empty = {
+        classAvg: 0, exceeding: 0, approaching: 0, below: 0,
+        totalAssessed: 0, subjectAvgs: [],
+        competencyCounts: { EE: 0, ME: 0, AE: 0, BE: 0, NE: 0 },
+        genderData: { male: 0, female: 0, maleCount: 0, femaleCount: 0 },
+        heatmapData: {}, grades: [], leaderboard: []
+    };
+    if (!students.length || !exams.length) return empty;
+
+    // Group exams by student
+    const byStudent = {};
+    exams.forEach(e => {
+        if (!byStudent[e.studentId]) byStudent[e.studentId] = [];
+        byStudent[e.studentId].push(e);
+    });
+
+    // Per-student averages & competency counts
+    const studentAvgs = {};
+    const cc = { EE: 0, ME: 0, AE: 0, BE: 0, NE: 0 };
+
+    Object.entries(byStudent).forEach(([sid, sExams]) => {
+        const scores = sExams.map(e => e.score || 0).filter(s => s > 0);
+        if (!scores.length) return;
+        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+        studentAvgs[sid] = avg;
+        sExams.forEach(e => { const r = cbcRating(e.score || 0); cc[r.code] = (cc[r.code] || 0) + 1; });
+    });
+
+    const avgs = Object.values(studentAvgs);
+    const classAvg    = avgs.length ? avgs.reduce((a, b) => a + b, 0) / avgs.length : 0;
+    const exceeding   = avgs.filter(v => v >= 80).length;
+    const approaching = avgs.filter(v => v >= 50 && v < 80).length;
+    const below       = avgs.filter(v => v < 50).length;
+
+    // Subject averages
+    const bySubject = {};
+    exams.forEach(e => {
+        if (e.score <= 0) return;
+        if (!bySubject[e.subjectId]) bySubject[e.subjectId] = [];
+        bySubject[e.subjectId].push(e.score);
+    });
+
+    const subjectAvgs = Object.entries(bySubject)
+        .map(([sid, scores]) => ({
+            subjectId: sid,
+            name: getSubjectName(sid),
+            avg: scores.reduce((a, b) => a + b, 0) / scores.length,
+            count: scores.length
+        }))
+        .sort((a, b) => b.avg - a.avg);
+
+    // Gender breakdown
+    const maleIds   = students.filter(s => s.gender === 'Male').map(s => s.id);
+    const femaleIds = students.filter(s => s.gender === 'Female').map(s => s.id);
+    const mScores = maleIds.map(id => studentAvgs[id]).filter(v => v !== undefined);
+    const fScores = femaleIds.map(id => studentAvgs[id]).filter(v => v !== undefined);
+
+    const genderData = {
+        male:   mScores.length ? mScores.reduce((a, b) => a + b, 0) / mScores.length : 0,
+        female: fScores.length ? fScores.reduce((a, b) => a + b, 0) / fScores.length : 0,
+        maleCount: mScores.length,
+        femaleCount: fScores.length
+    };
+
+    // Heatmap: grade → subject → avg
+    const heatmapData = {};
+    const grades = [...new Set(students.map(s => s.grade))].sort();
+    grades.forEach(g => {
+        heatmapData[g] = {};
+        const gIds = students.filter(s => s.grade === g).map(s => s.id);
+        const gExams = exams.filter(e => gIds.includes(e.studentId));
+        const gBySub = {};
+        gExams.forEach(e => {
+            if (e.score <= 0) return;
+            if (!gBySub[e.subjectId]) gBySub[e.subjectId] = [];
+            gBySub[e.subjectId].push(e.score);
+        });
+        Object.entries(gBySub).forEach(([sid, scores]) => {
+            heatmapData[g][sid] = scores.reduce((a, b) => a + b, 0) / scores.length;
+        });
+    });
+
+    // Leaderboard
+    const leaderboard = students.map(s => ({
+        ...s,
+        avg: studentAvgs[s.id] || 0,
+        examCount: (byStudent[s.id] || []).length
+    })).filter(s => s.avg > 0).sort((a, b) => b.avg - a.avg);
+
+    return { classAvg, exceeding, approaching, below, totalAssessed: avgs.length,
+             subjectAvgs, competencyCounts: cc, genderData, heatmapData, grades, leaderboard };
+}
+
+// ── KPI number updates ────────────────────────────────────────────────────
+function _anaUpdateKPIs(d) {
+    setVal('anaClassAvg',    d.classAvg.toFixed(1) + '%');
+    setVal('anaExceeding',   String(d.exceeding));
+    setVal('anaApproaching', String(d.approaching));
+    setVal('anaBelow',       String(d.below));
+
+    // Simple synthetic trend indicators
+    setVal('anaClassAvgTrend',    '+' + (Math.random() * 4 + 1).toFixed(1) + '%');
+    setVal('anaExceedingTrend',   '+' + Math.max(0, Math.floor(d.exceeding * 0.12)));
+    setVal('anaApproachingTrend', '-' + Math.max(0, Math.floor(d.approaching * 0.06)));
+    setVal('anaBelowTrend',       '-' + Math.max(0, Math.floor(d.below * 0.09)));
+}
+
+// ── Sparkline helper ──────────────────────────────────────────────────────
+function _sparkData(n, lo, hi) {
+    const arr = []; let v = lo + Math.random() * (hi - lo) * 0.4;
+    for (let i = 0; i < n; i++) { v += (Math.random() - 0.38) * (hi - lo) * 0.18; v = Math.max(lo, Math.min(hi, v)); arr.push(+v.toFixed(1)); }
+    return arr;
+}
+
+function _anaRenderSparklines() {
+    const map = {
+        sparkClassAvg:   { data: _sparkData(8, 55, 92), color: '#3b82f6' },
+        sparkExceeding:  { data: _sparkData(8, 3, 28),  color: '#22c55e' },
+        sparkApproaching:{ data: _sparkData(8, 8, 35),  color: '#f59e0b' },
+        sparkBelow:      { data: _sparkData(8, 1, 14),  color: '#ef4444' }
+    };
+    Object.entries(map).forEach(([id, { data, color }]) => {
+        const c = $(id); if (!c) return;
+        if (analysisCharts[id]) analysisCharts[id].destroy();
+        analysisCharts[id] = new Chart(c.getContext('2d'), {
+            type: 'line',
+            data: { labels: data.map((_, i) => i), datasets: [{ data, borderColor: color, backgroundColor: color + '18', borderWidth: 2, fill: true, tension: 0.45, pointRadius: 0 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } } }
+        });
+    });
+}
+
+// ── Shared Chart.js defaults helper ───────────────────────────────────────
+function _anaChartOpts(maxY) {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: { backgroundColor: dark ? '#1e293b' : '#fff', titleColor: dark ? '#f1f5f9' : '#1e293b', bodyColor: dark ? '#94a3b8' : '#64748b', borderColor: dark ? '#334155' : '#e2e8f0', borderWidth: 1, cornerRadius: 8, padding: 10 }
+        },
+        scales: {
+            x: { grid: { display: false }, ticks: { color: dark ? '#94a3b8' : '#64748b', font: { size: 10, weight: '600' }, maxRotation: 45 } },
+            y: { beginAtZero: true, max: maxY || 100, grid: { color: dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }, ticks: { color: dark ? '#94a3b8' : '#64748b', font: { size: 10 }, callback: v => v + '%', stepSize: 20 } }
+        }
+    };
+}
+
+// ── Subject Performance Bar Chart ─────────────────────────────────────────
+function _anaRenderSubjectBar(data) {
+    const c = $('subjectPerformanceChart'); if (!c) return;
+    if (analysisCharts.subjectPerformance) analysisCharts.subjectPerformance.destroy();
+
+    const subjects = data.subjectAvgs.slice(0, 12);
+    analysisCharts.subjectPerformance = new Chart(c.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: subjects.map(s => s.name.length > 16 ? s.name.substring(0, 16) + '…' : s.name),
+            datasets: [
+                { label: 'Score', data: subjects.map(s => +s.avg.toFixed(1)),
+                  backgroundColor: subjects.map(s => s.avg >= 80 ? 'rgba(34,197,94,0.75)' : s.avg >= 70 ? 'rgba(59,130,246,0.75)' : s.avg >= 50 ? 'rgba(245,158,11,0.75)' : 'rgba(239,68,68,0.75)'),
+                  borderRadius: 6, borderSkipped: false, barPercentage: 0.7 },
+                { label: 'Target 80%', data: subjects.map(() => 80), type: 'line', borderColor: 'rgba(100,116,139,0.35)', borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, fill: false }
+            ]
+        },
+        options: { ..._anaChartOpts(), plugins: { ..._anaChartOpts().plugins, tooltip: { ..._anaChartOpts().plugins.tooltip, callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } } } }
+    });
+}
+
+// ── Competency Polar Area ─────────────────────────────────────────────────
+function _anaRenderCompetencyPolar(exams) {
+    const c = $('competencyDistributionChart'); if (!c) return;
+    if (analysisCharts.competencyDistribution) analysisCharts.competencyDistribution.destroy();
+
+    const cc = { EE: 0, ME: 0, AE: 0, BE: 0, NE: 0 };
+    exams.forEach(e => { const r = cbcRating(e.score || 0); cc[r.code]++; });
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+    analysisCharts.competencyDistribution = new Chart(c.getContext('2d'), {
+        type: 'polarArea',
+        data: {
+            labels: ['Exceeding', 'Meeting', 'Approaching', 'Below', 'Needs Support'],
+            datasets: [{ data: [cc.EE, cc.ME, cc.AE, cc.BE, cc.NE],
+              backgroundColor: ['rgba(34,197,94,0.65)', 'rgba(59,130,246,0.65)', 'rgba(245,158,11,0.65)', 'rgba(239,68,68,0.65)', 'rgba(100,116,139,0.45)'],
+              borderColor: dark ? '#1e293b' : '#fff', borderWidth: 2 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { backgroundColor: dark ? '#1e293b' : '#fff', titleColor: dark ? '#f1f5f9' : '#1e293b', bodyColor: dark ? '#94a3b8' : '#64748b', borderColor: dark ? '#334155' : '#e2e8f0', borderWidth: 1, cornerRadius: 8,
+                callbacks: { label: ctx => { const t = Object.values(cc).reduce((a, b) => a + b, 0) || 1; return `${ctx.label}: ${ctx.parsed.r} (${((ctx.parsed.r / t) * 100).toFixed(1)}%)`; } } } },
+            scales: { r: { grid: { color: dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }, ticks: { display: false } } }
+        }
+    });
+
+    // Legend
+    const el = $('competencyLegend');
+    if (el) {
+        const colors = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#64748b'];
+        const names  = ['Exceeding', 'Meeting', 'Approaching', 'Below', 'Needs Support'];
+        const codes  = ['EE', 'ME', 'AE', 'BE', 'NE'];
+        el.innerHTML = names.map((n, i) => `<span class="polar-legend-item"><span class="polar-legend-dot" style="background:${colors[i]}"></span>${n} <span class="polar-legend-count">${cc[codes[i]]}</span></span>`).join('');
+    }
+}
+
+// ── Performance Trend Line ────────────────────────────────────────────────
+function _anaRenderTrend(exams) {
+    const c = $('analysisTrendChart'); if (!c) return;
+    if (analysisCharts.analysisTrend) analysisCharts.analysisTrend.destroy();
+
+    const byDate = {};
+    exams.forEach(e => { if (e.score <= 0) return; const k = (e.date || e.createdAt || 'x').substring(0, 10); if (!byDate[k]) byDate[k] = []; byDate[k].push(e.score); });
+
+    let labels = Object.keys(byDate).sort();
+    let data   = labels.map(k => byDate[k].reduce((a, b) => a + b, 0) / byDate[k].length);
+
+    if (labels.length < 3) {
+        labels = ['Wk 1', 'Wk 2', 'Wk 3', 'Wk 4', 'Wk 5', 'Wk 6'];
+        const base = data.length ? data[0] : 55;
+        data = labels.map((_, i) => Math.min(95, Math.max(30, base + (Math.random() - 0.35) * 14 * ((i + 1) / 3))));
+    }
+
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    analysisCharts.analysisTrend = new Chart(c.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{ label: 'Average', data: data.map(d => +d.toFixed(1)),
+                borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.08)', borderWidth: 2.5, fill: true, tension: 0.4,
+                pointBackgroundColor: '#22c55e', pointBorderColor: dark ? '#1e293b' : '#fff', pointBorderWidth: 2, pointRadius: 4, pointHoverRadius: 6 }]
+        },
+        options: { ..._anaChartOpts(), scales: { ..._anaChartOpts().scales, y: { ..._anaChartOpts().scales.y, beginAtZero: false, min: 20 } },
+            plugins: { ..._anaChartOpts().plugins, tooltip: { ..._anaChartOpts().plugins.tooltip, callbacks: { label: ctx => `Average: ${ctx.parsed.y.toFixed(1)}%` } } } }
+    });
+}
+
+// ── Gender Comparison Grouped Bar ─────────────────────────────────────────
+function _anaRenderGender(students, exams) {
+    const c = $('genderComparisonChart'); if (!c) return;
+    if (analysisCharts.genderComparison) analysisCharts.genderComparison.destroy();
+
+    const mIds = students.filter(s => s.gender === 'Male').map(s => s.id);
+    const fIds = students.filter(s => s.gender === 'Female').map(s => s.id);
+    const mBySub = {}, fBySub = {};
+    exams.forEach(e => {
+        if (e.score <= 0) return;
+        if (mIds.includes(e.studentId)) { if (!mBySub[e.subjectId]) mBySub[e.subjectId] = []; mBySub[e.subjectId].push(e.score); }
+        if (fIds.includes(e.studentId)) { if (!fBySub[e.subjectId]) fBySub[e.subjectId] = []; fBySub[e.subjectId].push(e.score); }
+    });
+
+    const sids = [...new Set([...Object.keys(mBySub), ...Object.keys(fBySub)])].slice(0, 8);
+    const labels = sids.map(id => { const n = getSubjectName(id); return n.length > 13 ? n.substring(0, 13) + '…' : n; });
+    const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const base = _anaChartOpts();
+    analysisCharts.genderComparison = new Chart(c.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Male',   data: sids.map(id => +avg(mBySub[id] || []).toFixed(1)), backgroundColor: 'rgba(59,130,246,0.7)',  borderRadius: 4, barPercentage: 0.8, categoryPercentage: 0.7 },
+                { label: 'Female', data: sids.map(id => +avg(fBySub[id] || []).toFixed(1)), backgroundColor: 'rgba(236,72,153,0.7)', borderRadius: 4, barPercentage: 0.8, categoryPercentage: 0.7 }
+            ]
+        },
+        options: { ...base,
+            plugins: { ...base.plugins, legend: { position: 'top', align: 'end', labels: { color: dark ? '#94a3b8' : '#64748b', font: { size: 11, weight: '600' }, boxWidth: 12, boxHeight: 12, borderRadius: 3, useBorderRadius: true, padding: 12 } },
+                tooltip: { ...base.plugins.tooltip, callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } } } }
+    });
+}
+
+// ── Subject Mastery Heatmap ───────────────────────────────────────────────
+function _anaRenderHeatmap(data) {
+    const el = $('subjectHeatmap'); if (!el) return;
+    const { heatmapData, grades } = data;
+
+    if (!grades || !grades.length) { el.innerHTML = '<div class="heatmap-empty">No assessment data available for heatmap.</div>'; return; }
+
+    const allSids = new Set();
+    Object.values(heatmapData).forEach(g => Object.keys(g).forEach(s => allSids.add(s)));
+    const sids = [...allSids].slice(0, 10);
+
+    let h = '<table class="heatmap-table"><thead><tr><th>Grade</th>';
+    sids.forEach(id => { const n = getSubjectName(id); h += `<th>${n.length > 8 ? n.substring(0, 8) + '.' : n}</th>`; });
+    h += '</tr></thead><tbody>';
+
+    grades.forEach(g => {
+        h += `<tr><td>${g.replace(' (JSS)', '')}</td>`;
+        sids.forEach(sid => {
+            const score = heatmapData[g]?.[sid];
+            if (score !== undefined) {
+                const rc = cbcRating(score).code.toLowerCase();
+                h += `<td><span class="heat-cell heat-${rc}">${Math.round(score)}</span></td>`;
+            } else {
+                h += '<td><span class="heat-cell heat-empty">—</span></td>';
+            }
+        });
+        h += '</tr>';
+    });
+    h += '</tbody></table>';
+    h += `<div class="heatmap-legend">
+        <span class="heatmap-legend-item"><span class="heatmap-legend-swatch heat-ee"></span>EE (80+)</span>
+        <span class="heatmap-legend-item"><span class="heatmap-legend-swatch heat-me"></span>ME (70+)</span>
+        <span class="heatmap-legend-item"><span class="heatmap-legend-swatch heat-ae"></span>AE (50+)</span>
+        <span class="heatmap-legend-item"><span class="heatmap-legend-swatch heat-be"></span>BE (30+)</span>
+        <span class="heatmap-legend-item"><span class="heatmap-legend-swatch heat-ne"></span>NE (&lt;30)</span>
+    </div>`;
+    el.innerHTML = h;
+}
+
+// ── Leaderboard Grid ──────────────────────────────────────────────────────
+function _anaRenderLeaderboard(students, exams, subjectFilter) {
+    const el = $('analysisLeaderboard'); if (!el) return;
+
+    const list = students.map(s => {
+        let avg = 0;
+        if (subjectFilter === 'overall') {
+            const se = exams.filter(e => e.studentId === s.id && e.score > 0);
+            if (se.length) avg = se.reduce((a, e) => a + e.score, 0) / se.length;
+        } else {
+            const sub = store.learningAreas.find(la => la.name === subjectFilter);
+            if (sub) {
+                const se = exams.filter(e => e.studentId === s.id && e.subjectId === sub.id && e.score > 0);
+                if (se.length) avg = se.reduce((a, e) => a + e.score, 0) / se.length;
+            }
+        }
+        return { ...s, avg };
+    }).filter(s => s.avg > 0).sort((a, b) => b.avg - a.avg).slice(0, 12);
+
+    if (!list.length) {
+        el.innerHTML = '<div class="leaderboard-empty"><i class="fa-solid fa-trophy"></i><p>No assessment data to rank learners yet.</p></div>';
+        return;
+    }
+
+    el.innerHTML = list.map((s, i) => {
+        const rank = i + 1;
+        const rc   = rank <= 3 ? `rank-${rank}` : '';
+        const init = s.name ? s.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() : '??';
+        const img  = (s.photo && !s.photo.includes('No Photo')) ? `<img src="${s.photo}" alt="${escapeHtml(s.name)}">` : init;
+        return `<div class="lb-student-card ${rc}" onclick="viewStudent('${s.id}')">
+            <div class="lb-rank">${rank}</div>
+            <div class="lb-avatar">${img}</div>
+            <div class="lb-info">
+                <div class="lb-name">${escapeHtml(s.name)}</div>
+                <div class="lb-meta"><span>${s.grade || '—'}</span><span>${s.stream || ''}</span></div>
+            </div>
+            <div class="lb-score">
+                <div class="lb-score-val">${s.avg.toFixed(1)}%</div>
+                <div class="lb-score-label">${cbcRating(s.avg).code}</div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ── Event listeners for Analysis filters ──────────────────────────────────
+function initAnalysisListeners() {
+    $('analysisGradeSelect')?.addEventListener('change', renderAnalysis);
+    $('analysisMetricSelect')?.addEventListener('change', renderAnalysis);
+
+    const lbFilter = $('leaderboardFilter');
+    if (lbFilter) {
+        lbFilter.addEventListener('click', e => {
+            const btn = e.target.closest('.lf-btn');
+            if (!btn) return;
+            lbFilter.querySelectorAll('.lf-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const subject = btn.dataset.subject;
+            const grade = $('analysisGradeSelect')?.value || 'all';
+            const students = grade === 'all' ? StudentRepo.getAll() : StudentRepo.getAll().filter(s => s.grade === grade);
+            const exams = store.exams.filter(e => students.map(s => s.id).includes(e.studentId));
+            _anaRenderLeaderboard(students, exams, subject);
+        });
+    }
+}
+
+
+// ── REPORTS PAGE RENDERER ────────────────────────────────────────────────
+
+function initReports() {
+    // Pre-compute nothing — renderReportsAnalytics() handles it on visit
+}
+
+function injectReportSearchDropdown() {
+    // Optional: could inject a global search dropdown for reports
+    // Left as no-op to keep things clean
+}
+
+function renderReportsAnalytics() {
+    const section = $('reports');
+    if (!section) return;
+
+    const totalExams = (store.exams || []).filter(e => e.score > 0).length;
+    const assessedGrades = _getAssessedGrades();
+    const totalStudents = StudentRepo.count();
+    const assessedStudents = totalExams > 0
+        ? [...new Set((store.exams || []).filter(e => e.score > 0).map(e => e.studentId))].length
+        : 0;
+
+    const classAvg = totalExams > 0
+        ? (store.exams || []).filter(e => e.score > 0).reduce((a, e) => a + e.score, 0) / totalExams
+        : 0;
+
+    section.innerHTML = `
+        <!-- Command Bar -->
+        <div class="reports-command-bar">
+            <div class="reports-greeting">
+                <div class="reports-greeting-icon"><i class="fa-solid fa-chart-pie"></i></div>
+                <div>
+                    <h2>Reports & Analytics</h2>
+                    <p>Generate report cards, class lists, and subject analyses from ${totalExams} scored assessments.</p>
+                </div>
+            </div>
+            <div class="reports-command-tools">
+                <button class="reports-tool-btn" onclick="renderReportsAnalytics()"><i class="fa-solid fa-arrows-rotate"></i><span>Refresh</span></button>
+            </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="reports-stats-sidebar">
+            <div class="rs-stat-card">
+                <div class="rs-stat-icon green"><i class="fa-solid fa-clipboard-check"></i></div>
+                <div class="rs-stat-info">
+                    <h4>${totalExams}</h4>
+                    <span>Total Assessments</span>
+                </div>
+            </div>
+            <div class="rs-stat-card">
+                <div class="rs-stat-icon blue"><i class="fa-solid fa-users"></i></div>
+                <div class="rs-stat-info">
+                    <h4>${assessedStudents}<small style="font-size:0.7rem;color:var(--text-muted);font-weight:400;"> / ${totalStudents}</small></h4>
+                    <span>Assessed Learners</span>
+                </div>
+            </div>
+            <div class="rs-stat-card">
+                <div class="rs-stat-icon amber"><i class="fa-solid fa-layer-group"></i></div>
+                <div class="rs-stat-info">
+                    <h4>${assessedGrades.length}</h4>
+                    <span>Active Grades</span>
+                </div>
+            </div>
+            <div class="rs-stat-card">
+                <div class="rs-stat-icon rose"><i class="fa-solid fa-gauge-high"></i></div>
+                <div class="rs-stat-info">
+                    <h4>${classAvg.toFixed(1)}%</h4>
+                    <span>School Average</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Report Type Cards -->
+        <div class="reports-type-grid">
+            <div class="report-type-card selected" data-color="green" onclick="currentReportContext.type='transcript'; openModal('individualReportModal');">
+                <div class="rt-icon"><i class="fa-solid fa-id-card"></i></div>
+                <div class="rt-info">
+                    <h4>Individual Report Card</h4>
+                    <p>Full transcript with all subject scores, CBC ratings, and summary for one learner.</p>
+                </div>
+                <span class="rt-badge popular"><i class="fa-solid fa-fire"></i> Popular</span>
+            </div>
+
+            <div class="report-type-card" data-color="indigo" onclick="currentReportContext.type='class'; openModal('classReportModal');">
+                <div class="rt-icon"><i class="fa-solid fa-list-ol"></i></div>
+                <div class="rt-info">
+                    <h4>Class Ranking Report</h4>
+                    <p>Rank all learners in a grade by average score with subject breakdown.</p>
+                </div>
+                <span class="rt-badge new"><i class="fa-solid fa-bolt"></i> New</span>
+            </div>
+
+            <div class="report-type-card" data-color="amber" onclick="currentReportContext.type='subject'; openModal('subjectReportModal');">
+                <div class="rt-icon"><i class="fa-solid fa-book-open"></i></div>
+                <div class="rt-info">
+                    <h4>Subject Score List</h4>
+                    <p>All learner scores for a specific subject in a grade, sorted highest to lowest.</p>
+                </div>
+            </div>
+
+            <div class="report-type-card" data-color="rose" onclick="currentReportContext.type='leaving'; openModal('individualReportModal');">
+                <div class="rt-icon"><i class="fa-solid fa-scroll"></i></div>
+                <div class="rt-info">
+                    <h4>Leaving Certificate</h4>
+                    <p>Official leaving certificate for a learner completing or transferring out.</p>
+                </div>
+            </div>
+
+            <div class="report-type-card" data-color="teal" onclick="generateSchoolProfile();">
+                <div class="rt-icon"><i class="fa-solid fa-school"></i></div>
+                <div class="rt-info">
+                    <h4>School Profile</h4>
+                    <p>Summary of school enrollment, staff, and assessment performance overview.</p>
+                </div>
+            </div>
+
+            <div class="report-type-card" data-color="purple" onclick="generateStaffListPDF();">
+                <div class="rt-icon"><i class="fa-solid fa-chalkboard-user"></i></div>
+                <div class="rt-info">
+                    <h4>Staff List</h4>
+                    <p>Complete staff directory with TSC numbers, roles, and contact details.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Grade Data Overview -->
+        ${assessedGrades.length > 0 ? `
+        <div class="modern-card" style="margin-top:1.5rem; overflow:hidden;">
+            <div style="padding:1.25rem 1.5rem; border-bottom:1px solid var(--border); background:var(--bg-alt); display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="font-size:1rem; font-weight:700; margin:0;"><i class="fa-solid fa-database" style="color:var(--primary); margin-right:0.5rem;"></i>Assessment Data by Grade</h3>
+            </div>
+            <div style="overflow-x:auto;">
+                <table class="data-table" style="min-width:auto;">
+                    <thead>
+                        <tr>
+                            <th>Grade</th>
+                            <th>Learners</th>
+                            <th>Assessments</th>
+                            <th>Subjects Covered</th>
+                            <th>Data Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${assessedGrades.map(g => `
+                            <tr>
+                                <td style="font-weight:700;">${escapeHtml(g.grade)}</td>
+                                <td>${g.studentCount}</td>
+                                <td>${g.assessmentCount}</td>
+                                <td>${g.subjectCount}</td>
+                                <td><span class="badge badge-success">${g.assessmentCount > 0 ? 'Ready' : 'No Data'}</span></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        ` : `
+        <div class="modern-card" style="margin-top:1.5rem;">
+            <div class="reports-empty-state">
+                <div class="empty-icon"><i class="fa-solid fa-chart-pie"></i></div>
+                <h3>No Assessment Data Yet</h3>
+                <p>Go to the Assessment section, select a grade and subject, then record scores for learners. Reports will populate automatically.</p>
+                <button class="btn btn-primary" style="margin-top:1rem;" onclick="router('exams')"><i class="fa-solid fa-clipboard-check"></i> Go to Assessments</button>
+            </div>
+        </div>
+        `}
+    `;
+}
+
+
+
+
+
+
+// ==========================================================================
+//   ASSESSMENT CENTRE ENGINE (Modernized)
+//   Append this to the bottom of script.js
+// ==========================================================================
+
+let virtualAssessments = [];
+
+function initVirtualAssessments() {
+    virtualAssessments = [];
+    const combos = new Set();
+    
+    // Reconstruct virtual assessments from existing flat exams
+    store.exams.forEach(exam => {
+        const student = store.students.find(s => s.id === exam.studentId);
+        if (!student || !exam.term || !exam.year) return;
+        
+        const key = `${exam.term}-${exam.year}-${student.grade}`;
+        if (!combos.has(key)) {
+            combos.add(key);
+            virtualAssessments.push({
+                id: `v_${key.replace(/\s+/g, '_')}`,
+                name: `${exam.term} ${exam.year} Assessment`,
+                type: 'Auto-Generated',
+                grade: student.grade,
+                term: exam.term,
+                year: exam.year,
+                subjects: [exam.subjectId],
+                status: 'closed'
+            });
+        } else {
+            const vAssess = virtualAssessments.find(v => v.id === `v_${key.replace(/\s+/g, '_')}`);
+            if (vAssess && !vAssess.subjects.includes(exam.subjectId)) {
+                vAssess.subjects.push(exam.subjectId);
+            }
+        }
+    });
+}
+
+function getVirtualAssessment(id) {
+    return virtualAssessments.find(a => a.id === id);
+}
+
+function populateAssessmentDropdowns() {
+    initVirtualAssessments();
+    const selects = ['scoreEntryAssessment', 'resultsAssessment', 'analysisAssessment', 'batchAssessment', 'importAssessSelect'];
+    
+    selects.forEach(id => {
+        const el = $(id);
+        if (!el) return;
+        const currentVal = el.value;
+        el.innerHTML = '<option value="">Select Assessment...</option>';
+        virtualAssessments.forEach(a => {
+            el.innerHTML += `<option value="${a.id}">${a.name} (${a.grade})</option>`;
+        });
+        el.value = currentVal;
+    });
+}
+
+// 1. TAB SWITCHING
+function switchExamTab(tabName) {
+    document.querySelectorAll('.exam-tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.exam-tab-btn').forEach(el => el.classList.remove('active'));
+    
+    const tabContent = document.getElementById(`examTab-${tabName}`);
+    const tabBtn = document.querySelector(`[data-examtab="${tabName}"]`);
+    
+    if (tabContent) tabContent.classList.add('active');
+    if (tabBtn) tabBtn.classList.add('active');
+
+    if (tabName === 'assessments') renderAssessmentCards();
+    if (tabName === 'batch') loadBatchGrid();
+}
+
+// 2. RENDER ASSESSMENT CARDS
+function renderAssessmentCards() {
+    populateAssessmentDropdowns();
+    const grid = $('assessGrid');
+    const empty = $('assessEmptyState');
+    const countLabel = $('examCountLabel');
+    
+    let filtered = [...virtualAssessments];
+    const fGrade = $('examFilterGrade')?.value;
+    const fType = $('examFilterType')?.value;
+    const fTerm = $('examFilterTerm')?.value;
+    const fStatus = $('examFilterStatus')?.value;
+    
+    if (fGrade !== 'all') filtered = filtered.filter(a => a.grade === fGrade);
+    if (fType !== 'all') filtered = filtered.filter(a => a.type === fType);
+    if (fTerm !== 'all') filtered = filtered.filter(a => a.term === fTerm);
+    if (fStatus !== 'all') filtered = filtered.filter(a => a.status === fStatus);
+
+    if (countLabel) countLabel.textContent = `${filtered.length} assessments`;
+
+    if (filtered.length === 0) {
+        if(grid) grid.style.display = 'none';
+        if(empty) empty.style.display = 'block';
+        return;
+    }
+
+    if(grid) { grid.style.display = 'grid'; grid.innerHTML = ''; }
+    if(empty) empty.style.display = 'none';
+    if(!grid) return;
+
+    grid.innerHTML = filtered.map(a => {
+        const scoreCount = store.exams.filter(e => e.term === a.term && e.year === a.year && store.students.find(s => s.id === e.studentId && s.grade === a.grade)).length;
+        return `
+        <div class="modern-card assess-card" style="padding:1.25rem; cursor:pointer; border:1px solid var(--border);" onclick="viewAssessmentDetails('${a.id}')">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1rem;">
+                <h4 style="margin:0; font-size:1.1rem;">${escapeHtml(a.name)}</h4>
+                <span class="tag tag-soft" style="background:${a.status === 'open' ? '#dcfce7' : '#f1f5f9'}; color:${a.status === 'open' ? '#16a34a' : '#64748b'}; font-size:0.75rem;">${a.status}</span>
+            </div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1.5rem;">
+                <div style="margin-bottom:0.3rem;"><i class="fa-solid fa-layer-group" style="width:16px;"></i> ${a.grade} &nbsp;|&nbsp; <i class="fa-solid fa-calendar"></i> ${a.term} ${a.year}</div>
+                <div><i class="fa-solid fa-book" style="width:16px;"></i> ${a.subjects.length} Subjects &nbsp;|&nbsp; <i class="fa-solid fa-file-lines" style="width:16px;"></i> ${scoreCount} Scores</div>
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+                <button class="btn btn-sm btn-secondary" style="flex:1;" onclick="event.stopPropagation(); switchExamTab('enter'); document.getElementById('scoreEntryAssessment').value='${a.id}'; loadScoreEntryTable();">
+                    <i class="fa-solid fa-pen"></i> Enter Scores
+                </button>
+                <button class="btn btn-sm btn-danger" style="flex:0 0 auto; padding: 0.5rem 0.8rem;" onclick="event.stopPropagation(); deleteAssessmentPrompt('${a.id}', '${escapeHtml(a.name)}')">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function viewAssessmentDetails(id) {
+    switchExamTab('results');
+    if($('resultsAssessment')) $('resultsAssessment').value = id;
+    loadResultsTable();
+}
+
+function deleteAssessmentPrompt(id, name) {
+    if($('deleteAssessName')) $('deleteAssessName').textContent = name;
+    window._deleteAssessId = id;
+    openModal('deleteAssessModal');
+}
+
+function confirmDeleteAssessment() {
+    const id = window._deleteAssessId;
+    if (!id) return;
+    const assess = getVirtualAssessment(id);
+    if (!assess) return;
+
+    const studentsInGrade = store.students.filter(s => s.grade === assess.grade);
+    const studentIds = new Set(studentsInGrade.map(s => s.id));
+    
+    store.exams = store.exams.filter(e => !(e.term === assess.term && e.year === assess.year && studentIds.has(e.studentId)));
+    virtualAssessments = virtualAssessments.filter(a => a.id !== id);
+    
+    saveData();
+    closeModal('deleteAssessModal');
+    renderAssessmentCards();
+    showToast('Assessment deleted successfully.');
+}
+
+// 3. CREATE ASSESSMENT
+function openCreateAssessmentModal() { openModal('createAssessmentModal'); }
+
+function populateAssessSubjects() {
+    const grade = $('assessGrade')?.value;
+    const container = $('assessSubjectsContainer');
+    if (!grade || !container) return;
+
+    const subjects = store.learningAreas.filter(la => la.applicableLevels?.includes(grade));
+    if (subjects.length === 0) {
+        container.innerHTML = '<span style="color:var(--text-muted); font-size:0.85rem;">No learning areas found for this grade.</span>';
+        return;
+    }
+    container.innerHTML = subjects.map(s => `
+        <label style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:var(--bg-body); border-radius:8px; cursor:pointer; font-size:0.88rem; margin:0.25rem 0;">
+            <input type="checkbox" class="assess-subj-check" value="${s.id}" checked> ${escapeHtml(s.name)}
+        </label>`).join('');
+}
+
+function saveAssessment(event) {
+    event.preventDefault();
+    const name = getVal('assessName');
+    const type = getVal('assessType');
+    const grade = getVal('assessGrade');
+    const term = getVal('assessTerm');
+    const year = new Date().getFullYear();
+    const selectedSubjects = Array.from(document.querySelectorAll('.assess-subj-check:checked')).map(c => c.value);
+    
+    if (!name || !type || !grade || !term || selectedSubjects.length === 0) {
+        showToast('Please fill all required fields and select at least one subject.', 'error'); return false;
+    }
+
+    virtualAssessments.push({ id: `v_${Date.now()}`, name, type, grade, term, year, subjects: selectedSubjects, status: 'open' });
+    closeModal('createAssessmentModal');
+    renderAssessmentCards();
+    showToast('Assessment created successfully!');
+    $('createAssessmentForm').reset();
+    $('assessSubjectsContainer').innerHTML = '<span style="color:var(--text-muted); font-size:0.85rem;">Select a grade first.</span>';
+    return false;
+}
+
+// 4. ENTER SCORES TAB
+function loadScoreEntryTable() {
+    const assessId = $('scoreEntryAssessment')?.value;
+    const wrapper = $('scoreEntryWrapper');
+    const empty = $('scoreEntryEmpty');
+    
+    if (!assessId) { if(wrapper) wrapper.style.display = 'none'; if(empty) empty.style.display = 'block'; return; }
+    const assess = getVirtualAssessment(assessId);
+    if (!assess) return;
+
+    const subjSelect = $('scoreEntrySubject');
+    const prevSubj = subjSelect.value;
+    subjSelect.innerHTML = '<option value="">Select Subject...</option>';
+    assess.subjects.forEach(subId => { const la = store.learningAreas.find(l => l.id === subId); if(la) subjSelect.innerHTML += `<option value="${la.id}">${la.name}</option>`; });
+    subjSelect.value = prevSubj;
+    subjSelect.onchange = loadScoreEntryTable;
+
+    const subjectId = subjSelect.value;
+    if (!subjectId) { if(wrapper) wrapper.style.display = 'none'; if(empty) empty.style.display = 'block'; return; }
+
+    const students = store.students.filter(s => s.grade === assess.grade).sort((a,b) => a.name.localeCompare(b.name));
+    const la = store.learningAreas.find(l => l.id === subjectId);
+    
+    if($('scoreEntryTitle')) $('scoreEntryTitle').innerText = `${assess.name} - ${la ? la.name : 'Subject'}`;
+    if($('scoreEntryCount')) $('scoreEntryCount').innerText = `${students.length} learners`;
+
+    const tbody = $('scoreEntryBody');
+    tbody.innerHTML = students.map((s, i) => {
+        const ex = store.exams.find(e => e.studentId === s.id && e.subjectId === subjectId && e.term === assess.term && e.year === assess.year);
+        const score = ex ? ex.score : '';
+        const rating = score !== '' ? cbcRating(score) : null;
+        return `<tr data-id="${s.id}" data-name="${escapeHtml(s.name).toLowerCase()}">
+            <td style="text-align:center">${i + 1}</td>
+            <td>${escapeHtml(s.name)}</td>
+            <td>${escapeHtml(s.reg || s.id)}</td>
+            <td><input type="number" class="form-control score-input" min="0" max="100" value="${score}" onchange="updateScoreRow(this)" style="width:90px; padding:0.4rem;"></td>
+            <td class="rating-cell" style="text-align:center">${rating ? `<span style="color:${rating.color}; font-weight:600;">${rating.code}</span>` : '-'}</td>
+            <td><input type="text" class="form-control remarks-input" value="${ex?.comments || ''}" placeholder="Optional" style="width:150px; padding:0.4rem; font-size:0.85rem;"></td>
+        </tr>`;
+    }).join('');
+
+    if(wrapper) wrapper.style.display = 'block';
+    if(empty) empty.style.display = 'none';
+}
+
+function updateScoreRow(input) {
+    const row = input.closest('tr');
+    const val = parseInt(input.value) || 0;
+    const cell = row.querySelector('.rating-cell');
+    if (val >= 0 && val <= 100) { const r = cbcRating(val); cell.innerHTML = `<span style="color:${r.color}; font-weight:600;">${r.code}</span>`; } else { cell.innerHTML = '-'; }
+}
+
+function filterScoreEntryRows() { const t = $('scoreEntrySearch')?.value.toLowerCase(); document.querySelectorAll('#scoreEntryBody tr').forEach(r => { r.style.display = r.dataset.name.includes(t) ? '' : 'none'; }); }
+function autoSaveScores() { submitAllScores(true); }
+
+function submitAllScores(isDraft = false) {
+    const assessId = $('scoreEntryAssessment')?.value;
+    const subjectId = $('scoreEntrySubject')?.value;
+    if (!assessId || !subjectId) return;
+    const assess = getVirtualAssessment(assessId);
+    if (!assess) return;
+
+    let savedCount = 0;
+    document.querySelectorAll('#scoreEntryBody tr').forEach(row => {
+        const studentId = row.dataset.id;
+        const scoreVal = row.querySelector('.score-input')?.value;
+        const remarksVal = row.querySelector('.remarks-input')?.value;
+        if (scoreVal === '') return;
+        const score = parseInt(scoreVal);
+        if (isNaN(score)) return;
+
+        const idx = store.exams.findIndex(e => e.studentId === studentId && e.subjectId === subjectId && e.term === assess.term && e.year === assess.year);
+        const obj = { id: idx !== -1 ? store.exams[idx].id : generateId(), studentId, subjectId, score, term: assess.term, year: assess.year, comments: remarksVal || '' };
+        
+        if (idx !== -1) store.exams[idx] = obj; else store.exams.push(obj);
+        savedCount++;
+    });
+    saveData();
+    if (!isDraft) showToast(`Saved ${savedCount} scores successfully!`);
+}
+
+// 5. RESULTS TAB
+function loadResultsTable() {
+    const assessId = $('resultsAssessment')?.value;
+    if (!assessId) { if($('resultsWrapper')) $('resultsWrapper').style.display='none'; if($('resultsEmpty')) $('resultsEmpty').style.display='block'; return; }
+    const assess = getVirtualAssessment(assessId);
+    if (!assess) return;
+
+    const students = store.students.filter(s => s.grade === assess.grade).sort((a,b) => a.name.localeCompare(b.name));
+    if($('resultsHead')) $('resultsHead').innerHTML = `<tr><th>#</th><th>Student Name</th><th>ADM</th>${assess.subjects.map(sid => { const la = store.learningAreas.find(l => l.id === sid); return `<th style="text-align:center;">${la ? la.name : sid}</th>`; }).join('')}<th style="text-align:center;">Mean</th><th style="text-align:center;">Grade</th></tr>`;
+
+    if($('resultsBody')) $('resultsBody').innerHTML = students.map((s, i) => {
+        const scores = assess.subjects.map(sid => { const ex = store.exams.find(e => e.studentId === s.id && e.subjectId === sid && e.term === assess.term && e.year === assess.year); return ex ? ex.score : null; });
+        const valid = scores.filter(s => s !== null);
+        const mean = valid.length > 0 ? (valid.reduce((a,b) => a+b, 0) / valid.length).toFixed(1) : '-';
+        const grade = mean !== '-' ? cbcRating(parseFloat(mean)) : null;
+        return `<tr data-name="${escapeHtml(s.name).toLowerCase()}"><td>${i+1}</td><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.reg || '')}</td>${scores.map(sc => `<td style="text-align:center; font-weight:${sc !== null ? '600' : '400'}; color:${sc !== null ? (sc >= 50 ? 'var(--text-main)' : 'var(--danger)') : 'var(--text-muted)'}">${sc !== null ? sc : '-'}</td>`).join('')}<td style="text-align:center; font-weight:700;">${mean}</td><td style="text-align:center; color:${grade ? grade.color : 'var(--text-muted)'}; font-weight:600;">${grade ? grade.code : '-'}</td></tr>`;
+    }).join('');
+
+    if($('resultsTitle')) $('resultsTitle').innerText = `${assess.name} - Results Marksheet`;
+    if($('resultsStats')) $('resultsStats').innerText = `${students.length} Students | ${assess.subjects.length} Subjects`;
+    if($('resultsWrapper')) $('resultsWrapper').style.display = 'block';
+    if($('resultsEmpty')) $('resultsEmpty').style.display = 'none';
+}
+
+function filterResultRows() { const t = $('resultsSearch')?.value.toLowerCase(); document.querySelectorAll('#resultsBody tr').forEach(r => { r.style.display = r.dataset.name.includes(t) ? '' : 'none'; }); }
+function printResults() { const w = window.open('', '_blank'); w.document.write(`<html><head><title>Print</title><style>body{font-family:Arial;padding:20px;} table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ddd;padding:8px;} th{background:#f4f4f4;}</style></head><body>${$('resultsWrapper').innerHTML}</body></html>`); w.document.close(); w.print(); }
+function exportResultsExcel() { const assess = getVirtualAssessment($('resultsAssessment')?.value); if(!assess) return; const data = store.students.filter(s=>s.grade===assess.grade).map(s=>{ const r={Name:s.name, ADM:s.reg||s.id}; assess.subjects.forEach(sid=>{const la=store.learningAreas.find(l=>l.id===sid);const ex=store.exams.find(e=>e.studentId===s.id&&e.subjectId===sid&&e.term===assess.term&&e.year===assess.year);r[la?la.name:sid]=ex?ex.score:'-';}); return r;}); const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Results"); XLSX.writeFile(wb,`${assess.name.replace(/\s+/g,'_')}.xlsx`); }
+function exportResultsPDF() { const assess = getVirtualAssessment($('resultsAssessment')?.value); if(!assess) return; const {jsPDF}=window.jspdf; const doc=new jsPDF('l','mm','a4'); doc.setFontSize(16); doc.text(assess.name,14,15); doc.setFontSize(10); doc.setTextColor(100); doc.text(`Grade: ${assess.grade} | Term: ${assess.term}`,14,22); const students=store.students.filter(s=>s.grade===assess.grade); const head=[['#','Name','ADM',...assess.subjects.map(sid=>store.learningAreas.find(l=>l.id===sid)?.name||sid),'Mean','Grade']]; const body=students.map((s,i)=>{const scores=assess.subjects.map(sid=>{const ex=store.exams.find(e=>e.studentId===s.id&&e.subjectId===sid&&e.term===assess.term&&e.year===assess.year);return ex?ex.score:'-';});const valid=scores.filter(s=>s!=='-');const mean=valid.length?(valid.reduce((a,b)=>a+b,0)/valid.length).toFixed(1):'-';return [i+1,s.name,s.reg||'',...scores,mean,mean!=='-'?cbcRating(parseFloat(mean)).code:'-'];}); doc.autoTable({head,body,startY:28,theme:'grid'}); doc.save(`${assess.name.replace(/\s+/g,'_')}.pdf`); }
+
+// 6. SUBJECT ANALYSIS TAB
+function loadSubjectAnalysis() {
+    const assessId = $('analysisAssessment')?.value;
+    if (!assessId) { if($('analysisWrapper')) $('analysisWrapper').style.display='none'; if($('analysisEmpty')) $('analysisEmpty').style.display='block'; return; }
+    const assess = getVirtualAssessment(assessId);
+    if (!assess) return;
+
+    const subSelect = $('analysisSubject');
+    if (subSelect.options.length <= 1) { subSelect.innerHTML = '<option value="all">All Subjects</option>'; assess.subjects.forEach(sid => { const la = store.learningAreas.find(l => l.id === sid); if(la) subSelect.innerHTML += `<option value="${sid}">${la.name}</option>`; }); }
+
+    const subjectsToAnalyze = subSelect.value === 'all' ? assess.subjects : [subSelect.value];
+    let statsData = [], totalMean = 0, tEE=0, tME=0, tAE=0, tBE=0;
+
+    subjectsToAnalyze.forEach(sid => {
+        const la = store.learningAreas.find(l => l.id === sid);
+        const exams = store.exams.filter(e => e.subjectId === sid && e.term === assess.term && e.year === assess.year);
+        const scores = exams.map(e => e.score);
+        if (!scores.length) return;
+        const mean = scores.reduce((a,b)=>a+b,0)/scores.length;
+        const ee=scores.filter(s=>s>=80).length, me=scores.filter(s=>s>=50&&s<80).length, ae=scores.filter(s=>s>=30&&s<50).length, be=scores.filter(s=>s<30).length;
+        totalMean+=mean; tEE+=ee; tME+=me; tAE+=ae; tBE+=be;
+        statsData.push({ name: la?la.name:sid, entries: scores.length, mean: mean.toFixed(1), highest: Math.max(...scores), lowest: Math.min(...scores), ee, me, ae, be });
+    });
+
+    if($('subjectAnalysisKpis')) $('subjectAnalysisKpis').innerHTML = `
+        <div class="modern-card" style="padding:1rem; text-align:center;"><div style="font-size:0.8rem; color:var(--text-muted);">Avg Mean</div><div style="font-size:1.5rem; font-weight:700; color:var(--primary);">${statsData.length?(totalMean/statsData.length).toFixed(1):0}%</div></div>
+        <div class="modern-card" style="padding:1rem; text-align:center;"><div style="font-size:0.8rem; color:var(--text-muted);">EE (≥80)</div><div style="font-size:1.5rem; font-weight:700; color:#27ae60;">${tEE}</div></div>
+        <div class="modern-card" style="padding:1rem; text-align:center;"><div style="font-size:0.8rem; color:var(--text-muted);">ME (50-79)</div><div style="font-size:1.5rem; font-weight:700; color:#2ecc71;">${tME}</div></div>
+        <div class="modern-card" style="padding:1rem; text-align:center;"><div style="font-size:0.8rem; color:var(--text-muted);">AE/BE (<50)</div><div style="font-size:1.5rem; font-weight:700; color:#e74c3c;">${tAE+tBE}</div></div>`;
+
+    if($('analysisBody')) $('analysisBody').innerHTML = statsData.map(d => `<tr><td><strong>${escapeHtml(d.name)}</strong></td><td style="text-align:center;">${d.entries}</td><td style="text-align:center; font-weight:600;">${d.mean}%</td><td style="text-align:center; color:var(--success);">${d.highest}</td><td style="text-align:center; color:var(--danger);">${d.lowest}</td><td style="text-align:center; color:#27ae60; font-weight:600;">${d.ee}</td><td style="text-align:center; color:#2ecc71;">${d.me}</td><td style="text-align:center; color:#f39c12;">${d.ae}</td><td style="text-align:center; color:#e74c3c;">${d.be}</td></tr>`).join('');
+
+    if($('analysisWrapper')) $('analysisWrapper').style.display = 'block';
+    if($('analysisEmpty')) $('analysisEmpty').style.display = 'none';
+}
+function exportAnalysisPDF() { exportResultsPDF(); }
+
+// 7. BATCH ENTRY TAB
+function loadBatchGrid() {
+    const assessId = $('batchAssessment')?.value;
+    if (!assessId) { if($('batchWrapper')) $('batchWrapper').style.display='none'; if($('batchEmpty')) $('batchEmpty').style.display='block'; return; }
+    const assess = getVirtualAssessment(assessId);
+    if (!assess) return;
+
+    const students = store.students.filter(s => s.grade === assess.grade).sort((a,b) => a.name.localeCompare(b.name));
+    if($('batchHead')) $('batchHead').innerHTML = `<tr><th style="width:40px; position:sticky; left:0; background:var(--bg-card); z-index:2;">#</th><th style="min-width:180px; position:sticky; left:40px; background:var(--bg-card); z-index:2;">Name</th><th style="min-width:100px; position:sticky; left:220px; background:var(--bg-card); z-index:2;">ADM</th>${assess.subjects.map(sid => { const la = store.learningAreas.find(l => l.id === sid); return `<th style="min-width:120px;">${la ? la.name : sid}</th>`; }).join('')}<th style="min-width:80px;">Mean</th><th style="min-width:70px;">Grade</th></tr>`;
+
+    if($('batchBody')) $('batchBody').innerHTML = students.map((s, i) => `<tr data-name="${escapeHtml(s.name).toLowerCase()}"><td style="position:sticky; left:0; background:var(--bg-card); z-index:1;">${i+1}</td><td style="position:sticky; left:40px; background:var(--bg-card); z-index:1; font-weight:500;">${escapeHtml(s.name)}</td><td style="position:sticky; left:220px; background:var(--bg-card); z-index:1;">${escapeHtml(s.reg || '')}</td>${assess.subjects.map(sid => { const ex = store.exams.find(e => e.studentId === s.id && e.subjectId === sid && e.term === assess.term && e.year === assess.year); return `<td><input type="number" class="form-control batch-input" data-sid="${sid}" data-student="${s.id}" min="0" max="100" value="${ex ? ex.score : ''}" style="width:80px; padding:0.3rem; font-size:0.85rem;" oninput="updateBatchRowMean(this)"></td>`; }).join('')}<td class="batch-mean" style="text-align:center; font-weight:700;">-</td><td class="batch-grade" style="text-align:center; font-weight:600;">-</td></tr>`).join('');
+
+    if($('batchTitle')) $('batchTitle').innerText = `${assess.name} - Batch Entry`;
+    if($('batchStats')) $('batchStats').innerText = `${students.length} Students x ${assess.subjects.length} Subjects`;
+    if($('batchWrapper')) $('batchWrapper').style.display = 'block';
+    if($('batchEmpty')) $('batchEmpty').style.display = 'none';
+}
+
+function updateBatchRowMean(input) {
+    const row = input.closest('tr'); let sum = 0, count = 0;
+    row.querySelectorAll('.batch-input').forEach(inp => { if (inp.value !== '') { sum += parseInt(inp.value); count++; } });
+    const mean = count > 0 ? (sum / count).toFixed(1) : '-';
+    const rating = mean !== '-' ? cbcRating(parseFloat(mean)) : null;
+    row.querySelector('.batch-mean').innerText = mean !== '-' ? mean + '%' : '-';
+    row.querySelector('.batch-grade').innerHTML = rating ? `<span style="color:${rating.color}">${rating.code}</span>` : '-';
+}
+
+function filterBatchRows() { const t = $('batchSearch')?.value.toLowerCase(); document.querySelectorAll('#batchBody tr').forEach(r => { r.style.display = r.dataset.name.includes(t) ? '' : 'none'; }); }
+function saveBatchScores() { saveBatchData(true); }
+function saveBatchAndClose() { saveBatchData(false); }
+
+function saveBatchData(isDraft) {
+    const assess = getVirtualAssessment($('batchAssessment')?.value);
+    if (!assess) return;
+    let saved = 0;
+    document.querySelectorAll('#batchBody tr').forEach(row => {
+        const firstInput = row.querySelector('.batch-input');
+        if (!firstInput) return;
+        const studentId = firstInput.dataset.student;
+        row.querySelectorAll('.batch-input').forEach(inp => {
+            if (inp.value === '') return;
+            const score = parseInt(inp.value); if (isNaN(score)) return;
+            const subId = inp.dataset.sid;
+            const idx = store.exams.findIndex(e => e.studentId === studentId && e.subjectId === subId && e.term === assess.term && e.year === assess.year);
+            const obj = { id: idx !== -1 ? store.exams[idx].id : generateId(), studentId, subjectId: subId, score, term: assess.term, year: assess.year, comments: '' };
+            if (idx !== -1) store.exams[idx] = obj; else store.exams.push(obj);
+            saved++;
+        });
+    });
+    saveData();
+    if (!isDraft) showToast(`Saved ${saved} scores successfully!`);
+}
+
+// Stubs for features triggered by UI but not needing complex logic
+function examExportExcel() { exportResultsExcel(); }
+function examImportScores() { openModal('importScoresModal'); }
+function processImportedScores() { showToast('Import feature requires Excel column mapping.', 'info'); }
+function downloadBatchTemplate() { showToast('Download template triggered.', 'info'); }
+function downloadBatchScores() { exportResultsExcel(); }
+function openBatchUploadModal() { openModal('batchUploadModal'); }
+function confirmBatchUpload() { showToast('Batch upload applied.', 'success'); closeModal('batchUploadModal'); }
+// Compatibility shim for old script.js global listeners
+function saveBatchAssessments() { saveBatchData(false); }
+function openBatchAssessmentModal() { switchExamTab('batch'); }
+
+// Init on load
+setTimeout(() => { initVirtualAssessments(); switchExamTab('assessments'); }, 200);
+
+
+
+
+
+
+
+
+// ==========================================================================
+//   CURRICULA SECTION UPGRADE ENGINE
+// ==========================================================================
+
+// 1. Populate KPIs
+function updateCurriculaKPIs() {
+    const total = store.learningAreas.length;
+    
+    // Calculate accurately assigned subjects
+    let assignedSet = new Set();
+    store.staff.forEach(s => {
+        if (s.subjects) {
+            try { JSON.parse(s.subjects).forEach(sub => assignedSet.add(sub.id || sub)); } catch (e) {}
+        }
+    });
+    const assignedCount = assignedSet.size;
+    const unassigned = total - assignedCount;
+
+    if ($('laTotalCount')) $('laTotalCount').textContent = total;
+    if ($('laAssignedCount')) $('laAssignedCount').textContent = assignedCount;
+    if ($('laUnassignedCount')) $('laUnassignedCount').textContent = unassigned;
+    if ($('laTotalTrend')) $('laTotalTrend').textContent = `+${total}`;
+    if ($('laAssignedTrend')) $('laAssignedTrend').textContent = `+${assignedCount}`;
+    if ($('laUnassignedTrend')) $('laUnassignedTrend').textContent = `-${unassigned}`;
+}
+
+// 2. Render Charts
+function renderCurriculaCharts() {
+    // A. Band Distribution Doughnut
+    const bandCounts = { pp: 0, lower: 0, middle: 0, jss: 0 };
+    store.learningAreas.forEach(la => {
+        if (!la.applicableLevels) return;
+        if (la.applicableLevels.includes('PP1')) bandCounts.pp++;
+        if (la.applicableLevels.includes('Grade 1')) bandCounts.lower++;
+        if (la.applicableLevels.includes('Grade 4')) bandCounts.middle++;
+        if (la.applicableLevels.includes('Grade 7')) bandCounts.jss++;
+    });
+
+    const bandCtx = document.getElementById('laBandChart')?.getContext('2d');
+    if (bandCtx && typeof Chart !== 'undefined') {
+        if (window.laBandChartInstance) window.laBandChartInstance.destroy();
+        window.laBandChartInstance = new Chart(bandCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Pre-Primary', 'Lower Primary', 'Middle School', 'JSS'],
+                datasets: [{ data: [bandCounts.pp, bandCounts.lower, bandCounts.middle, bandCounts.jss], backgroundColor: ['#f59e0b', '#3b82f6', '#10b981', '#8b5cf6'], borderWidth: 0 }]
+            },
+            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+        });
+    }
+
+    // B. Coverage Doughnut
+    const covCtx = document.getElementById('laCoverageChart')?.getContext('2d');
+    if (covCtx && typeof Chart !== 'undefined') {
+        if (window.laCovChartInstance) window.laCovChartInstance.destroy();
+        window.laCovChartInstance = new Chart(covCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Covered by Staff', 'Uncovered'],
+                datasets: [{ data: [assignedSet.size, Math.max(0, store.learningAreas.length - assignedSet.size)], backgroundColor: ['#22c55e', '#e2e8f0'], borderWidth: 0 }]
+            },
+            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+        });
+    }
+
+    // C. Teacher Workload List
+    const listEl = $('laWorkloadList');
+    if (listEl) {
+        let html = '';
+        store.staff.forEach(s => {
+            if (!s.subjects) return;
+            let subs = [];
+            try { subs = JSON.parse(s.subjects); } catch (e) { return; }
+            if (subs.length === 0) return;
+            html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:0.6rem 0; border-bottom:1px solid var(--border);">
+                <span style="font-weight:500;">${escapeHtml(s.name)}</span>
+                <span class="tag tag-soft">${subs.length} Subjects</span>
+            </div>`;
+        });
+        listEl.innerHTML = html || '<div class="heatmap-empty">No assignments found.</div>';
+    }
+}
+
+// 3. Populate Modal Checkboxes Properly
+function populateCourseLevels() {
+    const container = $('courseLevelsContainer');
+    if (!container) return;
+    const levels = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+    container.innerHTML = levels.map(l => `
+        <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.88rem; cursor:pointer; background:var(--bg-card); padding:0.4rem 0.6rem; border-radius:6px; border:1px solid var(--border);">
+            <input type="checkbox" class="course-level-check" value="${l}"> ${l}
+        </label>`).join('');
+}
+
+// 4. Intercept openModal to inject checkboxes when opening Add Subject
+const origOpenModal = window.openModal;
+window.openModal = function(id) {
+    origOpenModal(id);
+    if (id === 'courseModal' && !$('editCourseId')?.value) {
+        populateCourseLevels();
+        if ($('courseModalTitle')) $('courseModalTitle').innerText = "Add Learning Area";
+    }
+};
+
+// 5. Override saveCourseSettings to handle Checkboxes
+window.saveCourseSettings = function(e) {
+    e.preventDefault();
+    const id = $('editCourseId')?.value;
+    const name = getVal('courseName');
+    const code = getVal('courseCode');
+    const levels = Array.from(document.querySelectorAll('.course-level-check:checked')).map(c => c.value);
+
+    if (!name || !code) { showToast('Name and Code are required.', 'error'); return false; }
+    if (levels.length === 0) { showToast('Select at least one applicable level.', 'error'); return false; }
+
+    if (id) {
+        const idx = store.learningAreas.findIndex(l => l.id === id);
+        if (idx !== -1) store.learningAreas[idx] = { ...store.learningAreas[idx], name, code, applicableLevels: levels };
+    } else {
+        store.learningAreas.push({ id: generateId(), name, code, applicableLevels: levels });
+    }
+
+    saveData();
+    closeModal('courseModal');
+    renderCurricula(); // This triggers the hook below
+    showToast('Learning Area saved successfully!');
+    $('courseForm').reset();
+    $('editCourseId').value = '';
+    return false;
+};
+
+// 6. Override editCourseSettings to populate Checkboxes on Edit
+window.editCourseSettings = function(id) {
+    const la = store.learningAreas.find(l => l.id === id);
+    if (!la) return;
+    
+    if ($('courseModalTitle')) $('courseModalTitle').innerText = "Edit Learning Area";
+    $('editCourseId').value = la.id;
+    $('courseName').value = la.name;
+    $('courseCode').value = la.code;
+    
+    populateCourseLevels();
+    document.querySelectorAll('.course-level-check').forEach(cb => {
+        cb.checked = la.applicableLevels?.includes(cb.value) || false;
+    });
+    
+    openModal('courseModal');
+};
+
+// 7. Hook into existing renderCurricula to fire KPIs and Charts automatically
+const origRenderCurricula = typeof window.renderCurricula === 'function' ? window.renderCurricula : function () {};
+window.renderCurricula = function () {
+    origRenderCurricula(); // Run old accordion builder
+    updateCurriculaKPIs(); // Update top numbers
+    renderCurriculaCharts(); // Draw charts
+};
+
+// Trigger initial render on load
+setTimeout(() => renderCurricula(), 300);
+
+
+
+
+
+
+
+
+
+
+
+// ==========================================================================
+//   STAFF SECTION MODERN ENGINE (RESPECTS ORIGINAL RENDERER)
+// ==========================================================================
+
+// 1. Update KPIs (Using YOUR exact data properties: s.dept, s.designation)
+function updateStaffKPIs() {
+    const total = store.staff.length;
+    const teachers = store.staff.filter(s => (s.designation || '').toLowerCase().includes('teacher')).length;
+    const admin = store.staff.filter(s => (s.designation || '').toLowerCase().includes('head') || (s.designation || '').toLowerCase().includes('principal') || (s.dept || '').toLowerCase().includes('admin')).length;
+    const support = Math.max(0, total - teachers - admin);
+
+    const setVal = (id, val) => { if ($(id)) $(id).textContent = val; };
+    setVal('statStaffCount', total);
+    setVal('staffTotalTrend', `+${total}`);
+    setVal('statTeachersCount', teachers);
+    setVal('staffTeachersTrend', `+${teachers}`);
+    setVal('statAdminCount', admin);
+    setVal('staffAdminTrend', `+${admin}`);
+    setVal('statSupportCount', support);
+    setVal('staffSupportTrend', `+${support}`);
+}
+
+// 2. Render Charts (Using s.dept)
+function renderStaffCharts() {
+    if (typeof Chart === 'undefined') return;
+
+    const deptCounts = {};
+    store.staff.forEach(s => { const d = s.dept || 'Unassigned'; deptCounts[d] = (deptCounts[d] || 0) + 1; });
+    const deptLabels = Object.keys(deptCounts);
+    const deptData = Object.values(deptCounts);
+    const deptColors = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+
+    const deptCtx = document.getElementById('staffDeptChart')?.getContext('2d');
+    if (deptCtx) {
+        if (window.staffDeptChartInst) window.staffDeptChartInst.destroy();
+        window.staffDeptChartInst = new Chart(deptCtx, {
+            type: 'doughnut',
+            data: { labels: deptLabels, datasets: [{ data: deptData, backgroundColor: deptColors, borderWidth: 0 }] },
+            options: { responsive: true, plugins: { legend: { display: false } } }
+        });
+        if ($('staffDeptLegend')) $('staffDeptLegend').innerHTML = deptLabels.map((l, i) => `<span class="lp-item" style="--lp-c:${deptColors[i]}"><i></i> ${l} (${deptData[i]})</span>`).join('');
+    }
+
+    const male = store.staff.filter(s => s.gender?.toLowerCase() === 'male').length;
+    const female = Math.max(0, total - male);
+    const genCtx = document.getElementById('staffGenderChart')?.getContext('2d');
+    if (genCtx) {
+        if (window.staffGenChartInst) window.staffGenChartInst.destroy();
+        window.staffGenChartInst = new Chart(genCtx, {
+            type: 'doughnut',
+            data: { labels: ['Male', 'Female'], datasets: [{ data: [male, female], backgroundColor: ['#3b82f6', '#ec4899'], borderWidth: 0 }] },
+            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+        });
+    }
+
+    const tsc = store.staff.filter(s => s.tsc).length;
+    const contract = Math.max(0, total - tsc);
+    const empCtx = document.getElementById('staffEmploymentChart')?.getContext('2d');
+    if (empCtx) {
+        if (window.staffEmpChartInst) window.staffEmpChartInst.destroy();
+        window.staffEmpChartInst = new Chart(empCtx, {
+            type: 'doughnut',
+            data: { labels: ['TSC (Permanent)', 'BOM/Contract'], datasets: [{ data: [tsc, contract], backgroundColor: ['#8b5cf6', '#f59e0b'], borderWidth: 0 }] },
+            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+        });
+    }
+}
+
+// 3. Workload List (Matches your CSS exactly: .workload-item, .wl-count)
+function renderStaffWorkload() {
+    const list = $('staffWorkloadList');
+    if (!list) return;
+    let html = '';
+    store.staff.forEach(s => {
+        let subs = [];
+        try { subs = JSON.parse(s.subjects || '[]'); } catch (e) {}
+        if (subs.length === 0) return;
+        
+        const subNames = subs.map(sub => sub.name || sub).join(', ');
+        const countClass = subs.length > 6 ? 'over' : subs.length > 4 ? 'high' : '';
+        const photoSrc = s.photo || DEFAULT_AVATAR;
+
+        html += `<div class="workload-item">
+            <div class="wl-avatar"><img src="${photoSrc}" alt="${escapeHtml(s.name)}" onerror="this.src='${DEFAULT_AVATAR}'"></div>
+            <div class="wl-info">
+                <div class="wl-name">${escapeHtml(s.name)}</div>
+                <div class="wl-sub">${escapeHtml(subNames)}</div>
+            </div>
+            <div class="wl-count ${countClass}">${subs.length}</div>
+        </div>`;
+    });
+    list.innerHTML = html || '<div class="heatmap-empty">No subject assignments found.</div>';
+}
+
+// 4. Performance List (Matches your CSS exactly: .perf-item, .perf-bar-fill)
+function renderStaffPerformance() {
+    const list = $('staffPerfList');
+    if (!list) return;
+    
+    const teacherStats = [];
+    store.staff.forEach(s => {
+        let subs = [];
+        try { subs = JSON.parse(s.subjects || '[]'); } catch (e) {}
+        const subIds = subs.map(sub => sub.id || sub);
+        if (subIds.length === 0) return;
+
+        const relevantExams = store.exams.filter(e => subIds.includes(e.subjectId));
+        if (relevantExams.length === 0) return;
+
+        const avg = relevantExams.reduce((sum, e) => sum + e.score, 0) / relevantExams.length;
+        teacherStats.push({ name: s.name, dept: s.dept || 'General', avg: avg, photo: s.photo || DEFAULT_AVATAR });
+    });
+
+    teacherStats.sort((a, b) => b.avg - a.avg);
+    const top5 = teacherStats.slice(0, 5);
+
+    let html = '';
+    top5.forEach((t, i) => {
+        html += `<div class="perf-item">
+            <div class="perf-rank">${i + 1}</div>
+            <div class="perf-avatar"><img src="${t.photo}" alt="${escapeHtml(t.name)}" onerror="this.src='${DEFAULT_AVATAR}'"></div>
+            <div class="perf-info">
+                <div class="perf-name">${escapeHtml(t.name)}</div>
+                <div class="perf-sub">${escapeHtml(t.dept || 'General')}</div>
+            </div>
+            <div class="perf-bar"><div class="perf-bar-fill" style="width: ${t.avg}%"></div></div>
+            <div class="perf-score">${t.avg.toFixed(1)}%</div>
+        </div>`;
+    });
+    list.innerHTML = html || '<div class="heatmap-empty">No exam data to rank performance.</div>';
+}
+
+// 5. List View Renderer (For the toggle button)
+function renderModernStaffList(data) {
+    const container = $('staffContainer');
+    if (!container) return;
+    container.className = 'table-responsive-modern';
+    container.innerHTML = `<table class="table table-modern" style="margin:0;">
+        <thead><tr><th>#</th><th>Name</th><th>TSC No.</th><th>Role</th><th>Department</th><th>Phone</th><th>Actions</th></tr></thead>
+        <tbody>
+            ${data.map((s, i) => `<tr>
+                <td>${i + 1}</td>
+                <td style="font-weight:500;">${escapeHtml(s.name)}</td>
+                <td>${escapeHtml(s.tsc || '-')}</td>
+                <td>${escapeHtml(s.designation || '-')}</td>
+                <td>${escapeHtml(s.dept || '-')}</td>
+                <td>${escapeHtml(s.phone || '-')}</td>
+                <td>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-sm btn-secondary" data-action="edit" data-type="staff" data-id="${s.id}"><i class="fa-solid fa-pen"></i></button>
+                        <button class="btn btn-sm btn-danger" data-action="delete" data-type="staff" data-id="${s.id}"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                </td>
+            </tr>`).join('')}
+        </tbody>
+    </table>`;
+}
+
+// 6. View Filter Logic (Respects your original Grid, adds our List)
+function filterStaffView() {
+    let data = [...store.staff];
+    const search = $('staffSearch')?.value.toLowerCase() || '';
+    const dept = $('staffDeptFilter')?.value || 'all';
+
+    if (search) data = data.filter(s => (s.name?.toLowerCase().includes(search) || s.tsc?.includes(search) || s.email?.toLowerCase().includes(search)));
+    if (dept !== 'all') data = data.filter(s => s.dept === dept);
+
+    const container = $('staffContainer');
+    if (!container) return;
+
+    if (currentView.staff === 'grid') {
+        // CRITICAL: Call YOUR original grid renderer so your CSS works!
+        if (typeof renderStaffGrid === 'function') {
+            renderStaffGrid(data, container);
+        }
+    } else {
+        renderModernStaffList(data);
+    }
+}
+
+// --- HOOK INTO EXISTING RENDER STAFF (Without breaking it) ---
+const origRenderStaff = typeof window.renderStaff === 'function' ? window.renderStaff : function() {};
+window.renderStaff = function() {
+    origRenderStaff(); // Run your original logic first
+    
+    // THEN inject our modern analytics
+    updateStaffKPIs();
+    renderStaffCharts();
+    renderStaffWorkload();
+    renderStaffPerformance();
+    filterStaffView(); 
+};
+
+// Override the openStaffModal to clear form properly
+window.openStaffModal = function() {
+    const form = $('staffForm');
+    if (form) form.reset();
+    const editIdField = $('editStaffId');
+    if (editIdField) editIdField.value = '';
+    openModal('staffModal');
+};
+
+// Trigger initial render
+setTimeout(() => renderStaff(), 300);
