@@ -598,6 +598,7 @@ function initializeApp(user) {
     initReports();              // ← ADD THIS
     injectReportSearchDropdown(); // ← ADD THIS
     initAnalysisListeners();
+     initExams();              // ← ADD THIS LINE
     currentView = { students: 'grid', staff: 'grid' };
     setTimeout(() => { const loader = $('appLoader'); if (loader) loader.style.display = 'none'; }, 800);
 }
@@ -712,12 +713,24 @@ function onAssessmentChange() {
         studentSelect.disabled = true;
     }
 
-}   
+    // ✅ THIS WAS MISSING — populate grades when assessment is picked
+    if (assessId) {
+        _populateExamGrades(assessId);
+    }
+
+    _hideExamInterface();
+    _updateLearnerCount();
+}
 /**
  * Called when "Select Grade..." changes.
  * Populates subjects applicable to that grade.
  */
 function loadExamSubjects(grade) {
+    // ✅ THIS WAS MISSING — keep context in sync
+    currentExamContext.tradeId = grade;
+    currentExamContext.subjectId = null;
+    currentExamContext.studentId = null;
+
     const select = $('examSubjectSelect');
     if (!select) {
         console.error('loadExamSubjects: #examSubjectSelect not found in DOM');
@@ -731,7 +744,6 @@ function loadExamSubjects(grade) {
         return;
     }
 
-    // Get all learning areas for this grade
     const subjects = store.learningAreas.filter(la =>
         la.applicableLevels && la.applicableLevels.includes(grade)
     );
@@ -739,12 +751,9 @@ function loadExamSubjects(grade) {
     if (subjects.length === 0) {
         select.innerHTML = '<option value="">No subjects for this grade</option>';
         select.disabled = true;
-        console.warn(`loadExamSubjects: No learning areas found for grade "${grade}"`);
-        console.warn('Available grades in learningAreas:', [...new Set(store.learningAreas.flatMap(la => la.applicableLevels || []))]);
         return;
     }
 
-    // Sort alphabetically
     subjects.sort((a, b) => a.name.localeCompare(b.name));
 
     subjects.forEach(la => {
@@ -766,7 +775,6 @@ function loadExamSubjects(grade) {
     _hideExamInterface();
     _updateLearnerCount();
 }
-
 /**
  * Called when "Select Subject..." changes.
  * Populates students in the selected grade.
@@ -1242,7 +1250,7 @@ function initGlobalListeners() {
             renderInboxFolder(folderBtn.dataset.folder);
         }
     });
-
+    
     // ── Form Submissions ──
     $('eventsForm')?.addEventListener('submit', saveEventsDetails);
     $('dashChartFilter')?.addEventListener('change', e => renderDashboardChart(e.target.value));
@@ -1433,6 +1441,10 @@ function initGlobalListeners() {
             if (btn) btn.disabled = !grade;
         }
     });
+    // Fallback: re-init exams whenever exams-related nav is clicked
+document.querySelectorAll('[data-page="exams"]').forEach(el => {
+    el.addEventListener('click', () => setTimeout(initExams, 50));
+});
     // At the end of initGlobalListeners(), add:
 setTimeout(() => initExamsTab(), 200);
 }
@@ -17154,7 +17166,83 @@ function resetBatchUploadModal() {
     if (preview) preview.style.display = 'none';
 }
 
+function initExams() {
+    // ── Populate Assessment (Exam Schedule) dropdown ──
+    const assessSelect = $('examAssessmentSelect');
+    if (assessSelect) {
+        const currentVal = assessSelect.value;
+        assessSelect.innerHTML = '<option value="">Select Assessment...</option>';
 
+        const schedules = store.examSchedules || [];
+        if (schedules.length === 0) {
+            assessSelect.innerHTML = '<option value="">No assessments created yet</option>';
+            assessSelect.disabled = true;
+        } else {
+            schedules.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+            schedules.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = `${s.name || 'Untitled'} — ${s.term || ''} ${s.year || ''}`;
+                assessSelect.appendChild(opt);
+            });
+            assessSelect.disabled = false;
+
+            // Restore previous selection if it still exists
+            if (currentVal && schedules.some(s => s.id === currentVal)) {
+                assessSelect.value = currentVal;
+            }
+        }
+    }
+
+    // ── Bind all 4 cascading dropdown events ──
+    const gradeSelect = $('examTradeSelect');
+    const subjectSelect = $('examSubjectSelect');
+    const studentSelect = $('examStudentSelect');
+
+    if (assessSelect && !assessSelect._examBound) {
+        assessSelect.addEventListener('change', onAssessmentChange);
+        assessSelect._examBound = true;
+    }
+
+    if (gradeSelect && !gradeSelect._examBound) {
+        gradeSelect.addEventListener('change', () => {
+            loadExamSubjects(gradeSelect.value);
+        });
+        gradeSelect._examBound = true;
+    }
+
+    if (subjectSelect && !subjectSelect._examBound) {
+        subjectSelect.addEventListener('change', loadExamStudents);
+        subjectSelect._examBound = true;
+    }
+
+    if (studentSelect && !studentSelect._examBound) {
+        studentSelect.addEventListener('change', () => {
+            currentExamContext.studentId = studentSelect.value;
+            loadCBETUnits();
+        });
+        studentSelect._examBound = true;
+    }
+
+    // ── Reset everything to clean state ──
+    currentExamContext = { studentId: null, tradeId: null, subjectId: null, assessId: null };
+
+    if (gradeSelect) {
+        gradeSelect.innerHTML = '<option value="">Select Assessment First...</option>';
+        gradeSelect.disabled = true;
+    }
+    if (subjectSelect) {
+        subjectSelect.innerHTML = '<option value="">Select Grade First...</option>';
+        subjectSelect.disabled = true;
+    }
+    if (studentSelect) {
+        studentSelect.innerHTML = '<option value="">Select Subject First...</option>';
+        studentSelect.disabled = true;
+    }
+
+    _hideExamInterface();
+    _updateLearnerCount();
+}
 // ── INIT ────────────────────────────────────────────────────────
 function initExamsSection() {
     renderAssessmentCards();
