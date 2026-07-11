@@ -247,14 +247,11 @@ async function loadData() {
 
     // ── Step 1: Determine if we should even try the server ──
     const isLocalDev = API_URL !== window.location.origin;
-    const isSameOrigin = API_URL === window.location.origin;
 
     // ── Step 2: Fetch from Server ──
     let serverSuccess = false;
     let serverError = null;
 
-    // Skip server call entirely if we're on localhost AND
-    // the backend isn't running (we'll detect this after first failure)
     if (!window._localBackendConfirmedOffline) {
         try {
             const res = await fetch(`${API_URL}/api/db`, {
@@ -263,7 +260,6 @@ async function loadData() {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
                 },
-                // Abort after 8 seconds so the user isn't stuck waiting
                 signal: AbortSignal.timeout(8000)
             });
 
@@ -278,7 +274,7 @@ async function loadData() {
                 store.timetable = db.timetable || [];
                 store.examSchedules = db.examSchedules || [];
                 store.settings = { ...store.settings, ...db.settings };
-                
+
                 // Merge default learning areas with any custom ones from server
                 let existingAreas = db.learningAreas || [];
                 DEFAULT_LEARNING_AREAS.forEach(def => {
@@ -288,6 +284,9 @@ async function loadData() {
                 });
                 store.learningAreas = existingAreas;
 
+                // ── FIX: Backfill any exam records missing the grade field ──
+                migrateExamGrades();
+
                 // ── Immediately back up fresh server data to localStorage ──
                 _backupToLocalStorage();
 
@@ -296,10 +295,9 @@ async function loadData() {
                 renderStaff();
 
                 serverSuccess = true;
-                window._localBackendConfirmedOffline = false; // Reset — backend is alive
+                window._localBackendConfirmedOffline = false;
 
             } else if (res.status === 401 || res.status === 403) {
-                // Token is genuinely expired/invalid — don't fall back, log out
                 console.warn(`Auth failed (${res.status}). Redirecting to login.`);
                 showToast('Session expired. Please log in again.', 'error');
                 return logout();
@@ -311,7 +309,6 @@ async function loadData() {
         } catch (err) {
             serverError = err.message;
 
-            // Detect if this is a CORS error (local backend not running or not configured)
             if (isLocalDev && (
                 err.message.includes('Failed to fetch') ||
                 err.message.includes('NetworkError') ||
@@ -321,8 +318,6 @@ async function loadData() {
                 console.warn('⚠️ Local backend unreachable. Is it running?');
                 console.warn(`   Expected: ${API_URL}`);
                 console.warn('   Try: node server.js (or your start command)');
-                
-                // Remember this so we don't keep failing silently on every save
                 window._localBackendConfirmedOffline = true;
             }
         }
@@ -338,11 +333,14 @@ async function loadData() {
             try {
                 const parsed = JSON.parse(localData);
                 Object.assign(store, parsed);
+
+                // ── FIX: Backfill any exam records missing the grade field ──
+                migrateExamGrades();
+
                 seedStaffData();
                 renderDashboard();
                 renderStaff();
 
-                // ── CLEAR WARNING about data mismatch ──
                 if (isLocalDev) {
                     showToast(
                         '⚠️ Using LOCAL cached data — backend is offline. Start your local server to sync.',
@@ -362,7 +360,6 @@ async function loadData() {
                 showToast('Local backup is corrupted. Starting with empty data.', 'error');
             }
         } else {
-            // No local backup either — start fresh
             seedStaffData();
             renderDashboard();
             renderStaff();
