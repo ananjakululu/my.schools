@@ -1,15 +1,87 @@
 'use strict';
 
 // ==========================================================================
+//   OFFLINE AUTHENTICATION HELPERS
+// ==========================================================================
+
+const OfflineAuth = {
+    STORAGE_KEY: 'offline_session_backup',
+
+    decodeJWT(token) {
+        try {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(
+                atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+            );
+            return JSON.parse(jsonPayload);
+        } catch (e) {
+            return null;
+        }
+    },
+
+    isTokenValid(token) {
+        const payload = this.decodeJWT(token);
+        if (!payload || !payload.exp) return false;
+        return (payload.exp * 1000) > (Date.now() + 30 * 60 * 1000);
+    },
+
+    saveSession(token, user) {
+        try {
+            localStorage.setItem(this.STORAGE_KEY, JSON.stringify({ token, user }));
+            console.log('[OfflineAuth] Backup saved successfully.');
+        } catch (e) {
+            console.error('Failed to save offline session:', e);
+        }
+    },
+
+    getSession() {
+        try {
+            const data = localStorage.getItem(this.STORAGE_KEY);
+            if (!data) return null;
+            const session = JSON.parse(data);
+            if (!session.token || !session.user) return null;
+            return session;
+        } catch (e) {
+            return null;
+        }
+    },
+
+    clearSession() {
+        localStorage.removeItem(this.STORAGE_KEY);
+    }
+};
+
+
+// ==========================================================================
 //   INITIALIZATION
 // ==========================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
     // 1. SECURITY CHECK
     const token = localStorage.getItem('authToken');
+    
     if (token) {
-        // Verify token exists before redirecting
-        window.location.href = 'dashboard.html';
+        if (OfflineAuth.isTokenValid(token)) {
+            // Use replace() to prevent infinite redirect loops
+            window.location.replace('dashboard.html');
+            return; 
+        } else {
+            // Token is DEAD. Delete it.
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('user');
+            // ⚠️ DO NOT DELETE THE OFFLINE BACKUP HERE! ⚠️
+        }
+    }
+
+    // OFFLINE FALLBACK: Check if we have a valid offline backup
+    const offlineSession = OfflineAuth.getSession();
+    if (offlineSession && OfflineAuth.isTokenValid(offlineSession.token)) {
+        localStorage.setItem('authToken', offlineSession.token);
+        localStorage.setItem('user', JSON.stringify(offlineSession.user));
+        sessionStorage.setItem('offline_mode', 'true');
+        window.location.replace('dashboard.html');
+        return;
     }
 
     // 2. THEME INITIALIZATION
@@ -89,7 +161,7 @@ function showToast(msg, type = 'success') {
 }
 
 // ==========================================================================
-//   AUTHENTICATION LOGIC (CONNECTED TO SERVER)
+//   AUTHENTICATION LOGIC
 // ==========================================================================
 
 // 1. LOGIN FORM HANDLER
@@ -105,37 +177,92 @@ document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
     const email = document.getElementById('loginUser').value; 
     const password = document.getElementById('loginPass').value;
 
+    // --- OFFLINE FALLBACK HELPER ---
+    const attemptOfflineFallback = () => {
+        console.warn('Server unreachable. Attempting offline login...');
+        const offlineSession = OfflineAuth.getSession();
+
+        if (offlineSession && OfflineAuth.isTokenValid(offlineSession.token)) {
+            if (offlineSession.user.email.toLowerCase() === email.toLowerCase()) {
+                localStorage.setItem('authToken', offlineSession.token);
+                localStorage.setItem('user', JSON.stringify(offlineSession.user));
+                sessionStorage.setItem('offline_mode', 'true');
+                showToast('Logged in offline. Data may be cached.', 'success');
+                // Use replace() here too!
+                setTimeout(() => window.location.replace('dashboard.html'), 1000);
+                return true; 
+            } else {
+                showToast('Offline error: Email does not match cached session.', 'error');
+            }
+        } else {
+            if (!offlineSession) {
+                showToast('Offline unavailable: No backup found. Log in online first.', 'error');
+            } else {
+                showToast('Offline unavailable: Backup token expired. Connect to internet.', 'error');
+            }
+        }
+        
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+        return false;
+    };
+
     try {
-        // CONNECT TO SERVER API
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+
         const res = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
+            body: JSON.stringify({ email, password }),
+            signal: controller.signal
         });
 
-        const data = await res.json();
+        clearTimeout(timeoutId);
+
+        let data;
+        try {
+            data = await res.json();
+        } catch (parseError) {
+            throw new Error('Server returned an invalid response (not JSON).');
+        }
 
         if (data.success) {
-            // SUCCESS: Server returned a real token
+            // ONLINE LOGIN SUCCESS
             localStorage.setItem('authToken', data.token);
             localStorage.setItem('user', JSON.stringify(data.user));
-            
+            OfflineAuth.saveSession(data.token, data.user);
+            sessionStorage.removeItem('offline_mode');
             showToast('Login Successful! Redirecting...', 'success');
+            setTimeout(() => window.location.replace('dashboard.html'), 1000);
             
-            setTimeout(() => {
-                window.location.href = 'dashboard.html'; 
-            }, 1000);
-        } else {
-            // FAILURE: Server said invalid credentials
+        } else if (res.status === 401 || res.status === 403 || res.status === 423) {
             showToast(data.message || 'Invalid email or password.', 'error');
             btn.innerHTML = originalText;
             btn.disabled = false;
+            
+        } else if (res.status >= 500) {
+            showToast(`Server Error (${res.status}): Is your database running?`, 'error');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        } else {
+            showToast(data.message || 'Unknown login error.', 'error');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
         }
+
     } catch (err) {
-        console.error(err);
-        showToast('Connection error. Is the server running on port 8000?', 'error');
-        btn.innerHTML = originalText;
-        btn.disabled = false;
+        console.error('Network Error Details:', err.name, err.message);
+
+        if (err.name === 'AbortError' || err.message.includes('Failed to fetch')) {
+            showToast('Cannot reach server. Trying offline...', 'error');
+            return attemptOfflineFallback();
+            
+        } else {
+            showToast(`Unexpected error: ${err.message}`, 'error');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
     }
 });
 
@@ -154,11 +281,10 @@ document.getElementById('signupForm')?.addEventListener('submit', async (e) => {
     const password = document.getElementById('signupPass').value;
 
     try {
-        // CONNECT TO SERVER API
-        const res = await fetch('https://my-school-app-hvwj.onrender.com/api/login', {
+        const res = await fetch('/api/signup', { 
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
+            body: JSON.stringify({ name, email, password })
         });
 
         const data = await res.json();
@@ -178,3 +304,20 @@ document.getElementById('signupForm')?.addEventListener('submit', async (e) => {
         btn.disabled = false;
     }
 });
+
+// ==========================================================================
+//   LOGOUT HELPER
+// ==========================================================================
+
+function logout() {
+    // 1. Instantly wipe active auth data
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('user');
+    sessionStorage.removeItem('offline_mode');
+    
+    // ⚠️⚠️⚠️ CRITICAL: DO NOT DELETE 'offline_session_backup' HERE! ⚠️⚠️⚠️
+    // If you delete it, offline login dies forever until they log in online again.
+    
+    // 2. Use replace() to prevent infinite redirect loops offline
+    window.location.replace('login.html');
+}
