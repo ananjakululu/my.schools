@@ -634,6 +634,31 @@ function getSubjectName(subjectId) {
     return la ? la.name : 'Unknown Subject';
 }
 
+// ── Safe grade lookup with student fallback ──
+function getExamGrade(exam) {
+    if (exam.grade) return exam.grade;
+    // Fallback: derive from student record
+    const student = StudentRepo.getById(exam.studentId);
+    return student ? (student.grade || 'Unknown') : 'Unknown';
+}
+
+// ── One-time migration: backfill missing grades from student records ──
+function migrateExamGrades() {
+    let fixed = 0;
+    store.exams.forEach(exam => {
+        if (!exam.grade && exam.studentId) {
+            const student = StudentRepo.getById(exam.studentId);
+            if (student && student.grade) {
+                exam.grade = student.grade;
+                fixed++;
+            }
+        }
+    });
+    if (fixed > 0) {
+        console.log(`✅ Migrated ${fixed} exam records with missing grade`);
+        saveData();
+    }
+}
 // ⚠️ CRITICAL FIX: This MUST return an object with a .color property for your upload code to work!
 function cbcRating(score) {
     if (score >= 80) return { code: 'EE', text: 'Exceeding Expectations', color: '#27ae60' };
@@ -1016,27 +1041,20 @@ function _attachGradingListeners(studentId, subjectId, grade, assessId, existing
             const score = Math.max(0, Math.min(100, Math.round(Number(val))));
             const rating = cbcRating(score);
 
-            const examRecord = {
-                id: existingExam ? existingExam.id : generateId(),
-                studentId: studentId,
-                subjectId: subjectId,
-                grade: grade,
-                assessId: assessId || 'default',
-                score: score,
-                rating: rating.code,
-                ratingText: rating.text,
-                updatedAt: new Date().toISOString()
-            };
+            // Harden: always derive grade from context OR student record
+const safeGrade = grade || (student ? student.grade : '') || '';
 
-            if (existingExam) {
-                // Update existing
-                const idx = store.exams.findIndex(e => e.id === existingExam.id);
-                if (idx !== -1) store.exams[idx] = examRecord;
-            } else {
-                // Create new
-                store.exams.push(examRecord);
-            }
-
+const examRecord = {
+    id: existingExam ? existingExam.id : generateId(),
+    studentId: studentId,
+    subjectId: subjectId,
+    grade: safeGrade,                // ← NOW ALWAYS A STRING
+    assessId: assessId || 'default',
+    score: score,
+    rating: rating.code,
+    ratingText: rating.text,
+    updatedAt: new Date().toISOString()
+};
             saveData();
             showToast(`Score saved: ${score}% — ${rating.code} (${rating.text})`);
 
