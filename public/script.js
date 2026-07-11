@@ -1153,7 +1153,11 @@ function initGlobalListeners() {
             currentView[section] = viewType;
             const group = viewBtn.closest('.btn-group');
             if (group) { group.querySelectorAll('.btn').forEach(b => b.classList.remove('active')); viewBtn.classList.add('active'); }
-            ({ students: applyFilters, staff: renderStaff }[section] || (() => {}))();
+            
+            // ✅ FIX 1: Replaced risky object-lookup that caused "target is not defined"
+            if (section === 'students') applyFilters();
+            else if (section === 'staff') renderStaff();
+            
             return;
         }
 
@@ -1355,10 +1359,7 @@ function initGlobalListeners() {
     $('assessScore')?.addEventListener('input', updateAssessmentPreview);
 
     // ✅ NEW — Assessment selector (if your HTML has it)
- $('examAssessmentSelect')?.addEventListener('change', onAssessmentChange);
-
-
-    
+    $('examAssessmentSelect')?.addEventListener('change', onAssessmentChange);
 
     // ── Batch Admission ──
     $('batchAdmissionFile')?.addEventListener('change', handleBatchAdmissionFile);
@@ -1366,14 +1367,15 @@ function initGlobalListeners() {
     $('btnDownloadAdmissionTemplate')?.addEventListener('click', downloadAdmissionTemplate);
     $('btnOpenBatchAssessment')?.addEventListener('click', openBatchAssessmentModal);
     $('btnSaveBatchAssessment')?.addEventListener('click', saveBatchAssessments);
-    // ── Batch Upload (Excel Scores) ──  ← ADD THESE TWO
-     $('batchUploadFile')?.addEventListener('change', handleBatchFileSelect);
+    
+    // ── Batch Upload (Excel Scores) ──
+    $('batchUploadFile')?.addEventListener('change', handleBatchFileSelect);
     $('btnApplyBatchUpload')?.addEventListener('click', confirmBatchUpload);
     $('btnCloseBatchUpload')?.addEventListener('click', () => {
-    _pendingBatchRows = null;
-    if ($('batchUploadFile')) $('batchUploadFile').value = '';
-    hideBatchPreview();
-});  // ← ADD THIS
+        _pendingBatchRows = null;
+        if ($('batchUploadFile')) $('batchUploadFile').value = '';
+        hideBatchPreview();
+    });
 
     // ── HOI Preview Live Update ──
     ['hoiName', 'hoiTitle', 'hoiTsc', 'hoiPhone', 'hoiEmail'].forEach(id => {
@@ -1441,12 +1443,14 @@ function initGlobalListeners() {
             if (btn) btn.disabled = !grade;
         }
     });
+    
     // Fallback: re-init exams whenever exams-related nav is clicked
-document.querySelectorAll('[data-page="exams"]').forEach(el => {
-    el.addEventListener('click', () => setTimeout(initExams, 50));
-});
-    // At the end of initGlobalListeners(), add:
-setTimeout(() => initExamsTab(), 200);
+    document.querySelectorAll('[data-page="exams"]').forEach(el => {
+        el.addEventListener('click', () => setTimeout(initExams, 50));
+    });
+    
+    // ✅ FIX 2: Changed initExamsTab() to initExams() to prevent ReferenceError crash
+    setTimeout(() => { if(typeof initExams === 'function') initExams(); }, 200);
 }
 // ==========================================================================
 //   ADMISSIONS / INTAKE
