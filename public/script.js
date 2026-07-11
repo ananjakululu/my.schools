@@ -911,30 +911,24 @@ function _populateExamGrades(assessId) {
 
     select.innerHTML = '<option value="">Select Grade...</option>';
 
-    // Get grades that actually have students
+    // Count how many students are in each grade
     const gradesWithStudents = [...new Set(
         store.students.map(s => s.grade).filter(Boolean)
     )];
 
-    if (gradesWithStudents.length === 0) {
-        select.innerHTML = '<option value="">No students enrolled yet</option>';
-        select.disabled = true;
-        showToast('No students found. Add students in Intake first.', 'error');
-        return;
-    }
+    // Always show ALL CBC grades so teachers can set up ahead of time
+    const allCBCGrades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
 
-    // Sort by CBC order
-    const gradeOrder = ['PP1','PP2','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9'];
-    gradesWithStudents.sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b));
-
-    gradesWithStudents.forEach(g => {
-        const count = store.students.filter(s => s.grade === g).length;
+    allCBCGrades.forEach(g => {
+        const count = gradesWithStudents.filter(sg => sg === g).length;
         const opt = document.createElement('option');
         opt.value = g;
-        opt.textContent = `${g} (${count} students)`;
+        // Show student count if they exist, otherwise just show the grade
+        opt.textContent = count > 0 ? `${g} (${count} students)` : `${g} (No students yet)`;
         select.appendChild(opt);
     });
 
+    // ✅ NEVER disable this dropdown
     select.disabled = false;
 }
 
