@@ -1484,14 +1484,14 @@
                 <option value="Grade 8">Grade 8 (JSS)</option>
                 <option value="Grade 9">Grade 9 (JSS)</option>
             </select>
-            <select id="examFilterType" onchange="renderAssessmentCards()">
-                <option value="all">All Types</option>
-                <option value="Formative">Formative</option>
-                <option value="Summative">Summative</option>
-                <option value="End Term">End Term</option>
-                <option value="End Year">End Year</option>
-                <option value="Practical">Practical</option>
-            </select>
+            <!-- NEW — USE THIS -->
+<select id="examFilterType" onchange="renderAssessmentCards()">
+    <option value="all">All Types</option>
+    <option value="Opener">Opener</option>
+    <option value="Mid Term">Mid Term</option>
+    <option value="End Term">End Term</option>
+    <option value="End Year">End Year</option>
+</select>
             <select id="examFilterTerm" onchange="renderAssessmentCards()">
                 <option value="all">All Terms</option>
                 <option value="Term 1">Term 1</option>
@@ -1743,14 +1743,14 @@
                     </div>
                     <div class="form-group">
                         <label>Assessment Type <span style="color:var(--danger)">*</span></label>
-                        <select id="assessType" class="form-control" required>
-                            <option value="">Select type...</option>
-                            <option value="Formative">Formative Assessment (FA)</option>
-                            <option value="Summative">Summative Assessment (SA)</option>
-                            <option value="End Term">End Term Exam</option>
-                            <option value="End Year">End Year Exam</option>
-                            <option value="Practical">Practical / Project</option>
-                        </select>
+                        <!-- NEW — USE THIS -->
+<select id="assessType" class="form-control" required>
+    <option value="">Select type...</option>
+    <option value="Opener">Opener</option>
+    <option value="Mid Term">Mid Term</option>
+    <option value="End Term">End Term</option>
+    <option value="End Year">End Year</option>
+</select>
                     </div>
                 </div>
                 <div class="form-row-2">
@@ -1758,6 +1758,9 @@
                         <label>Grade <span style="color:var(--danger)">*</span></label>
                         <select id="assessGrade" class="form-control" required onchange="populateAssessSubjects()">
                             <option value="">Select grade...</option>
+                            <option value="Grade 1">Grade 1</option>
+                            <option value="Grade 2">Grade 2</option>
+                            <option value="Grade 3">Grade 3</option>
                             <option value="Grade 4">Grade 4</option>
                             <option value="Grade 5">Grade 5</option>
                             <option value="Grade 6">Grade 6</option>
@@ -3648,15 +3651,15 @@
                         <input type="text" id="examName" class="form-control" required placeholder="e.g. Mid-Term Assessment">
                     </div>
                     <div class="form-group">
-                        <label>Exam Type *</label>
-                        <select id="examType" class="form-control" required>
-                            <option>Opener</option>
-                            <option>Mid-Term</option>
-                            <option>End-Term</option>
-                            <option>Continuous Assessment</option>
-                            <option>Mock</option>
-                        </select>
-                    </div>
+    <label>Assessment Type</label>
+    <select id="examType" class="form-control" required>
+        <option value="">Select Type...</option>
+        <option value="Opener">Opener</option>
+        <option value="Mid Term">Mid Term</option>
+        <option value="End Term">End Term</option>
+        <option value="End Year">End Year</option>
+    </select>
+</div>
                 </div>
                 <div class="form-row-2">
                     <div class="form-group">
@@ -3898,11 +3901,13 @@
     </div>
 </div>
 
+
+
     <div id="toast" class="toast" role="alert"></div>
     <div class="ai-fab" data-modal="aiAssistantModal" title="AI Assistant"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
 
     <!-- Sidebar Toggle Logic -->
-    <script src="script.js"></script>
+    <script src="script.js?v=2"></script>
     
 </body>
 </html>
