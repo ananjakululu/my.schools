@@ -2508,162 +2508,175 @@
         <!-- ─────────────────────────────────────────────────
              4A. INDIVIDUAL REPORT CARD PREVIEW
              ───────────────────────────────────────────────── -->
-        <div class="report-preview-content" id="reportIndividualPreview" style="display: none;">
-            <div class="report-page" id="individualReportPage">
+        <!-- ─────────────────────────────────────────────────
+     4A. INDIVIDUAL REPORT CARD PREVIEW
+     ───────────────────────────────────────────────── -->
+<div class="report-preview-content" id="reportIndividualPreview" style="display: none;">
 
-                <!-- School Banner -->
-                <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <img id="reportSchoolLogo" src="" alt="School Logo" onerror="this.style.display='none'">
-                        <div class="rsh-logo-placeholder" id="rshLogoPlaceholder">
-                            <i class="fa-solid fa-graduation-cap"></i>
-                        </div>
-                    </div>
-                    <div class="rsh-info">
-                        <h2 id="reportSchoolName">SCHOOL NAME</h2>
-                        <p id="reportSchoolMotto">School Motto</p>
-                        <p id="reportSchoolAddress">Address &middot; Phone &middot; Email</p>
-                    </div>
+    <!-- Student Selector Bar -->
+    <div class="report-student-selector" id="reportStudentSelectorBar">
+        <div class="rss-left">
+            <div class="filter-group" style="margin-bottom:0;">
+                <label style="margin-bottom:0.25rem;">Select Learner</label>
+                <select id="reportLearnerSelect" class="filter-select-modern" style="min-width:260px;">
+                    <option value="">-- Choose a learner --</option>
+                </select>
+            </div>
+            <button class="btn btn-primary btn-sm" id="btnGenerateIndividual" style="align-self:flex-end;">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Report
+            </button>
+        </div>
+        <div class="rss-right">
+            <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" title="Download all report cards for the selected grade as one PDF">
+                <i class="fa-solid fa-file-zipper"></i> Download Grade Reports
+            </button>
+        </div>
+    </div>
+
+    <!-- The Actual Report Page (hidden until student selected) -->
+    <div class="report-page" id="individualReportPage" style="display:none;">
+
+        <!-- School Banner -->
+        <div class="report-school-header">
+            <div class="rsh-logo">
+                <img id="reportSchoolLogo" src="" alt="School Logo" onerror="this.style.display='none'">
+                <div class="rsh-logo-placeholder" id="rshLogoPlaceholder">
+                    <i class="fa-solid fa-graduation-cap"></i>
                 </div>
-
-                <!-- Report Title Strip -->
-                <div class="report-title-block">
-                    <h3 id="reportCardTitle">INDIVIDUAL LEARNER REPORT CARD</h3>
-                    <div class="rtb-meta">
-                        <span id="reportTermLabel">Term 1</span>
-                        <span class="rtb-separator">&mdash;</span>
-                        <span id="reportYearLabel">2025</span>
-                    </div>
-                </div>
-
-                <!-- Learner Identity Block -->
-                <div class="report-learner-info">
-                    <div class="rli-row">
-                        <div class="rli-field">
-                            <label>Full Name:</label>
-                            <span id="rptLearnerName">---</span>
-                        </div>
-                        <div class="rli-field">
-                            <label>Admission No:</label>
-                            <span id="rptLearnerAdm">---</span>
-                        </div>
-                        <div class="rli-field">
-                            <label>Grade:</label>
-                            <span id="rptLearnerGrade">---</span>
-                        </div>
-                        <div class="rli-field">
-                            <label>Stream:</label>
-                            <span id="rptLearnerStream">---</span>
-                        </div>
-                    </div>
-                    <div class="rli-row">
-                        <div class="rli-field">
-                            <label>Gender:</label>
-                            <span id="rptLearnerGender">---</span>
-                        </div>
-                        <div class="rli-field">
-                            <label>Age:</label>
-                            <span id="rptLearnerAge">---</span>
-                        </div>
-                        <div class="rli-field">
-                            <label>Class Teacher:</label>
-                            <span id="rptClassTeacher">---</span>
-                        </div>
-                        <div class="rli-field">
-                            <label>Position:</label>
-                            <span id="rptLearnerPosition">---</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Subject Performance Table -->
-                <div class="report-table-block">
-                    <table class="report-table" id="individualReportTable">
-                        <thead>
-                            <tr>
-                                <th class="col-no">#</th>
-                                <th class="col-subject">Learning Area</th>
-                                <th class="col-score">Score</th>
-                                <th class="col-grade">Grade</th>
-                                <th class="col-competency">Competency Level</th>
-                                <th class="col-remarks">Teacher Remarks</th>
-                            </tr>
-                        </thead>
-                        <tbody id="individualReportBody">
-                        </tbody>
-                        <tfoot>
-                            <tr class="report-total-row">
-                                <td colspan="2"><strong>TOTAL / MEAN</strong></td>
-                                <td><strong id="rptTotalScore">0</strong></td>
-                                <td><strong id="rptMeanGrade">-</strong></td>
-                                <td id="rptOverallCompetency">-</td>
-                                <td></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-
-                <!-- Competency Legend -->
-                <div class="report-competency-legend">
-                    <span><strong>EE</strong> = Exceeding Expectation</span>
-                    <span><strong>ME</strong> = Meeting Expectation</span>
-                    <span><strong>AE</strong> = Approaching Expectation</span>
-                    <span><strong>BE</strong> = Below Expectation</span>
-                </div>
-
-                <!-- Grading Scale -->
-                <div class="report-grading-scale">
-                    <h4>Grading Scale</h4>
-                    <div class="grading-scale-grid">
-                        <div class="gs-item"><span class="gs-grade">E</span><span class="gs-range">80 &ndash; 100</span></div>
-                        <div class="gs-item"><span class="gs-grade">M</span><span class="gs-range">65 &ndash; 79</span></div>
-                        <div class="gs-item"><span class="gs-grade">A</span><span class="gs-range">50 &ndash; 64</span></div>
-                        <div class="gs-item"><span class="gs-grade">B</span><span class="gs-range">0 &ndash; 49</span></div>
-                    </div>
-                </div>
-
-                <!-- Remarks -->
-                <div class="report-remarks-section">
-                    <div class="rrs-block">
-                        <label>Class Teacher's Remarks:</label>
-                        <p id="rptTeacherRemarks">---</p>
-                    </div>
-                    <div class="rrs-block">
-                        <label>Head Teacher's Remarks:</label>
-                        <p id="rptHeadRemarks">---</p>
-                    </div>
-                </div>
-
-                <!-- Signatures -->
-                <div class="report-signature-area">
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
-                        <span>Class Teacher</span>
-                    </div>
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
-                        <span>Head Teacher</span>
-                    </div>
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
-                        <span>Parent / Guardian</span>
-                    </div>
-                </div>
-
-                <!-- Next Term Footer -->
-                <div class="report-next-term">
-                    <div class="rnt-item">
-                        <label>Opening Date:</label>
-                        <span id="rptOpeningDate">---</span>
-                    </div>
-                    <div class="rnt-item">
-                        <label>Fee Balance:</label>
-                        <span id="rptFeeBalance">---</span>
-                    </div>
-                </div>
-
+            </div>
+            <div class="rsh-info">
+                <h2 id="reportSchoolName">SCHOOL NAME</h2>
+                <p id="reportSchoolMotto">School Motto</p>
+                <p id="reportSchoolAddress">Address &middot; Phone &middot; Email</p>
             </div>
         </div>
+
+        <!-- Report Title Strip -->
+        <div class="report-title-block">
+            <h3 id="reportCardTitle">LEARNER REPORT CARD</h3>
+            <div class="rtb-meta">
+                <span id="reportTermLabel">Term 1</span>
+                <span class="rtb-separator">&mdash;</span>
+                <span id="reportYearLabel">2025</span>
+            </div>
+        </div>
+
+        <!-- Learner Identity Block -->
+        <div class="report-learner-info">
+            <div class="rli-row">
+                <div class="rli-field">
+                    <label>Full Name:</label>
+                    <span id="rptLearnerName">---</span>
+                </div>
+                <div class="rli-field">
+                    <label>Admission No:</label>
+                    <span id="rptLearnerAdm">---</span>
+                </div>
+                <div class="rli-field">
+                    <label>Grade:</label>
+                    <span id="rptLearnerGrade">---</span>
+                </div>
+                <div class="rli-field">
+                    <label>Stream:</label>
+                    <span id="rptLearnerStream">---</span>
+                </div>
+            </div>
+            <div class="rli-row">
+                <div class="rli-field">
+                    <label>Gender:</label>
+                    <span id="rptLearnerGender">---</span>
+                </div>
+                <div class="rli-field">
+                    <label>Age:</label>
+                    <span id="rptLearnerAge">---</span>
+                </div>
+                <div class="rli-field">
+                    <label>Position:</label>
+                    <span id="rptLearnerPosition">---</span>
+                </div>
+                <div class="rli-field">
+                    <label>Out of:</label>
+                    <span id="rptOutOf">---</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dynamic Subject Performance Table -->
+        <div class="report-table-block">
+            <table class="report-table report-table-dynamic" id="individualReportTable">
+                <thead id="individualReportHead">
+                    <!-- Populated dynamically by JS based on available assessment types -->
+                </thead>
+                <tbody id="individualReportBody">
+                </tbody>
+                <tfoot id="individualReportFoot">
+                </tfoot>
+            </table>
+        </div>
+
+        <!-- Competency Legend -->
+        <div class="report-competency-legend">
+            <span><strong>EE</strong> = Exceeding Expectation (80–100)</span>
+            <span><strong>ME</strong> = Meeting Expectation (50–79)</span>
+            <span><strong>AE</strong> = Approaching Expectation (30–49)</span>
+            <span><strong>BE</strong> = Below Expectation (0–29)</span>
+        </div>
+
+        <!-- Performance Summary Strip -->
+        <div class="report-performance-strip" id="reportPerfStrip">
+            <div class="rps-item">
+                <span class="rps-label">Total Average</span>
+                <strong class="rps-value" id="rptTotalAvg">0%</strong>
+            </div>
+            <div class="rps-item">
+                <span class="rps-label">Overall Rating</span>
+                <strong class="rps-value" id="rptOverallRating">—</strong>
+            </div>
+            <div class="rps-item">
+                <span class="rps-label">Subjects Assessed</span>
+                <strong class="rps-value" id="rptSubjectsAssessed">0</strong>
+            </div>
+        </div>
+
+        <!-- Remarks -->
+        <div class="report-remarks-section">
+            <div class="rrs-block">
+                <label>Class Teacher's Remarks:</label>
+                <p id="rptTeacherRemarks">---</p>
+            </div>
+            <div class="rrs-block">
+                <label>Head Teacher's Remarks:</label>
+                <p id="rptHeadRemarks">---</p>
+            </div>
+        </div>
+
+        <!-- Signatures -->
+        <div class="report-signature-area">
+            <div class="rsa-block">
+                <div class="rsa-line"></div>
+                <span>Class Teacher</span>
+            </div>
+            <div class="rsa-block">
+                <div class="rsa-line"></div>
+                <span>Head Teacher</span>
+            </div>
+            <div class="rsa-block">
+                <div class="rsa-line"></div>
+                <span>Parent / Guardian</span>
+            </div>
+        </div>
+
+        <!-- Next Term Footer -->
+        <div class="report-next-term">
+            <div class="rnt-item">
+                <label>Date:</label>
+                <span id="rptReportDate">---</span>
+            </div>
+        </div>
+
+    </div>
+</div>
+<!-- END Individual Preview -->
         <!-- END Individual Preview -->
 
 
