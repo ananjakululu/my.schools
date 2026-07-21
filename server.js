@@ -14,7 +14,8 @@ const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
-const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key_change_this';
+//const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key_change_this';
+const JWT_SECRET = process.env.JWT_SECRET;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ==========================================================================
@@ -46,55 +47,163 @@ const runMigration = async (sql, msg) => {
 const initDatabase = async () => {
     console.log('[DB] Connecting to PostgreSQL...');
 
+    // ── MIGRATIONS: Add new columns to existing databases ──
     await runMigration(`ALTER TABLE users ADD COLUMN "department" TEXT DEFAULT 'General';`, 'Added department');
     await runMigration(`ALTER TABLE users ADD COLUMN "isActive" INTEGER DEFAULT 1;`, 'Added isActive');
     await runMigration(`ALTER TABLE users ADD COLUMN "failedLoginAttempts" INTEGER DEFAULT 0;`, 'Added failedLoginAttempts');
     await runMigration(`ALTER TABLE users ADD COLUMN "lockedUntil" TEXT;`, 'Added lockedUntil');
+    await runMigration(`ALTER TABLE exams ADD COLUMN "grade" TEXT;`, 'Added grade to exams');
+    await runMigration(`ALTER TABLE exams ADD COLUMN "type" TEXT;`, 'Added type to exams');
+    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "type" TEXT;`, 'Added type to examSchedules');
+    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "grade" TEXT;`, 'Added grade to examSchedules');
+    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "status" TEXT DEFAULT 'open';`, 'Added status to examSchedules');
+    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "notes" TEXT;`, 'Added notes to examSchedules');
+    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "createdAt" TEXT;`, 'Added createdAt to examSchedules');
 
+    // ── SCHEMA: Create tables if they don't exist (fresh install) ──
     await execMulti(`
         CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
-            role TEXT NOT NULL, "passwordHash" TEXT NOT NULL, "department" TEXT DEFAULT 'General',
-            "isActive" INTEGER DEFAULT 1, "failedLoginAttempts" INTEGER DEFAULT 0, "lockedUntil" TEXT
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL,
+            "passwordHash" TEXT NOT NULL,
+            "department" TEXT DEFAULT 'General',
+            "isActive" INTEGER DEFAULT 1,
+            "failedLoginAttempts" INTEGER DEFAULT 0,
+            "lockedUntil" TEXT
         );
+
         CREATE TABLE IF NOT EXISTS "passwordResetTokens" (
-            id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "tokenHash" TEXT NOT NULL,
-            "expiresAt" TEXT NOT NULL, used INTEGER DEFAULT 0, "createdAt" TEXT DEFAULT NOW()::TEXT
+            id TEXT PRIMARY KEY,
+            "userId" TEXT NOT NULL,
+            "tokenHash" TEXT NOT NULL,
+            "expiresAt" TEXT NOT NULL,
+            used INTEGER DEFAULT 0,
+            "createdAt" TEXT DEFAULT NOW()::TEXT
         );
+
         CREATE TABLE IF NOT EXISTS students (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, gender TEXT, dob TEXT, "idNumber" TEXT, phone TEXT,
-            grade TEXT, stream TEXT, reg TEXT, photo TEXT, "guardianName" TEXT, "guardianPhone" TEXT,
-            "guardianRel" TEXT, "upiNumber" TEXT, "prevSchool" TEXT, "entryLevel" TEXT, "yearCompleted" TEXT,
-            "nemisNumber" TEXT, disability TEXT
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            gender TEXT,
+            dob TEXT,
+            "idNumber" TEXT,
+            phone TEXT,
+            grade TEXT,
+            stream TEXT,
+            reg TEXT,
+            photo TEXT,
+            "guardianName" TEXT,
+            "guardianPhone" TEXT,
+            "guardianRel" TEXT,
+            "upiNumber" TEXT,
+            "prevSchool" TEXT,
+            "entryLevel" TEXT,
+            "yearCompleted" TEXT,
+            "nemisNumber" TEXT,
+            disability TEXT
         );
+
         CREATE TABLE IF NOT EXISTS staff (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT, role TEXT, "department" TEXT,
-            phone TEXT, "tscNumber" TEXT, photo TEXT, subjects TEXT
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT,
+            role TEXT,
+            "department" TEXT,
+            phone TEXT,
+            "tscNumber" TEXT,
+            photo TEXT,
+            subjects TEXT
         );
+
         CREATE TABLE IF NOT EXISTS exams (
-            id TEXT PRIMARY KEY, "studentId" TEXT, "subjectId" TEXT,
-            score INTEGER, term TEXT, year INTEGER, comments TEXT
+            id TEXT PRIMARY KEY,
+            "studentId" TEXT,
+            "subjectId" TEXT,
+            score INTEGER,
+            term TEXT,
+            year TEXT,
+            comments TEXT,
+            "grade" TEXT,
+            "type" TEXT
         );
+
         CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1), "schoolName" TEXT, motto TEXT, email TEXT, phone TEXT,
-            "schoolCode" TEXT, "academicYear" TEXT, "currentTerm" TEXT, level TEXT, category TEXT, address TEXT,
-            "hoiName" TEXT, "hoiTitle" TEXT, "hoiTsc" TEXT, "hoiPhone" TEXT, "hoiEmail" TEXT,
-            logo TEXT, stamp TEXT, "hoiSignature" TEXT, "ctSignature" TEXT
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            "schoolName" TEXT,
+            motto TEXT,
+            email TEXT,
+            phone TEXT,
+            "schoolCode" TEXT,
+            "academicYear" TEXT,
+            "currentTerm" TEXT,
+            level TEXT,
+            category TEXT,
+            address TEXT,
+            "hoiName" TEXT,
+            "hoiTitle" TEXT,
+            "hoiTsc" TEXT,
+            "hoiPhone" TEXT,
+            "hoiEmail" TEXT,
+            logo TEXT,
+            stamp TEXT,
+            "hoiSignature" TEXT,
+            "ctSignature" TEXT
         );
-        CREATE TABLE IF NOT EXISTS "learningAreas" (id TEXT PRIMARY KEY, name TEXT, code TEXT, "applicableLevels" TEXT);
-        CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, title TEXT, content TEXT, "createdAt" TEXT, "createdBy" TEXT);
-        CREATE TABLE IF NOT EXISTS timetable (id TEXT PRIMARY KEY, day TEXT, time TEXT, subject TEXT, grade TEXT, teacher TEXT);
-        CREATE TABLE IF NOT EXISTS "examSchedules" (id TEXT PRIMARY KEY, name TEXT, term TEXT, year TEXT, "startDate" TEXT, "endDate" TEXT, grades TEXT, subjects TEXT);
+
+        CREATE TABLE IF NOT EXISTS "learningAreas" (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            code TEXT,
+            "applicableLevels" TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS notes (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            content TEXT,
+            "createdAt" TEXT,
+            "createdBy" TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS timetable (
+            id TEXT PRIMARY KEY,
+            day TEXT,
+            time TEXT,
+            subject TEXT,
+            grade TEXT,
+            teacher TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS "examSchedules" (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            "type" TEXT,
+            grade TEXT,
+            term TEXT,
+            year TEXT,
+            "startDate" TEXT,
+            "endDate" TEXT,
+            subjects TEXT,
+            status TEXT DEFAULT 'open',
+            notes TEXT,
+            "createdAt" TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS "auditLogs" (
-            id SERIAL PRIMARY KEY, "timestamp" TEXT NOT NULL DEFAULT NOW()::TEXT,
-            "userId" TEXT, "userName" TEXT, action TEXT NOT NULL, details TEXT
+            id SERIAL PRIMARY KEY,
+            "timestamp" TEXT NOT NULL DEFAULT NOW()::TEXT,
+            "userId" TEXT,
+            "userName" TEXT,
+            action TEXT NOT NULL,
+            details TEXT
         );
     `);
+
     console.log('[DB] Tables verified.');
-    
     await seedDatabase();
 };
-
 // ==========================================================================
 //   SEEDING
 // ==========================================================================
@@ -175,7 +284,11 @@ app.use((req, res, next) => {
     next();
 });
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    etag: false,
+    maxAge: '0s',
+    lastModified: false
+}));
 
 // ==========================================================================
 //   SECURITY HELPERS
@@ -399,7 +512,7 @@ app.get('/exams', authenticateToken, async (req, res) => {
 });
 
 app.post('/exams', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
-    const cols = ['id','studentId','subjectId','score','term','year','comments'];
+    const cols = ['id','studentId','subjectId','score','term','year','comments','grade','type'];
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -452,6 +565,39 @@ app.post('/learningAreas', authenticateToken, async (req, res) => {
         res.json(req.body);
     } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'DB Error', details: err.message }); }
     finally { client.release(); }
+});
+app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi', 'admin'), async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM "examSchedules"');
+        
+        const cols = ['id','name','type','grade','term','year','startDate','endDate','subjects','status','notes','createdAt'];
+        
+        for (const item of req.body) {
+            const values = cols.map(c => {
+                const val = item[c];
+                if (val === null || val === undefined) return null;
+                if (typeof val === 'object') return JSON.stringify(val);
+                return val;
+            });
+            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
+            await client.query(
+                `INSERT INTO "examSchedules" ("${cols.join('","')}") VALUES (${placeholders})`,
+                values
+            );
+        }
+        
+        await client.query('COMMIT');
+        await logAction(req.user.id, req.user.name, 'UPDATE_EXAM_SCHEDULES', `${req.body.length} schedules`);
+        res.json(req.body);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[EXAM SCHEDULES SAVE ERROR]', err);
+        res.status(500).json({ error: 'Failed to save exam schedules', details: err.message });
+    } finally {
+        client.release();
+    }
 });
 
 // ==========================================================================
@@ -572,27 +718,26 @@ app.post('/api/students/sync', authenticateToken, requireRole('hoi', 'admin'), a
 app.post('/api/exam', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
     const exam = req.body;
     if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-    
     try {
         await pool.query(`
-            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (id) DO UPDATE SET 
                 "studentId" = EXCLUDED."studentId",
                 "subjectId" = EXCLUDED."subjectId",
                 score = EXCLUDED.score,
                 term = EXCLUDED.term,
                 year = EXCLUDED.year,
-                comments = EXCLUDED.comments
-        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments]);
-        
+                comments = EXCLUDED.comments,
+                grade = EXCLUDED.grade,
+                type = EXCLUDED.type
+        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments, exam.grade || null, exam.type || null]);
         res.json(exam);
     } catch (err) {
         console.error('[EXAM SAVE ERROR]', err);
         res.status(500).json({ error: 'Failed to save exam' });
     }
 });
-
 // --- BATCH EXAM SYNC ---
 app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
     const exams = req.body;
@@ -606,14 +751,17 @@ app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi'
             if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
             if (!exam.studentId || !exam.subjectId) continue; 
             
-            await client.query(`
-                INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (id) DO UPDATE SET 
-                    score = EXCLUDED.score,
-                    term = EXCLUDED.term,
-                    comments = EXCLUDED.comments
-            `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments || null]);
+            // In POST /api/exams/sync, change the INSERT to include type:
+await client.query(`
+    INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    ON CONFLICT (id) DO UPDATE SET 
+        score = EXCLUDED.score,
+        term = EXCLUDED.term,
+        comments = EXCLUDED.comments,
+        grade = EXCLUDED.grade,
+        type = EXCLUDED.type
+`, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments || null, exam.grade || null, exam.type || null]);
         }
         
         await client.query('COMMIT');
@@ -637,12 +785,20 @@ app.get('/api/db', authenticateToken, requireRole('admin', 'hoi', 'teacher', 'ex
             pool.query('SELECT * FROM notes'), pool.query('SELECT * FROM timetable'), pool.query('SELECT * FROM "examSchedules"')
         ]);
         res.json({
-            students: students.rows, staff: staff.rows, exams: exams.rows, settings: settings.rows[0] || {},
+            students: students.rows, 
+            staff: staff.rows, 
+            exams: exams.rows, 
+            settings: settings.rows[0] || {},
             learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels) })),
-            notes: notes.rows, timetable: timetable.rows, examSchedules: examSchedules.rows
+            notes: notes.rows, 
+            timetable: timetable.rows, 
+            examSchedules: examSchedules.rows
         });
         await logAction(req.user.id, req.user.name, 'BACKUP_DB', 'Full backup downloaded');
-    } catch (err) { res.status(500).json({ error: 'Backup failed' }); }
+    } catch (err) { 
+        console.error('[BACKUP ERROR]', err);
+        res.status(500).json({ error: 'Backup failed' }); 
+    }
 });
 
 app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_officer', 'teacher'), async (req, res) => {
@@ -650,7 +806,12 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
         if (!data || !Array.isArray(data)) return;
         await client.query(`DELETE FROM "${table}"`);
         for (const r of data) {
-            const values = columns.map(c => { const val = r[c]; if (val === null || val === undefined) return ''; if (typeof val === 'object') return JSON.stringify(val); return val; });
+            const values = columns.map(c => { 
+                const val = r[c]; 
+                if (val === null || val === undefined) return null; 
+                if (typeof val === 'object') return JSON.stringify(val); 
+                return val; 
+            });
             const placeholders = values.map((_, idx) => `$${idx + 1}`).join(',');
             await client.query(`INSERT INTO "${table}" ("${columns.join('","')}") VALUES (${placeholders})`, values);
         }
@@ -678,10 +839,12 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
         
         await safeReplace(client, 'students', students, ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo','guardianName','guardianPhone','guardianRel','upiNumber','prevSchool','entryLevel','yearCompleted','nemisNumber','disability']);
         await safeReplace(client, 'staff', staff, ['id','name','email','role','department','phone','tscNumber','photo','subjects']);
-        await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments']);
+        // ✅ Added 'type' and 'grade' to exams
+        await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments','type','grade']);
         await safeReplace(client, 'notes', notes, ['id','title','content','createdAt','createdBy']);
         await safeReplace(client, 'timetable', timetable, ['id','day','time','subject','grade','teacher']);
-        await safeReplace(client, 'examSchedules', examSchedules, ['id','name','term','year','startDate','endDate','grades','subjects']);
+        // ✅ Fixed: changed 'grades' to 'grade', added 'type','status','notes','createdAt'
+        await safeReplace(client, 'examSchedules', examSchedules, ['id','name','type','grade','term','year','startDate','endDate','subjects','status','notes','createdAt']);
         
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'RESTORE_DB', 'Database restored from backup');
