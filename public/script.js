@@ -445,6 +445,19 @@ function initGlobalListeners() {
     $('btnExportTimetable')?.addEventListener('click', exportTimetablePDF);
     $('ttSlotForm')?.addEventListener('submit', handleTimetableSlotSubmit);
     $('ttSlotGrade')?.addEventListener('change', e => populateTimetableSlotSubjects(e.target.value));
+    // Add these inside initGlobalListeners():
+
+ $('reportGradeSelect')?.addEventListener('change', populateReportStudentList);
+ $('reportTermSelect')?.addEventListener('change', populateReportStudentList);
+ $('reportYearSelect')?.addEventListener('change', populateReportStudentList);
+ $('reportStudentSearch')?.addEventListener('input', debounce(e => {
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('.report-student-row').forEach(row => {
+        const name = row.querySelector('.rsr-name')?.textContent.toLowerCase() || '';
+        const meta = row.querySelector('.rsr-meta')?.textContent.toLowerCase() || '';
+        row.style.display = (name.includes(q) || meta.includes(q)) ? '' : 'none';
+    });
+}, 200));
 }
 
 function router(viewId, navEl) {
@@ -474,6 +487,7 @@ function router(viewId, navEl) {
             case 'profile': populateProfileList(); break;
             case 'notes': renderNotesTab(); break;
             case 'inbox': renderInboxTab(); break;
+            
         }
     } catch (e) {
         console.error(`Error rendering ${viewId}:`, e);
@@ -1053,12 +1067,610 @@ function changeLearnerPage(p) { LearnerState.page = p; renderLearnerSection(); }
 const VALID_ASSESSMENT_TYPES = ['Opener', 'Mid Term', 'End Term', 'End Year'];
 const ASSESSMENT_TYPE_ORDER = { 'Opener': 1, 'Mid Term': 2, 'End Term': 3, 'End Year': 4 };
 const ASSESSMENT_TYPE_CSS = {
-    'Opener': 'type-opener',
-    'Mid Term': 'type-midterm',
-    'End Term': 'type-endterm',
-    'End Year': 'type-endyear'
+    'Opener': 'type-opener', 'Mid Term': 'type-midterm',
+    'End Term': 'type-endterm', 'End Year': 'type-endyear'
 };
 
+// --- Subject → Teacher Mapping ---
+function getSubjectTeacherName(subjectId, grade) {
+    const staffList = StaffRepo.getAll();
+    for (const s of staffList) {
+        if (!s.subjects) continue;
+        try {
+            let assignments = [];
+            if (typeof s.subjects === 'string') assignments = JSON.parse(s.subjects);
+            else if (Array.isArray(s.subjects)) assignments = s.subjects;
+            else continue;
+
+            const match = assignments.find(a => {
+                if (typeof a === 'string') return a === subjectId;
+                const sid = a.subjectId || a.id || a.subject || '';
+                const sg = a.grade || '';
+                return sid === subjectId && (!sg || sg === grade);
+            });
+            if (match) return s.name;
+        } catch (e) { /* skip malformed */ }
+    }
+    return '';
+}
+
+// --- Personalized CBC Remarks ---
+function generateRemarks(rows, overallAvg, student) {
+    const scored = rows.filter(r => r.avg > 0);
+    if (scored.length === 0) return 'No assessment data recorded for this term.';
+
+    const strongest = [...scored].sort((a, b) => b.avg - a.avg).slice(0, 2);
+    const weakest = [...scored].sort((a, b) => a.avg - b.avg).slice(0, 2);
+    const firstName = (student.name || 'The learner').split(' ')[0];
+    const pronoun = student.gender === 'Female' ? 'She' : 'He';
+    const poss = student.gender === 'Female' ? 'her' : 'his';
+    const ref = student.gender === 'Female' ? 'her' : 'him';
+
+    let remark = '';
+
+    if (overallAvg >= 80) {
+        remark = `${firstName} has demonstrated exceptional academic performance this term, exceeding expectations in most learning areas. `;
+        remark += `${pronoun} shows outstanding competence particularly in ${strongest.map(s => s.subjectName).join(' and ')}. `;
+        remark += `${pronoun} is highly motivated, consistent in ${poss} work, and displays excellent critical thinking skills. `;
+        remark += `${firstName} should continue to challenge ${ref}self with advanced tasks and peer mentoring opportunities. `;
+        remark += `Keep up the exemplary work!`;
+    } else if (overallAvg >= 50) {
+        remark = `${firstName} has shown satisfactory progress this term and is meeting expectations in several learning areas. `;
+        remark += `${pronoun} performs well in ${strongest.map(s => s.subjectName).join(' and ')}. `;
+        const weakBelow50 = weakest.filter(w => w.avg < 50);
+        if (weakBelow50.length > 0) {
+            remark += `However, ${pronoun} needs to put more effort in ${weakBelow50.map(w => w.subjectName).join(' and ')} to move from approaching to meeting expectations. `;
+        }
+        remark += `With consistent revision, active participation in class, and completion of assignments, ${firstName} can significantly improve ${poss} overall performance. `;
+        remark += `${pronoun} is encouraged to seek clarification from teachers whenever needed.`;
+    } else if (overallAvg >= 30) {
+        remark = `${firstName} is approaching the expected competency levels but requires additional support in several learning areas. `;
+        remark += `${pronoun} shows some understanding in ${strongest[0]?.subjectName || 'a few areas'} which is encouraging. `;
+        remark += `${pronoun} needs targeted support and extra practice in ${weakest.map(w => w.subjectName).join(', ')}. `;
+        remark += `Regular attendance of remedial classes, guided revision, and parental involvement in ${poss} studies will greatly help ${ref} improve. `;
+        remark += `The class teacher will closely monitor ${poss} progress next term.`;
+    } else {
+        remark = `${firstName} is currently below the expected competency levels and requires urgent intervention across most learning areas. `;
+        remark += `${pronoun} struggles significantly with ${weakest.slice(0, 3).map(w => w.subjectName).join(', ')}. `;
+        remark += `A meeting between the school, the parent/guardian, and the class teacher is strongly recommended to develop a targeted support plan. `;
+        remark += `${pronoun} will benefit from one-on-one tutoring, simplified learning materials, and continuous encouragement. `;
+        remark += `Early intervention is key to helping ${firstName} get back on track.`;
+    }
+
+    return remark;
+}
+
+// --- Build Report Data for One Student ---
+function getStudentReportData(studentId, term, year) {
+    const student = StudentRepo.getById(studentId);
+    if (!student) return null;
+
+    const grade = student.grade;
+    term = term || store.settings.currentTerm;
+    year = year || store.settings.academicYear;
+
+    // Applicable learning areas for this grade
+    const subjects = (store.learningAreas || []).filter(la =>
+        la.applicableLevels && la.applicableLevels.includes(grade)
+    );
+
+    // All exams for this student
+    const studentExams = (store.exams || []).filter(e => e.studentId === studentId);
+
+    // Detect which assessment types exist for this term/year
+    const typeSet = new Set();
+    studentExams.forEach(e => {
+        if (e.type && VALID_ASSESSMENT_TYPES.includes(e.type) &&
+            e.term === term && String(e.year) === String(year)) {
+            typeSet.add(e.type);
+        }
+    });
+
+    const sortedTypes = [...typeSet].sort((a, b) =>
+        (ASSESSMENT_TYPE_ORDER[a] || 99) - (ASSESSMENT_TYPE_ORDER[b] || 99)
+    );
+
+    if (sortedTypes.length === 0) return null; // No data
+
+    // Build rows
+    const rows = subjects.map((subj, idx) => {
+        const row = {
+            num: idx + 1, subjectName: subj.name, subjectId: subj.id,
+            teacherName: getSubjectTeacherName(subj.id, grade),
+            scores: {}, total: 0, count: 0, avg: 0, rating: null
+        };
+
+        sortedTypes.forEach(type => {
+            const exam = studentExams.find(e =>
+                e.subjectId === subj.id && e.type === type &&
+                e.term === term && String(e.year) === String(year)
+            );
+            const score = exam ? parseInt(exam.score) || 0 : 0;
+            row.scores[type] = score;
+            if (score > 0) { row.total += score; row.count++; }
+        });
+
+        row.avg = row.count > 0 ? Math.round(row.total / row.count) : 0;
+        row.rating = row.avg > 0 ? cbcRating(row.avg) : null;
+        return row;
+    });
+
+    // Overall average (average of subject averages, not all scores)
+    const scoredRows = rows.filter(r => r.avg > 0);
+    const overallAvg = scoredRows.length > 0
+        ? Math.round(scoredRows.reduce((s, r) => s + r.avg, 0) / scoredRows.length)
+        : 0;
+
+    // Class rank calculation
+    const gradeStudents = StudentRepo.findBy('grade', grade);
+    const gradeAvgs = gradeStudents.map(s => {
+        const sExams = (store.exams || []).filter(e =>
+            e.studentId === s.id && e.term === term &&
+            String(e.year) === String(year) && e.type && parseInt(e.score) > 0
+        );
+        if (sExams.length === 0) return -1;
+        const subjMap = {};
+        sExams.forEach(e => {
+            if (!subjMap[e.subjectId]) subjMap[e.subjectId] = [];
+            subjMap[e.subjectId].push(parseInt(e.score) || 0);
+        });
+        const subjAvgs = Object.values(subjMap).map(sc =>
+            Math.round(sc.reduce((a, b) => a + b, 0) / sc.length)
+        );
+        return subjAvgs.reduce((a, b) => a + b, 0) / subjAvgs.length;
+    }).filter(a => a >= 0).sort((a, b) => b - a);
+
+    let rank = '-';
+    for (let i = 0; i < gradeAvgs.length; i++) {
+        if (Math.abs(gradeAvgs[i] - overallAvg) < 0.5) { rank = i + 1; break; }
+    }
+
+    return {
+        student, term, year, sortedTypes, rows,
+        overallAvg, overallRating: overallAvg > 0 ? cbcRating(overallAvg) : null,
+        rank, totalInGrade: gradeStudents.length,
+        remarks: generateRemarks(rows, overallAvg, student)
+    };
+}
+
+// --- Render Report Card into jsPDF doc (reusable for batch) ---
+function renderReportCardToDoc(doc, data, startY) {
+    const pageW = 210, pageH = 297, margin = 12;
+    let y = startY;
+    const s = store.settings;
+
+    // ===== HEADER =====
+    doc.setFontSize(15);
+    doc.setFont('helvetica', 'bold');
+    doc.text(s.schoolName || 'School Name', pageW / 2, y + 6, { align: 'center' });
+    y += 9;
+
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'italic');
+    doc.text(`"${s.motto || ''}"`, pageW / 2, y, { align: 'center' });
+    y += 5;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text(
+        `${s.address || ''}  |  Tel: ${s.phone || ''}  |  Email: ${s.email || ''}`,
+        pageW / 2, y, { align: 'center' }
+    );
+    y += 4;
+    doc.text(
+        `School Code: ${s.schoolCode || ''}   |   ${s.level || ''}   |   ${s.category || ''}`,
+        pageW / 2, y, { align: 'center' }
+    );
+    y += 4;
+
+    // Green double line
+    doc.setDrawColor(34, 197, 94);
+    doc.setLineWidth(1.5);
+    doc.line(margin, y, pageW - margin, y);
+    doc.setLineWidth(0.3);
+    doc.line(margin, y + 2, pageW - margin, y + 2);
+    y += 8;
+
+    // Title
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text(' Learner Academic Report Card', pageW / 2, y, { align: 'center' });
+    y += 8;
+
+    // ===== STUDENT INFO =====
+    doc.setFontSize(8.5);
+    const c1 = margin + 2, c2 = pageW / 2 + 8;
+    const info = [
+        ['Full Name:', data.student.name, 'Admission No:', data.student.reg || 'N/A'],
+        ['Grade:', data.student.grade, 'Stream:', data.student.stream || 'N/A'],
+        ['Term:', data.term, 'Academic Year:', data.year],
+    ];
+    info.forEach(([l1, v1, l2, v2]) => {
+        doc.setFont('helvetica', 'bold');
+        doc.text(l1, c1, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(v1), c1 + 22, y);
+        doc.setFont('helvetica', 'bold');
+        doc.text(l2, c2, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(v2), c2 + 28, y);
+        y += 5.5;
+    });
+    y += 4;
+
+    // ===== MAIN TABLE =====
+    const hasTeacher = data.rows.some(r => r.teacherName);
+    const headers = ['#', 'Learning Area'];
+    data.sortedTypes.forEach(t => headers.push(t));
+    headers.push('Avg', 'Rating');
+    if (hasTeacher) headers.push('Subject Teacher');
+
+    const body = data.rows.map(r => {
+        const row = [r.num, r.subjectName];
+        data.sortedTypes.forEach(t => row.push(r.scores[t] || '—'));
+        row.push(r.avg > 0 ? r.avg : '—');
+        row.push(r.rating ? r.rating.code : '—');
+        if (hasTeacher) row.push(r.teacherName || '—');
+        return row;
+    });
+
+    // Summary row
+    const summaryRow = ['', 'OVERALL'];
+    data.sortedTypes.forEach(() => summaryRow.push(''));
+    summaryRow.push(data.overallAvg > 0 ? data.overallAvg + '%' : '—');
+    summaryRow.push(data.overallRating ? data.overallRating.code : '—');
+    if (hasTeacher) summaryRow.push('');
+
+    // Dynamic column styles
+    const colStyles = {
+        0: { halign: 'center', cellWidth: 8 },
+        1: { cellWidth: hasTeacher ? 42 : 52 },
+    };
+    data.sortedTypes.forEach((_, i) => {
+        colStyles[2 + i] = { halign: 'center', cellWidth: 16 };
+    });
+    const avgIdx = 2 + data.sortedTypes.length;
+    colStyles[avgIdx] = { halign: 'center', cellWidth: 16, fontStyle: 'bold' };
+    const ratingIdx = avgIdx + 1;
+    colStyles[ratingIdx] = { halign: 'center', cellWidth: 16, fontStyle: 'bold' };
+    if (hasTeacher) {
+        colStyles[ratingIdx + 1] = { cellWidth: 32, fontSize: 6.5, overflow: 'ellipsize' };
+    }
+
+    const totalRows = body.length;
+    const bodyWithSummary = [...body, summaryRow];
+
+    doc.autoTable({
+        startY: y,
+        head: [headers],
+        body: bodyWithSummary,
+        margin: { left: margin, right: margin },
+        styles: {
+            fontSize: 7.5, cellPadding: 2.2,
+            lineColor: [210, 210, 210], lineWidth: 0.2,
+            font: 'helvetica', valign: 'middle', overflow: 'linebreak'
+        },
+        headStyles: {
+            fillColor: [15, 23, 42], textColor: [255, 255, 255],
+            fontStyle: 'bold', fontSize: 7.5, halign: 'center'
+        },
+        bodyStyles: { textColor: [30, 41, 59] },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        columnStyles: colStyles,
+        didParseCell: function (tableData) {
+            // Summary row highlight
+            if (tableData.row.index === totalRows && tableData.section === 'body') {
+                tableData.cell.styles.fillColor = [236, 253, 245];
+                tableData.cell.styles.fontStyle = 'bold';
+                tableData.cell.styles.fontSize = 8;
+                return;
+            }
+            // Color-code rating cells
+            if (tableData.column.index === ratingIdx && tableData.section === 'body') {
+                const v = tableData.cell.raw;
+                if (v === 'EE') tableData.cell.styles.textColor = [22, 163, 74];
+                else if (v === 'ME') tableData.cell.styles.textColor = [37, 99, 235];
+                else if (v === 'AE') tableData.cell.styles.textColor = [217, 119, 6];
+                else if (v === 'BE') tableData.cell.styles.textColor = [220, 38, 38];
+            }
+            // Color-code individual score cells
+            if (tableData.section === 'body' && typeof tableData.cell.raw === 'number') {
+                if (tableData.cell.raw >= 80) tableData.cell.styles.textColor = [22, 163, 74];
+                else if (tableData.cell.raw >= 50) tableData.cell.styles.textColor = [37, 99, 235];
+                else if (tableData.cell.raw >= 30) tableData.cell.styles.textColor = [217, 119, 6];
+                else if (tableData.cell.raw > 0) tableData.cell.styles.textColor = [220, 38, 38];
+            }
+        }
+    });
+
+    y = doc.lastAutoTable.finalY + 8;
+
+    // ===== SUMMARY BOX =====
+    if (y > pageH - 85) { doc.addPage(); y = margin; }
+
+    doc.setDrawColor(34, 197, 94);
+    doc.setLineWidth(0.6);
+    doc.roundedRect(margin, y, pageW - 2 * margin, 20, 3, 3, 'S');
+    doc.setFillColor(248, 253, 250);
+    doc.roundedRect(margin, y, pageW - 2 * margin, 20, 3, 3, 'F');
+
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PERFORMANCE SUMMARY', margin + 6, y + 7);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(`Total Average: ${data.overallAvg}%`, margin + 6, y + 14);
+    doc.text(`Overall Rating: ${data.overallRating ? data.overallRating.text : 'N/A'}`, margin + 60, y + 14);
+    doc.text(`Class Position: ${data.rank} out of ${data.totalInGrade}`, margin + 125, y + 14);
+
+    // Rating color in summary
+    if (data.overallRating) {
+        doc.setTextColor(...hexToRgb(data.overallRating.color));
+        doc.setFont('helvetica', 'bold');
+        doc.text(`[${data.overallRating.code}]`, margin + 190, y + 14);
+        doc.setTextColor(0);
+        doc.setFont('helvetica', 'normal');
+    }
+
+    y += 26;
+
+    // ===== REMARKS =====
+    if (y > pageH - 55) { doc.addPage(); y = margin; }
+
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(margin, y, pageW - 2 * margin, 35, 2, 2, 'S');
+
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text("CLASS TEACHER'S REMARKS:", margin + 5, y + 6);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    const splitRemarks = doc.splitTextToSize(data.remarks, pageW - 2 * margin - 10);
+    doc.text(splitRemarks, margin + 5, y + 12);
+    y += 40;
+
+    // ===== SIGNATURES =====
+    if (y > pageH - 30) { doc.addPage(); y = margin; }
+
+    const sigY = y + 8;
+    const segW = (pageW - 2 * margin) / 3;
+    const today = new Date().toLocaleDateString('en-KE', { day: '2-digit', month: 'long', year: 'numeric' });
+
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+
+    // Class Teacher sig
+    doc.text('Class Teacher', margin + segW * 0.5, sigY, { align: 'center' });
+    doc.setLineWidth(0.3);
+    doc.line(margin + 15, sigY + 3, margin + segW - 15, sigY + 3);
+    doc.setFontSize(6.5);
+    doc.text('Name & Signature', margin + segW * 0.5, sigY + 8, { align: 'center' });
+
+    // HOI sig
+    doc.setFontSize(7.5);
+    doc.text('Head of Institution', margin + segW * 1.5, sigY, { align: 'center' });
+    doc.line(margin + segW + 15, sigY + 3, margin + segW * 2 - 15, sigY + 3);
+    doc.setFontSize(6.5);
+    doc.text(s.hoiName || 'Name & Signature', margin + segW * 1.5, sigY + 8, { align: 'center' });
+
+    // Date
+    doc.setFontSize(7.5);
+    doc.text('Date:', margin + segW * 2.5, sigY, { align: 'center' });
+    doc.line(margin + segW * 2 + 15, sigY + 3, margin + segW * 3 - 15, sigY + 3);
+    doc.setFontSize(6.5);
+    doc.text(today, margin + segW * 2.5, sigY + 8, { align: 'center' });
+
+    // ===== FOOTER =====
+    const footY = pageH - 5;
+    doc.setFontSize(5.5);
+    doc.setTextColor(160);
+    doc.text(
+        `Generated by ElimuTrack CBC Management System  |  ${new Date().toLocaleString('en-KE')}`,
+        pageW / 2, footY, { align: 'center' }
+    );
+    doc.setTextColor(0);
+
+    return y;
+}
+// --- Color helper ---
+function hexToRgb(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return [r, g, b];
+}
+// --- Download Single Student Report Card ---
+function downloadStudentReportCard(studentId) {
+    const data = getStudentReportData(studentId);
+    if (!data) {
+        showToast('No assessment data found for this student this term.', 'error');
+        return;
+    }
+    const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
+    renderReportCardToDoc(doc, data, 12);
+    const fname = `Report_${data.student.name.replace(/\s+/g, '_')}_${data.term}_${data.year}.pdf`;
+    doc.save(fname);
+    showToast(`Downloaded: ${fname}`);
+}
+// --- Download Full Grade Report (all students, one PDF) ---
+function downloadGradeReport(grade) {
+    const students = StudentRepo.findBy('grade', grade);
+    if (students.length === 0) {
+        showToast(`No learners found in ${grade}.`, 'error');
+        return;
+    }
+
+    const term = $('reportTermSelect')?.value || store.settings.currentTerm;
+    const year = $('reportYearSelect')?.value || store.settings.academicYear;
+    const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
+    let first = true;
+    let count = 0;
+
+    students.forEach(student => {
+        const data = getStudentReportData(student.id, term, year);
+        if (!data) return; // Skip students with no data
+        if (!first) doc.addPage();
+        first = false;
+        renderReportCardToDoc(doc, data, 12);
+        count++;
+    });
+
+    if (count === 0) {
+        showToast(`No assessment data found for ${grade} this term.`, 'error');
+        return;
+    }
+
+    const fname = `Grade_Report_${grade.replace(/\s+/g, '_')}_${term}_${year}.pdf`;
+    doc.save(fname);
+    showToast(`Downloaded ${count} report cards for ${grade}`);
+}
+
+// --- Preview Student Report in Modal ---
+function previewStudentReport(studentId) {
+    const data = getStudentReportData(studentId);
+    const container = $('reportPreviewContent');
+    if (!container) return;
+
+    if (!data) {
+        container.innerHTML = `<div class="empty-state" style="padding:3rem;text-align:center;">
+            <i class="fa-solid fa-file-circle-xmark" style="font-size:3rem;color:var(--text-muted);margin-bottom:1rem;display:block;"></i>
+            <h3>No Assessment Data</h3>
+            <p style="color:var(--text-muted);">This learner has no recorded assessments for the selected term.</p>
+        </div>`;
+        return;
+    }
+
+    const hasTeacher = data.rows.some(r => r.teacherName);
+    const typeHeaders = data.sortedTypes.map(t => `<th>${escapeHtml(t)}</th>`).join('');
+
+    container.innerHTML = `
+        <div class="report-preview-header">
+            <div class="rph-school">
+                <strong style="font-size:1.1rem;">${escapeHtml(store.settings.schoolName)}</strong>
+                <em style="font-size:0.8rem;color:var(--text-muted);display:block;">"${escapeHtml(store.settings.motto)}"</em>
+            </div>
+            <div class="rph-student">
+                <div><strong>Name:</strong> ${escapeHtml(data.student.name)}</div>
+                <div><strong>ADM:</strong> ${escapeHtml(data.student.reg || 'N/A')}</div>
+                <div><strong>Grade:</strong> ${escapeHtml(data.student.grade)} &nbsp; <strong>Stream:</strong> ${escapeHtml(data.student.stream || 'N/A')}</div>
+                <div><strong>Term:</strong> ${escapeHtml(data.term)} &nbsp; <strong>Year:</strong> ${escapeHtml(data.year)}</div>
+            </div>
+        </div>
+        <div class="report-preview-table-wrap">
+            <table class="data-table report-preview-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Learning Area</th>
+                        ${typeHeaders}
+                        <th>Avg</th>
+                        <th>Rating</th>
+                        ${hasTeacher ? '<th>Teacher</th>' : ''}
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.rows.map(r => `
+                        <tr>
+                            <td style="text-align:center;">${r.num}</td>
+                            <td>${escapeHtml(r.subjectName)}</td>
+                            ${data.sortedTypes.map(t => {
+                                const sc = r.scores[t];
+                                const style = sc > 0 ? `color:${cbcRating(sc).color};font-weight:700;` : 'color:var(--text-muted);';
+                                return `<td style="text-align:center;${style}">${sc > 0 ? sc : '—'}</td>`;
+                            }).join('')}
+                            <td style="text-align:center;font-weight:700;${r.avg > 0 ? 'color:' + (r.rating?.color || 'inherit') : 'color:var(--text-muted);'}">${r.avg > 0 ? r.avg + '%' : '—'}</td>
+                            <td style="text-align:center;font-weight:700;${r.rating ? 'color:' + r.rating.color : ''}">${r.rating ? r.rating.code : '—'}</td>
+                            ${hasTeacher ? `<td style="font-size:0.8rem;">${escapeHtml(r.teacherName || '—')}</td>` : ''}
+                        </tr>
+                    `).join('')}
+                    <tr class="report-summary-row">
+                        <td></td>
+                        <td><strong>OVERALL</strong></td>
+                        ${data.sortedTypes.map(() => '<td></td>').join('')}
+                        <td style="text-align:center;font-weight:800;font-size:1rem;${data.overallRating ? 'color:' + data.overallRating.color : ''}">${data.overallAvg > 0 ? data.overallAvg + '%' : '—'}</td>
+                        <td style="text-align:center;font-weight:800;${data.overallRating ? 'color:' + data.overallRating.color : ''}">${data.overallRating ? data.overallRating.code : '—'}</td>
+                        ${hasTeacher ? '<td></td>' : ''}
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="report-preview-summary">
+            <div class="rps-item"><span class="rps-label">Total Average</span><strong style="font-size:1.2rem;${data.overallRating ? 'color:' + data.overallRating.color : ''}">${data.overallAvg}%</strong></div>
+            <div class="rps-item"><span class="rps-label">Rating</span><strong>${data.overallRating ? data.overallRating.text : 'N/A'}</strong></div>
+            <div class="rps-item"><span class="rps-label">Class Rank</span><strong>${data.rank} / ${data.totalInGrade}</strong></div>
+        </div>
+        <div class="report-preview-remarks">
+            <strong>Class Teacher's Remarks:</strong>
+            <p>${escapeHtml(data.remarks)}</p>
+        </div>
+        <div class="report-preview-actions">
+            <button class="btn btn-primary" onclick="downloadStudentReportCard('${studentId}')">
+                <i class="fa-solid fa-file-pdf"></i> Download PDF
+            </button>
+            <button class="btn btn-secondary" onclick="window.print()">
+                <i class="fa-solid fa-print"></i> Print
+            </button>
+        </div>
+    `;
+
+    openModal('reportPreviewModal');
+}
+
+function populateReportStudentList() {
+    const grade = $('reportGradeSelect')?.value || 'all';
+    const term = $('reportTermSelect')?.value || store.settings.currentTerm;
+    const year = $('reportYearSelect')?.value || store.settings.academicYear;
+
+    let students = StudentRepo.getAll();
+    if (grade !== 'all') students = students.filter(s => s.grade === grade);
+
+    // Check which students have data for the selected term
+    const studentsWithData = students.map(s => {
+        const exams = (store.exams || []).filter(e =>
+            e.studentId === s.id && e.term === term &&
+            String(e.year) === String(year) && e.type && e.score > 0
+        );
+        return { ...s, hasData: exams.length > 0 };
+    });
+
+    const container = $('reportStudentList');
+    if (!container) return;
+
+    if (studentsWithData.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding:2rem;text-align:center;">No learners found.</div>';
+        return;
+    }
+
+    container.innerHTML = studentsWithData.map(s => `
+        <div class="report-student-row ${s.hasData ? '' : 'no-data'}" onclick="previewStudentReport('${s.id}')">
+            <img src="${s.photo || DEFAULT_AVATAR}" class="rsr-avatar" onerror="this.src='${DEFAULT_AVATAR}'">
+            <div class="rsr-info">
+                <div class="rsr-name">${escapeHtml(s.name)}</div>
+                <div class="rsr-meta">${escapeHtml(s.grade)} ${s.stream ? '· ' + escapeHtml(s.stream) : ''} · ${escapeHtml(s.reg || 'N/A')}</div>
+            </div>
+            <div class="rsr-status">
+                ${s.hasData
+                    ? '<span class="badge badge-success">Has Data</span>'
+                    : '<span class="badge badge-warning">No Data</span>'}
+            </div>
+            <button class="btn btn-sm btn-primary rsr-dl" onclick="event.stopPropagation(); downloadStudentReportCard('${s.id}')" title="Download Report Card" ${!s.hasData ? 'disabled' : ''}>
+                <i class="fa-solid fa-download"></i>
+            </button>
+        </div>
+    `).join('');
+
+    // Update grade report button info
+    const gradeCount = studentsWithData.filter(s => s.hasData).length;
+    const gradeBtn = $('btnGradeReport');
+    if (gradeBtn) {
+        gradeBtn.disabled = gradeCount === 0;
+        const gradeLabel = $('gradeReportCount');
+        if (gradeLabel) gradeLabel.textContent = `(${gradeCount} with data)`;
+    }
+}
 // --- PERSISTENCE SAFETY NET ---
 // store.examSchedules gets wiped to [] on refresh when the server's /api/db
 // doesn't return examSchedules. This dedicated backup prevents that data loss.
@@ -1904,7 +2516,16 @@ function loadBatchGrid() {
 
     const subjects = (assessment.subjects || []).map(sid => (store.learningAreas || []).find(la => la.id === sid)).filter(Boolean);
     const students = StudentRepo.findBy('grade', assessment.grade);
-    const exams = (store.exams || []).filter(e => e.assessId === assessId);
+
+    // ✅ FIX: Match exams by term + year + type (NOT assessId, which is never saved on exams)
+    const term = assessment.term || store.settings.currentTerm;
+    const year = assessment.year || store.settings.academicYear;
+    const type = assessment.type || '';
+    const exams = (store.exams || []).filter(e =>
+        e.term === term &&
+        String(e.year) === String(year) &&
+        e.type === type
+    );
 
     if (students.length === 0 || subjects.length === 0) {
         if (wrapper) wrapper.style.display = 'none';
@@ -1914,7 +2535,7 @@ function loadBatchGrid() {
 
     if (wrapper) wrapper.style.display = 'block';
     if (emptyEl) emptyEl.style.display = 'none';
-    if (titleEl) titleEl.textContent = assessment.name || `${assessment.type} — ${assessment.grade}`;
+    if (titleEl) titleEl.textContent = assessment.name || `${type} — ${assessment.grade}`;
 
     // Header
     if (thead) {
@@ -1934,7 +2555,16 @@ function loadBatchGrid() {
                 const exam = sExams.find(e => e.subjectId === subj.id);
                 const sc = exam ? exam.score : '';
                 if (sc) { total += parseInt(sc); count++; }
-                return `<td><input type="number" min="0" max="100" class="batch-score-input" data-assess="${assessId}" data-student="${student.id}" data-subject="${subj.id}" value="${sc}" onchange="handleBatchScoreChange(this)"></td>`;
+                return `<td><input type="number" min="0" max="100" class="batch-score-input" 
+                    data-assess="${assessId}" 
+                    data-student="${student.id}" 
+                    data-subject="${subj.id}" 
+                    data-term="${term}" 
+                    data-year="${year}" 
+                    data-type="${type}" 
+                    data-grade="${student.grade}"
+                    value="${sc}" 
+                    onchange="handleBatchScoreChange(this)"></td>`;
             }).join('');
 
             const mean = count > 0 ? Math.round(total / count) : 0;
@@ -1964,20 +2594,39 @@ function handleBatchScoreChange(input) {
     const subjectId = input.dataset.subject;
     const assessment = (store.examSchedules || []).find(a => a.id === assessId);
 
-    const existingIdx = (store.exams || []).findIndex(e => e.assessId === assessId && e.studentId === studentId && e.subjectId === subjectId);
+    // ✅ FIX: Extract the fields that actually exist in the DB
+    const term = assessment?.term || store.settings.currentTerm;
+    const year = assessment?.year || store.settings.academicYear;
+    const type = assessment?.type || 'Opener';
+    const grade = assessment?.grade || '';
+
+    // ✅ FIX: Match by term+year+type (NOT assessId — that column doesn't exist in DB)
+    const existingIdx = (store.exams || []).findIndex(e =>
+        e.studentId === studentId &&
+        e.subjectId === subjectId &&
+        e.term === term &&
+        String(e.year) === String(year) &&
+        e.type === type
+    );
 
     if (score === 0 && input.value === '') {
         if (existingIdx !== -1) store.exams.splice(existingIdx, 1);
     } else if (existingIdx !== -1) {
         store.exams[existingIdx].score = score;
+        store.exams[existingIdx].grade = grade;
     } else if (score > 0) {
         store.exams.push({
-            id: generateId(), assessId, studentId, subjectId, score,
-            type: assessment?.type || 'Opener',
-            term: assessment?.term || '',
-            year: assessment?.year || new Date().getFullYear().toString(),
-            grade: assessment?.grade || '',
-            createdAt: Date.now()
+            id: generateId(),
+            studentId: studentId,
+            subjectId: subjectId,
+            score: score,
+            type: type,           // ← in DB
+            term: term,           // ← in DB
+            year: year,           // ← in DB
+            grade: grade,         // ← in DB
+            comments: ''
+            // ❌ REMOVED: assessId — this column doesn't exist in the database
+            // ❌ REMOVED: createdAt — this column doesn't exist in the database
         });
     }
 
@@ -1997,7 +2646,6 @@ function handleBatchScoreChange(input) {
 
     _flushNow();
 }
-
 function filterBatchRows() {
     const search = (getVal('batchSearch') || '').toLowerCase();
     const rows = $('batchBody')?.querySelectorAll('tr');
@@ -2009,17 +2657,72 @@ function filterBatchRows() {
 }
 
 function saveBatchScores() {
+    const assessId = getVal('batchAssessment');
+    if (!assessId) { showToast('Select an assessment first.', 'error'); return; }
+
+    const va = virtualAssessments.find(v => v.id === assessId);
+    if (!va) { showToast('Assessment not found.', 'error'); return; }
+
+    // Read all score inputs from the batch grid
+    const grid = $('batchScoreGrid');
+    if (!grid) { showToast('No score grid found.', 'error'); return; }
+
+    const inputs = grid.querySelectorAll('input[data-student-id][data-subject-id]');
+    let saved = 0;
+
+    inputs.forEach(input => {
+        const score = parseInt(input.value) || 0;
+        if (score <= 0) return; // Skip empty/zero cells
+
+        const studentId = input.dataset.studentId;
+        const subjectId = input.dataset.subjectId;
+        const student = StudentRepo.getById(studentId);
+        if (!student) return;
+
+        // Check if an exam record already exists for this combo
+        const existingIdx = store.exams.findIndex(e =>
+            e.studentId === studentId &&
+            e.subjectId === subjectId &&
+            e.term === va.term &&
+            String(e.year) === String(va.year) &&
+            e.type === va.type
+        );
+
+        if (existingIdx !== -1) {
+            // Update existing
+            store.exams[existingIdx].score = score;
+            store.exams[existingIdx].grade = student.grade;
+        } else {
+            // Create new
+            store.exams.push({
+                id: generateId(),
+                studentId: studentId,
+                subjectId: subjectId,
+                score: score,
+                term: va.term,
+                year: va.year,
+                grade: student.grade,
+                type: va.type,          // ← THE CRITICAL LINE
+                comments: ''
+            });
+        }
+        saved++;
+    });
+
     saveData();
-    showToast('Batch scores saved!');
+    showToast(`Saved ${saved} score(s) successfully!`);
 }
 
 function saveBatchAndClose() {
-    saveData();
+    saveBatchScores(); // Reuse the full save logic above
+
     const assessId = getVal('batchAssessment');
     if (assessId) {
         const idx = (store.examSchedules || []).findIndex(a => a.id === assessId);
-        if (idx !== -1) store.examSchedules[idx].status = 'closed';
-        saveData();
+        if (idx !== -1) {
+            store.examSchedules[idx].status = 'closed';
+            saveData();
+        }
     }
     showToast('Batch saved & assessment closed!');
     renderAssessmentCards();
@@ -2688,7 +3391,6 @@ function exportTimetablePDF() { showToast('Timetable PDF — paste your original
 function handleTimetableSlotSubmit(e) { e.preventDefault(); showToast('Slot saved (stub).'); }
 function populateTimetableSlotSubjects() {}
 
-function renderReportsAnalytics() { showToast('Reports section — paste your original code.', 'info'); }
 
 
 
@@ -2712,6 +3414,7 @@ function renderReportsAnalytics() {
     populateReportExamFilter();
     attachReportListeners();
     showReportEmptyState();
+    populateReportStudentList();
 }
 
 // ── Filter Population ──
