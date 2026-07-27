@@ -4355,12 +4355,7 @@ function updateSettingsForm() {
 }
 function saveInstitutionDetails(e) { e.preventDefault(); Object.assign(store.settings, { schoolName: getVal('schoolName'), motto: getVal('schoolMotto'), schoolCode: getVal('schoolCode'), academicYear: getVal('academicYear'), currentTerm: getVal('currentTerm'), level: getVal('schoolLevel'), category: getVal('schoolCategory'), address: getVal('address'), phone: getVal('phone'), email: getVal('email') }); saveData(); showToast('Institution details saved!'); }
 function saveHOIDetails(e) { e.preventDefault(); Object.assign(store.settings, { hoiName: getVal('hoiName'), hoiTitle: getVal('hoiTitle'), hoiTsc: getVal('hoiTsc'), hoiPhone: getVal('hoiPhone'), hoiEmail: getVal('hoiEmail') }); saveData(); showToast('HOI details saved!'); }
-function switchSettingsTab(index) {
-    document.querySelectorAll('#settingsTabs .s-tab').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('#settings .s-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('#settingsTabs .s-tab')[index]?.classList.add('active');
-    document.getElementById('settings-tab-' + index)?.classList.add('active');
-}
+
 
 function renderStaff() { const c = $('staffGrid') || $('staffListContainer'); if (c) c.innerHTML = '<div class="empty-state">Staff section — paste your original renderStaff code here.</div>'; }
 function editStaff(id) { showToast('Edit staff: paste your original code.', 'info'); }
