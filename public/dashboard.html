@@ -3267,284 +3267,420 @@
 
 
             <!-- 8. SETTINGS -->
-            <section id="settings" class="view-section" aria-label="Settings Section">
-                 <div class="page-header-modern">
-                    <div>
-                        <h2>System Configuration</h2>
-                        <p>Manage school profile, branding, academic structure, and calendar.</p>
+<style>
+/* === SETTINGS STYLES (embedded for guaranteed loading) === */
+.s-page-header{margin-bottom:2rem}
+.s-page-title h2{font-size:1.6rem;font-weight:800;color:var(--text-main);letter-spacing:-0.03em;margin-bottom:.3rem}
+.s-page-title p{font-size:.9rem;color:var(--text-muted)}
+.s-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:2rem;overflow-x:auto;scrollbar-width:none}
+.s-tabs::-webkit-scrollbar{display:none}
+.s-tab{padding:.85rem 1.25rem;border:none;background:none;font-family:inherit;font-size:.88rem;font-weight:500;color:var(--text-muted);cursor:pointer;position:relative;transition:color .2s;white-space:nowrap;display:flex;align-items:center;gap:.5rem}
+.s-tab i{font-size:.85rem}
+.s-tab::after{content:'';position:absolute;bottom:-1px;left:0;right:0;height:2px;background:transparent;border-radius:2px 2px 0 0;transition:background .2s}
+.s-tab:hover{color:var(--text-main)}
+.s-tab.active{color:var(--primary);font-weight:600}
+.s-tab.active::after{background:var(--primary)}
+.s-panel{display:none}
+.s-panel.active{display:block;animation:sFadeIn .3s ease}
+@keyframes sFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.s-layout{display:grid;grid-template-columns:1fr 380px;gap:2rem;align-items:start}
+.s-forms{display:flex;flex-direction:column;gap:1.25rem;min-width:0}
+.s-preview-col{position:sticky;top:100px;min-width:0}
+.s-card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:1.75rem;transition:border-color .2s}
+.s-card:hover{border-color:#cbd5e1}
+.s-card-full{width:100%}
+.s-card-head{display:flex;align-items:flex-start;gap:1rem;margin-bottom:1.75rem}
+.s-card-head .s-btn{margin-left:auto;flex-shrink:0}
+.s-card-head h3{font-size:1rem;font-weight:700;color:var(--text-main);margin-bottom:.15rem}
+.s-card-head p{font-size:.82rem;color:var(--text-muted);line-height:1.4}
+.s-card-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0;color:#fff}
+.s-card-icon.green{background:var(--primary-gradient)}
+.s-card-icon.blue{background:linear-gradient(135deg,#3b82f6,#2563eb)}
+.s-card-icon.purple{background:linear-gradient(135deg,#8b5cf6,#7c3aed)}
+.s-card-icon.orange{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.s-card-actions{margin-top:1.75rem;padding-top:1.25rem;border-top:1px solid var(--border);display:flex;gap:.75rem}
+.s-field{margin-bottom:1.1rem}
+.s-field label{display:block;font-size:.8rem;font-weight:600;color:var(--text-muted);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.3px}
+.s-required{color:var(--danger)}
+.s-input{width:100%;padding:.7rem .9rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-body);font-size:.9rem;font-weight:500;color:var(--text-main);font-family:inherit;transition:all .2s}
+.s-input:hover{border-color:#94a3b8}
+.s-input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(var(--primary-rgb),.1);background:var(--bg-card)}
+.s-field-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.s-field-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem}
+.s-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.s-upload-box{text-align:center;padding:1.75rem 1rem;border:1px solid var(--border);border-radius:14px;background:var(--bg-body);transition:all .2s;cursor:pointer}
+.s-upload-box:hover{border-color:var(--primary);background:var(--primary-light)}
+.s-upload-icon{width:72px;height:72px;margin:0 auto 1rem;border-radius:50%;background:var(--bg-card);border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:1.5rem;color:var(--text-muted);overflow:hidden;transition:all .2s}
+.s-upload-box:hover .s-upload-icon{border-color:var(--primary);color:var(--primary)}
+.s-upload-icon img{width:100%;height:100%;object-fit:contain;padding:6px}
+.s-upload-box h4{font-size:.9rem;font-weight:600;color:var(--text-main);margin-bottom:.2rem}
+.s-upload-box p{font-size:.75rem;color:var(--text-muted);margin-bottom:1rem}
+.s-btn{padding:.6rem 1.1rem;border-radius:10px;border:none;font-family:inherit;font-size:.85rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:.45rem;transition:all .2s;white-space:nowrap}
+.s-btn:active{transform:scale(.97)}
+.s-btn-primary{background:var(--primary);color:#fff}
+.s-btn-primary:hover{background:var(--primary-dark);transform:translateY(-1px)}
+.s-btn-success{background:var(--success);color:#fff}
+.s-btn-success:hover{filter:brightness(1.1)}
+.s-btn-warning{background:var(--warning);color:#fff}
+.s-btn-warning:hover{filter:brightness(1.1)}
+.s-btn-danger{background:var(--danger);color:#fff}
+.s-btn-danger:hover{filter:brightness(1.1)}
+.s-btn-ghost{background:transparent;color:var(--text-muted);border:1px solid var(--border)}
+.s-btn-ghost:hover{color:var(--primary);border-color:var(--primary)}
+.s-btn-sm{padding:.45rem .85rem;font-size:.8rem}
+.s-preview-card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+.s-preview-label{padding:.85rem 1.25rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);background:var(--bg-alt);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.5rem}
+.s-preview-label i{color:var(--primary)}
+.s-letterhead{background:var(--bg-card);background-image:radial-gradient(var(--border) .7px,transparent .7px);background-size:16px 16px;padding:2.5rem 2rem;min-height:440px;display:flex;flex-direction:column;align-items:center;text-align:center;position:relative}
+.s-lh-logo{width:68px;height:68px;border-radius:50%;background:var(--bg-card);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:1.6rem;color:var(--primary);margin-bottom:.75rem;overflow:hidden}
+.s-lh-logo img{width:100%;height:100%;object-fit:contain}
+.s-letterhead h2{font-size:1.2rem;font-weight:800;color:var(--text-main);margin:0}
+.s-letterhead p{font-size:.82rem;font-style:italic;color:var(--text-muted);margin:0}
+.s-letterhead small{font-size:.72rem;color:var(--text-muted);font-weight:600;margin-top:.3rem}
+.s-lh-divider{width:50px;height:3px;background:var(--primary-gradient);border-radius:2px;margin:1.25rem auto;border:none}
+.s-lh-body{flex:1;display:flex;align-items:center}
+.s-lh-footer{width:100%;display:flex;justify-content:space-between;align-items:flex-end;margin-top:auto;padding-top:1.5rem}
+.s-lh-sig{display:flex;flex-direction:column;align-items:center;width:110px}
+.s-lh-sig img{max-width:90px;max-height:40px;object-fit:contain;margin-bottom:4px}
+.s-lh-sig-line{width:100%;height:1px;background:var(--text-main);margin-bottom:4px}
+.s-lh-sig small{font-size:.62rem;color:var(--text-muted)}
+.s-lh-stamp{width:76px;height:76px;display:flex;align-items:center;justify-content:center;opacity:.75}
+.s-lh-stamp img{width:100%;height:100%;object-fit:contain}
+.s-hoi-preview{padding:2rem;text-align:left}
+.s-hoi-badge{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--primary);background:var(--primary-light);padding:.25rem .7rem;border-radius:6px;display:inline-block;margin-bottom:.75rem}
+.s-hoi-preview h2{font-size:1.35rem;font-weight:800;color:var(--primary);margin:0 0 .25rem}
+.s-hoi-title{font-weight:600;color:var(--text-main);margin-bottom:.15rem}
+.s-hoi-tsc{font-size:.85rem;color:var(--text-muted)}
+.s-hoi-sig-area{margin-top:1.75rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;flex-direction:column;align-items:flex-start}
+.s-hoi-sig-area img{max-width:140px;margin-bottom:4px}
+.s-hoi-sig-area small{font-size:.72rem;color:var(--text-muted)}
+.s-table-wrap{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.s-table{width:100%;border-collapse:collapse}
+.s-table th{background:var(--bg-alt);text-align:left;padding:.8rem 1rem;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-muted);border-bottom:1px solid var(--border)}
+.s-table td{padding:.85rem 1rem;font-size:.88rem;color:var(--text-main);border-bottom:1px solid var(--border)}
+.s-table tr:last-child td{border-bottom:none}
+.s-table tr:hover td{background:var(--bg-alt)}
+.s-term-block{margin-bottom:1rem;padding:1.1rem;background:var(--bg-body);border-radius:12px;border:1px solid var(--border)}
+.s-term-block:last-of-type{margin-bottom:0}
+.s-term-label{font-size:.85rem;font-weight:700;color:var(--primary);margin-bottom:.85rem;display:flex;align-items:center;gap:.5rem}
+.s-term-dot{width:8px;height:8px;border-radius:50%;background:var(--primary);flex-shrink:0}
+.s-event-row{display:grid;grid-template-columns:2fr 1fr auto;gap:.75rem;align-items:end;margin-bottom:1.5rem}
+.s-glance-list{padding:.5rem}
+.s-glance-empty{text-align:center;padding:2rem 1rem;color:var(--text-muted);font-size:.85rem}
+.s-glance-item{display:flex;align-items:center;gap:.75rem;padding:.55rem .6rem;border-radius:8px;font-size:.82rem;transition:background .15s}
+.s-glance-item:hover{background:var(--bg-alt)}
+.s-glance-date{font-size:.68rem;font-weight:700;color:var(--primary);background:var(--primary-light);padding:.2rem .5rem;border-radius:5px;white-space:nowrap;min-width:68px;text-align:center}
+.s-glance-title{font-weight:600;color:var(--text-main);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s-glance-del{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:.2rem .4rem;border-radius:4px;font-size:.7rem;transition:all .15s}
+.s-glance-del:hover{color:var(--danger);background:var(--danger-light)}
+.s-data-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-bottom:1.5rem}
+.s-data-card{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:2rem 1.5rem;text-align:center;transition:all .25s;position:relative;overflow:hidden}
+.s-data-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.s-data-export::before{background:var(--success)}
+.s-data-import::before{background:var(--warning)}
+.s-data-reset::before{background:var(--danger)}
+.s-data-card:hover{transform:translateY(-4px);box-shadow:var(--shadow-lg);border-color:transparent}
+.s-data-icon{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto 1.25rem}
+.s-data-export .s-data-icon{background:rgba(20,184,166,.1);color:var(--success)}
+.s-data-import .s-data-icon{background:rgba(245,158,11,.1);color:var(--warning)}
+.s-data-reset .s-data-icon{background:rgba(239,68,68,.1);color:var(--danger)}
+.s-data-card h3{font-size:1rem;font-weight:700;color:var(--text-main);margin-bottom:.4rem}
+.s-data-card p{font-size:.82rem;color:var(--text-muted);margin-bottom:1.25rem;line-height:1.5}
+.s-repair-card{background:var(--bg-card);border:1px solid var(--border);border-left:4px solid var(--warning);border-radius:12px;padding:1.5rem}
+.s-repair-head{display:flex;gap:1rem;align-items:flex-start;margin-bottom:1.25rem}
+.s-repair-head>i{font-size:1.2rem;color:var(--warning);margin-top:.15rem}
+.s-repair-head h3{font-size:.95rem;font-weight:700;color:var(--text-main);margin-bottom:.2rem}
+.s-repair-head p{font-size:.82rem;color:var(--text-muted);line-height:1.4}
+.s-repair-actions{display:flex;gap:.6rem;flex-wrap:wrap}
+[data-theme="dark"] .s-letterhead{background-image:radial-gradient(rgba(255,255,255,.025) .7px,transparent .7px)}
+[data-theme="dark"] .s-lh-logo{background:var(--bg-alt)}
+[data-theme="dark"] .s-upload-box{background:rgba(255,255,255,.02)}
+[data-theme="dark"] .s-upload-icon{background:var(--bg-alt)}
+[data-theme="dark"] .s-input{background:var(--bg-alt)}
+[data-theme="dark"] .s-input:focus{background:var(--bg-card)}
+[data-theme="dark"] .s-term-block{background:rgba(255,255,255,.02)}
+[data-theme="dark"] .s-lh-sig-line{background:var(--text-main)}
+@media(max-width:1200px){.s-layout{grid-template-columns:1fr}.s-preview-col{position:static;order:-1}.s-preview-card{max-width:420px;margin:0 auto}}
+@media(max-width:768px){.s-field-grid-2,.s-field-grid-3{grid-template-columns:1fr}.s-upload-grid{grid-template-columns:1fr}.s-data-grid{grid-template-columns:1fr}.s-event-row{grid-template-columns:1fr}.s-tab span{display:none}.s-card{padding:1.5rem}.s-card-head{flex-direction:column;gap:.75rem}.s-card-head .s-btn{margin-left:0;width:100%;justify-content:center}.s-letterhead{min-height:360px;padding:2rem 1.25rem}}
+</style>
+
+<section id="settings" class="view-section" aria-label="Settings Section">
+    <div class="s-page-header">
+        <div class="s-page-title">
+            <h2>System Configuration</h2>
+            <p>Manage school profile, branding, academic structure, and calendar.</p>
+        </div>
+    </div>
+
+    <nav class="s-tabs" id="settingsTabs">
+        <button class="s-tab active" onclick="switchSettingsTab(0)"><i class="fa-solid fa-building-columns"></i> <span>Institution</span></button>
+        <button class="s-tab" onclick="switchSettingsTab(1)"><i class="fa-solid fa-user-tie"></i> <span>HOI & Signatures</span></button>
+        <button class="s-tab" onclick="switchSettingsTab(2)"><i class="fa-solid fa-book-open"></i> <span>Academics</span></button>
+        <button class="s-tab" onclick="switchSettingsTab(3)"><i class="fa-solid fa-calendar-days"></i> <span>Events & Notices</span></button>
+        <button class="s-tab" onclick="switchSettingsTab(4)"><i class="fa-solid fa-database"></i> <span>Data</span></button>
+    </nav>
+
+    <!-- TAB 0 -->
+    <div class="s-panel active" id="settings-tab-0">
+        <div class="s-layout">
+            <div class="s-forms">
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon green"><i class="fa-solid fa-school"></i></div>
+                        <div><h3>School Identity</h3><p>Core identification details registered with KNEC.</p></div>
                     </div>
-                </div>
-                <div class="settings-tabs-modern" id="settingsTabs">
-                    <button class="tab-btn active" data-tab="0"><i class="fa-solid fa-building-columns"></i><span>Institution</span></button>
-                    <button class="tab-btn" data-tab="1"><i class="fa-solid fa-user-tie"></i><span>HOI & Signatures</span></button>
-                    <button class="tab-btn" data-tab="2"><i class="fa-solid fa-book-open"></i><span>Academics</span></button>
-                    <button class="tab-btn" data-tab="3"><i class="fa-solid fa-calendar-days"></i><span>Events & Notices</span></button>
-                    <button class="tab-btn" data-tab="4"><i class="fa-solid fa-database"></i><span>Data</span></button>
-                </div>
-                
-                <!-- Tab 0: Institution -->
-                <div class="settings-tab-content active" id="settings-tab-0">
-                    <div class="settings-layout-split">
-                        <div class="settings-form-column">
-                            <div class="settings-card-modern">
-                                <div class="scm-header"><h3><i class="fa-solid fa-info-circle"></i> Basic Information</h3></div>
-                                <form id="institutionForm">
-                                    <div class="form-row-2">
-                                        <div class="form-group"><label>School Name *</label><input type="text" id="setSchoolName" class="form-control" placeholder="e.g. Sunshine Primary"></div>
-                                        <div class="form-group"><label>Knec Code *</label><input type="text" id="setSchoolCode" class="form-control" placeholder="e.g. 12345678"></div>
-                                    </div>
-                                    <div class="form-row-2">
-                                        <div class="form-group">
-                                            <label>School Level *</label>
-                                            <select id="setSchoolLevel" class="form-control">
-                                                <option>Primary School</option>
-                                                <option>Junior Secondary School</option>
-                                                <option>Composite (Primary & JSS)</option>
-                                            </select>
-                                        </div>
-                                        <div class="form-group">
-                                            <label>Category *</label>
-                                            <select id="setSchoolCategory" class="form-control">
-                                                <option>Public</option>
-                                                <option>Private</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="form-group"><label>Motto / Vision</label><input type="text" id="setMotto" class="form-control" placeholder="Excellence in Learning"></div>
-                                    <div class="scm-divider"></div>
-                                    <div class="form-row-2">
-                                        <div class="form-group"><label>Current Academic Year</label><input type="text" id="setAcademicYear" class="form-control" placeholder="e.g. 2024"></div>
-                                        <div class="form-group"><label>Current Term</label><select id="setCurrentTerm" class="form-control"><option>Term 1</option><option>Term 2</option><option>Term 3</option></select></div>
-                                    </div>
-                                    <div class="form-group"><label>Physical Address</label><input type="text" id="setAddress" class="form-control" placeholder="P.O. Box 123, County"></div>
-                                    <div class="form-row-3">
-                                        <div class="form-group"><label>Phone Number</label><input type="tel" id="setPhone" class="form-control" placeholder="07xx..."></div>
-                                        <div class="form-group"><label>Email Address</label><input type="email" id="setEmail" class="form-control" placeholder="info@school.com"></div>
-                                        <div class="form-group"><label>Ward / Sub-County</label><input type="text" id="setWebsite" class="form-control" placeholder="Sub-County Name"></div>
-                                    </div>
-                                    <div style="margin-top: 1.5rem;">
-                                        <button type="submit" class="btn btn-primary btn-lg btn-block-mobile"><i class="fa-solid fa-floppy-disk"></i> Save Details</button>
-                                    </div>
-                                </form>
-                            </div>
-                            <div class="settings-card-modern">
-                                <div class="scm-header"><h3><i class="fa-solid fa-palette"></i> School Branding</h3></div>
-                                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem;">Upload official assets for report cards and certificates.</p>
-                                <div class="branding-grid">
-                                    <div class="branding-item">
-                                        <div class="upload-preview" id="settingsLogoPreview"><i class="fa-solid fa-image"></i></div>
-                                        <h4>School Logo</h4><p>PNG or JPG (Square)</p>
-                                        <input type="file" id="logoInput" accept="image/*" hidden>
-                                        <button class="btn btn-secondary btn-sm" id="btnUploadLogo"><i class="fa-solid fa-upload"></i> Upload</button>
-                                    </div>
-                                    <div class="branding-item">
-                                        <div class="upload-preview" id="stampPreview"><i class="fa-solid fa-stamp"></i></div>
-                                        <h4>Official Stamp</h4><p>PNG with transparency</p>
-                                        <input type="file" id="stampInput" accept="image/*" hidden>
-                                        <button class="btn btn-secondary btn-sm" id="btnUploadStamp"><i class="fa-solid fa-upload"></i> Upload</button>
-                                    </div>
-                                </div>
-                            </div>
+                    <form id="institutionForm">
+                        <div class="s-field-grid-2">
+                            <div class="s-field"><label>School Name <span class="s-required">*</span></label><input type="text" id="setSchoolName" class="s-input" placeholder="e.g. Sunshine Primary"></div>
+                            <div class="s-field"><label>KNEC Code <span class="s-required">*</span></label><input type="text" id="setSchoolCode" class="s-input" placeholder="e.g. 12345678"></div>
                         </div>
-                        <div class="settings-preview-column">
-                            <div class="letterhead-preview-card">
-                                <div class="lpc-header"><i class="fa-solid fa-eye"></i> Live Document Preview</div>
-                                <div class="letterhead-preview" id="letterheadPreview">
-                                    <div class="preview-logo" id="previewLogoIcon"><i class="fa-solid fa-school"></i></div>
-                                    <h2 id="prevName">ElimuTrack School</h2>
-                                    <p id="prevMotto">Excellence in Learning</p>
-                                    <small id="prevCode">Code: 12345678</small>
-                                    <div class="preview-divider"></div>
-                                    <div class="preview-footer">
-                                        <div class="preview-signature-box"><img id="previewSignatureIcon" src="" alt="" style="display:none;"><span class="signature-line"></span><small>Principal Signature</small></div>
-                                        <div class="preview-stamp-box"><img id="previewStampIcon" src="" alt="" style="display:none;"></div>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="s-field-grid-2">
+                            <div class="s-field"><label>School Level <span class="s-required">*</span></label><select id="setSchoolLevel" class="s-input"><option>Primary School</option><option>Junior Secondary School</option><option>Composite (Primary & JSS)</option></select></div>
+                            <div class="s-field"><label>Category <span class="s-required">*</span></label><select id="setSchoolCategory" class="s-input"><option>Public</option><option>Private</option></select></div>
                         </div>
+                        <div class="s-field"><label>Motto / Vision</label><input type="text" id="setMotto" class="s-input" placeholder="Excellence in Learning"></div>
+                    </form>
+                </div>
+
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon blue"><i class="fa-solid fa-calendar"></i></div>
+                        <div><h3>Academic Period</h3><p>Set the active year and term for the system.</p></div>
                     </div>
-                </div>
-                
-                <!-- Tab 1: HOI & Signatures -->
-                <div class="settings-tab-content" id="settings-tab-1">
-                    <div class="settings-layout-split">
-                        <div class="settings-form-column">
-                            <div class="settings-card-modern">
-                                <div class="scm-header"><h3><i class="fa-solid fa-user-tie"></i> Head of Institution (HOI)</h3></div>
-                                <form id="hoiForm">
-                                    <div class="form-row-2">
-                                        <div class="form-group"><label>HOI Name *</label><input type="text" id="hoiName" class="form-control" placeholder="Full Name"></div>
-                                        <div class="form-group"><label>Title</label><input type="text" id="hoiTitle" class="form-control" placeholder="e.g. Principal / Headteacher"></div>
-                                    </div>
-                                    <div class="form-row-2">
-                                        <div class="form-group"><label>TSC Number</label><input type="text" id="hoiTsc" class="form-control" placeholder="TSC Employment No"></div>
-                                        <div class="form-group"><label>Phone Number</label><input type="tel" id="hoiPhone" class="form-control" placeholder="07xx..."></div>
-                                    </div>
-                                    <div class="form-group"><label>Email Address</label><input type="email" id="hoiEmail" class="form-control" placeholder="hoi@school.com"></div>
-                                    <div style="margin-top: 1rem;"><button type="submit" class="btn btn-primary"><i class="fa-solid fa-save"></i> Save HOI Details</button></div>
-                                </form>
-                            </div>
-                            <div class="settings-card-modern">
-                                <div class="scm-header"><h3><i class="fa-solid fa-signature"></i> Official Signatures</h3></div>
-                                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem;">Upload transparent PNG signatures for document generation.</p>
-                                <div class="branding-grid">
-                                    <div class="branding-item">
-                                        <div class="upload-preview" id="hoiSignaturePreview"><i class="fa-solid fa-signature"></i></div>
-                                        <h4>HOI Signature</h4><p>PNG with transparency</p>
-                                        <input type="file" id="hoiSignatureInput" accept="image/*" hidden>
-                                        <button class="btn btn-secondary btn-sm" id="btnUploadHoiSignature"><i class="fa-solid fa-upload"></i> Upload</button>
-                                    </div>
-                                    <div class="branding-item">
-                                        <div class="upload-preview" id="classTeacherSignaturePreview"><i class="fa-solid fa-pen-nib"></i></div>
-                                        <h4>Class Teacher Sig.</h4><p>Generic Signature</p>
-                                        <input type="file" id="classTeacherSignatureInput" accept="image/*" hidden>
-                                        <button class="btn btn-secondary btn-sm" id="btnUploadClassTeacherSignature"><i class="fa-solid fa-upload"></i> Upload</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="settings-preview-column">
-                             <div class="letterhead-preview-card">
-                                <div class="lpc-header"><i class="fa-solid fa-id-card"></i> HOI Preview</div>
-                                <div class="letterhead-preview" style="text-align: left; padding: 2rem;">
-                                    <h4 style="margin-bottom: 0.5rem;">Head of Institution</h4>
-                                    <h2 style="margin-top:0; color: var(--primary);" id="hoiPreviewName">Mr. John Doe</h2>
-                                    <p style="margin-bottom: 0.25rem;"><strong id="hoiPreviewTitle">Principal</strong></p>
-                                    <p style="font-size: 0.85rem; color: var(--text-muted);" id="hoiPreviewTsc">TSC: 123456</p>
-                                    <div style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem;">
-                                        <img id="hoiPreviewSigImg" src="" alt="" style="max-width: 150px; display: none;">
-                                        <div style="border-bottom: 1px solid black; width: 150px; margin-bottom: 5px;"></div>
-                                        <small style="font-size: 0.75rem;">Signature Preview</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="s-field-grid-2">
+                        <div class="s-field"><label>Current Academic Year</label><input type="text" id="setAcademicYear" class="s-input" placeholder="e.g. 2024"></div>
+                        <div class="s-field"><label>Current Term</label><select id="setCurrentTerm" class="s-input"><option>Term 1</option><option>Term 2</option><option>Term 3</option></select></div>
                     </div>
                 </div>
 
-                <!-- Tab 2: Academics -->
-                <div class="settings-tab-content" id="settings-tab-2">
-                    <div class="settings-card-modern">
-                        <div class="scm-header">
-                            <div><h3>Learning Areas Setup</h3><p>Define subjects for each grade level.</p></div>
-                            <button class="btn btn-primary" data-modal="courseModal"><i class="fa-solid fa-plus"></i> Add Subject</button>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="data-table modern-table">
-                                <thead><tr><th>Code</th><th>Subject Name</th><th>Grades</th><th>Actions</th></tr></thead>
-                                <tbody id="courseSettingsTable"></tbody>
-                            </table>
-                        </div>
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon purple"><i class="fa-solid fa-address-book"></i></div>
+                        <div><h3>Contact Information</h3><p>Address and communication details for the school.</p></div>
+                    </div>
+                    <div class="s-field"><label>Physical Address</label><input type="text" id="setAddress" class="s-input" placeholder="P.O. Box 123, County"></div>
+                    <div class="s-field-grid-3">
+                        <div class="s-field"><label>Phone Number</label><input type="tel" id="setPhone" class="s-input" placeholder="07xx..."></div>
+                        <div class="s-field"><label>Email Address</label><input type="email" id="setEmail" class="s-input" placeholder="info@school.com"></div>
+                        <div class="s-field"><label>Ward / Sub-County</label><input type="text" id="setWebsite" class="s-input" placeholder="Sub-County Name"></div>
+                    </div>
+                    <div class="s-card-actions">
+                        <button type="submit" form="institutionForm" class="s-btn s-btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save All Details</button>
                     </div>
                 </div>
 
-                <!-- Tab 3: Events & Notifications -->
-                <div class="settings-tab-content" id="settings-tab-3">
-                    <div class="settings-layout-split">
-                        <div class="settings-form-column">
-                            <div class="settings-card-modern">
-                                <div class="scm-header"><h3><i class="fa-solid fa-calendar-week"></i> Term Dates</h3></div>
-                                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem;">Set the opening and closing dates for each term.</p>
-                                <form id="termDatesForm">
-                                    <div class="term-date-block" style="margin-bottom: 1.5rem; padding: 1rem; background: var(--bg-alt); border-radius: 8px;">
-                                        <h4 style="margin-top:0; margin-bottom: 1rem; color: var(--primary);">Term 1</h4>
-                                        <div class="form-row-2">
-                                            <div class="form-group"><label>Start Date</label><input type="date" id="term1Start" class="form-control"></div>
-                                            <div class="form-group"><label>End Date</label><input type="date" id="term1End" class="form-control"></div>
-                                        </div>
-                                    </div>
-                                    <div class="term-date-block" style="margin-bottom: 1.5rem; padding: 1rem; background: var(--bg-alt); border-radius: 8px;">
-                                        <h4 style="margin-top:0; margin-bottom: 1rem; color: var(--primary);">Term 2</h4>
-                                        <div class="form-row-2">
-                                            <div class="form-group"><label>Start Date</label><input type="date" id="term2Start" class="form-control"></div>
-                                            <div class="form-group"><label>End Date</label><input type="date" id="term2End" class="form-control"></div>
-                                        </div>
-                                    </div>
-                                    <div class="term-date-block" style="margin-bottom: 1.5rem; padding: 1rem; background: var(--bg-alt); border-radius: 8px;">
-                                        <h4 style="margin-top:0; margin-bottom: 1rem; color: var(--primary);">Term 3</h4>
-                                        <div class="form-row-2">
-                                            <div class="form-group"><label>Start Date</label><input type="date" id="term3Start" class="form-control"></div>
-                                            <div class="form-group"><label>End Date</label><input type="date" id="term3End" class="form-control"></div>
-                                        </div>
-                                    </div>
-                                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i> Save Term Dates</button>
-                                </form>
-                            </div>
-
-                            <!-- Events Calendar Card -->
-                            <div class="settings-card-modern">
-                                <div class="scm-header"><h3><i class="fa-solid fa-calendar-check"></i> Academic Calendar</h3></div>
-                                <form id="addEventForm" style="margin-bottom: 1.5rem;">
-                                    <div class="form-row-3">
-                                        <div class="form-group" style="flex: 2;"><label>Event Title</label><input type="text" id="eventTitle" class="form-control" placeholder="e.g. Mid-Term Exams" required></div>
-                                        <div class="form-group"><label>Date</label><input type="date" id="eventDate" class="form-control" required></div>
-                                        <div class="form-group" style="align-self: flex-end;">
-                                            <button type="submit" class="btn btn-success btn-block"><i class="fa-solid fa-plus"></i> Add</button>
-                                        </div>
-                                    </div>
-                                </form>
-                                <div class="table-responsive">
-                                    <table class="data-table modern-table">
-                                        <thead><tr><th>Date</th><th>Event / Activity</th><th width="100">Action</th></tr></thead>
-                                        <tbody id="eventsTableBody"></tbody>
-                                    </table>
-                                </div>
-                            </div>
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon orange"><i class="fa-solid fa-palette"></i></div>
+                        <div><h3>School Branding</h3><p>Upload assets used on report cards and certificates.</p></div>
+                    </div>
+                    <div class="s-upload-grid">
+                        <div class="s-upload-box">
+                            <div class="s-upload-icon" id="settingsLogoPreview"><i class="fa-solid fa-image"></i></div>
+                            <h4>School Logo</h4><p>PNG or JPG, square recommended</p>
+                            <input type="file" id="logoInput" accept="image/*" hidden>
+                            <button type="button" class="s-btn s-btn-ghost s-btn-sm" id="btnUploadLogo"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose File</button>
                         </div>
-                        <div class="settings-preview-column">
-                            <div class="letterhead-preview-card">
-                                <div class="lpc-header"><i class="fa-solid fa-calendar-alt"></i> Year at a Glance</div>
-                                <div style="padding: 1rem;">
-                                    <div id="yearGlanceList"></div>
-                                </div>
-                            </div>
+                        <div class="s-upload-box">
+                            <div class="s-upload-icon" id="stampPreview"><i class="fa-solid fa-stamp"></i></div>
+                            <h4>Official Stamp</h4><p>PNG with transparent background</p>
+                            <input type="file" id="stampInput" accept="image/*" hidden>
+                            <button type="button" class="s-btn s-btn-ghost s-btn-sm" id="btnUploadStamp"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose File</button>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- Tab 4: Data -->
-                <div class="settings-tab-content" id="settings-tab-4">
-                    <div class="data-mgmt-grid">
-                        <div class="data-mgmt-card export-card">
-                            <div class="dmc-icon"><i class="fa-solid fa-cloud-arrow-down"></i></div>
-                            <div class="dmc-content">
-                                <h3>System Backup</h3>
-                                <p>Download a complete JSON snapshot of your current database.</p>
-                                <button class="btn btn-success" id="btnExportBackup"><i class="fa-solid fa-download"></i> Export Backup</button>
-                            </div>
-                        </div>
-                        <div class="data-mgmt-card import-card">
-                            <div class="dmc-icon warning"><i class="fa-solid fa-cloud-arrow-up"></i></div>
-                            <div class="dmc-content">
-                                <h3>Restore Data</h3>
-                                <p>Restore system data from a previous backup file.</p>
-                                <input type="file" id="importFile" accept=".json" hidden>
-                                <button class="btn btn-warning" id="btnImportBackup"><i class="fa-solid fa-upload"></i> Import Backup</button>
-                            </div>
-                        </div>
-                        <div class="data-mgmt-card reset-card">
-                            <div class="dmc-icon danger"><i class="fa-solid fa-trash-can"></i></div>
-                            <div class="dmc-content">
-                                <h3>Reset System Data</h3>
-                                <p>Permanently delete all data and restore default settings.</p>
-                                <button class="btn btn-danger" id="btnResetSystem"><i class="fa-solid fa-trash-can"></i> Reset System</button>
-                            </div>
+            <div class="s-preview-col">
+                <div class="s-preview-card">
+                    <div class="s-preview-label"><i class="fa-solid fa-eye"></i> Live Document Preview</div>
+                    <div class="s-letterhead" id="letterheadPreview">
+                        <div class="s-lh-logo" id="previewLogoIcon"><i class="fa-solid fa-school"></i></div>
+                        <h2 id="prevName">ElimuTrack School</h2>
+                        <p id="prevMotto">Excellence in Learning</p>
+                        <small id="prevCode">Code: 12345678</small>
+                        <div class="s-lh-divider"></div>
+                        <div class="s-lh-body"><p style="color:var(--text-muted);font-size:.85rem;">Document content will appear here...</p></div>
+                        <div class="s-lh-footer">
+                            <div class="s-lh-sig"><img id="previewSignatureIcon" src="" alt="" style="display:none;"><span class="s-lh-sig-line"></span><small>Principal</small></div>
+                            <div class="s-lh-stamp"><img id="previewStampIcon" src="" alt="" style="display:none;"></div>
                         </div>
                     </div>
                 </div>
-                <div class="settings-card" style="border: 2px solid #dc3545; margin-top: 20px;">
-    <h3 style="color: #dc3545;"><i class="fa-solid fa-wrench"></i> Data Repair Tools</h3>
-    <p style="font-size: 0.9em; color: #666;">
-        Use these tools if data appears missing on other devices or reports show blank.
-    </p>
-    <button onclick="repairData()" class="btn btn-danger" style="margin: 5px;">
-        <i class="fa-solid fa-database"></i> Repair Database (Fix NULL fields & Missing Reg Numbers)
-    </button>
-    <button onclick="forceSyncAll()" class="btn btn-warning" style="margin: 5px;">
-        <i class="fa-solid fa-sync"></i> Force Full Sync to Server
-    </button>
-</div>
-            </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 1 -->
+    <div class="s-panel" id="settings-tab-1">
+        <div class="s-layout">
+            <div class="s-forms">
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon green"><i class="fa-solid fa-user-tie"></i></div>
+                        <div><h3>Head of Institution</h3><p>Official details of the current school head.</p></div>
+                    </div>
+                    <form id="hoiForm">
+                        <div class="s-field-grid-2">
+                            <div class="s-field"><label>Full Name <span class="s-required">*</span></label><input type="text" id="hoiName" class="s-input" placeholder="e.g. Jane Wanjiku"></div>
+                            <div class="s-field"><label>Title</label><input type="text" id="hoiTitle" class="s-input" placeholder="e.g. Principal / Headteacher"></div>
+                        </div>
+                        <div class="s-field-grid-2">
+                            <div class="s-field"><label>TSC Number</label><input type="text" id="hoiTsc" class="s-input" placeholder="TSC Employment No"></div>
+                            <div class="s-field"><label>Phone Number</label><input type="tel" id="hoiPhone" class="s-input" placeholder="07xx..."></div>
+                        </div>
+                        <div class="s-field"><label>Email Address</label><input type="email" id="hoiEmail" class="s-input" placeholder="hoi@school.com"></div>
+                        <div class="s-card-actions">
+                            <button type="submit" class="s-btn s-btn-primary"><i class="fa-solid fa-save"></i> Save HOI Details</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon purple"><i class="fa-solid fa-signature"></i></div>
+                        <div><h3>Official Signatures</h3><p>Transparent PNG signatures for document generation.</p></div>
+                    </div>
+                    <div class="s-upload-grid">
+                        <div class="s-upload-box">
+                            <div class="s-upload-icon" id="hoiSignaturePreview"><i class="fa-solid fa-signature"></i></div>
+                            <h4>HOI Signature</h4><p>PNG with transparency</p>
+                            <input type="file" id="hoiSignatureInput" accept="image/*" hidden>
+                            <button type="button" class="s-btn s-btn-ghost s-btn-sm" id="btnUploadHoiSignature"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose File</button>
+                        </div>
+                        <div class="s-upload-box">
+                            <div class="s-upload-icon" id="classTeacherSignaturePreview"><i class="fa-solid fa-pen-nib"></i></div>
+                            <h4>Class Teacher Sig.</h4><p>Generic class teacher signature</p>
+                            <input type="file" id="classTeacherSignatureInput" accept="image/*" hidden>
+                            <button type="button" class="s-btn s-btn-ghost s-btn-sm" id="btnUploadClassTeacherSignature"><i class="fa-solid fa-arrow-up-from-bracket"></i> Choose File</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="s-preview-col">
+                <div class="s-preview-card">
+                    <div class="s-preview-label"><i class="fa-solid fa-id-card"></i> HOI Preview</div>
+                    <div class="s-hoi-preview">
+                        <div class="s-hoi-badge">Head of Institution</div>
+                        <h2 id="hoiPreviewName">Mr. John Doe</h2>
+                        <p class="s-hoi-title" id="hoiPreviewTitle">Principal</p>
+                        <p class="s-hoi-tsc" id="hoiPreviewTsc">TSC: 123456</p>
+                        <div class="s-hoi-sig-area">
+                            <img id="hoiPreviewSigImg" src="" alt="" style="display:none;">
+                            <div class="s-lh-sig-line" style="width:140px;"></div>
+                            <small>Signature</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 2 -->
+    <div class="s-panel" id="settings-tab-2">
+        <div class="s-card s-card-full">
+            <div class="s-card-head">
+                <div class="s-card-icon blue"><i class="fa-solid fa-book-open"></i></div>
+                <div><h3>Learning Areas Setup</h3><p>Define subjects and assign them to grade levels.</p></div>
+                <button class="s-btn s-btn-primary" data-modal="courseModal"><i class="fa-solid fa-plus"></i> Add Subject</button>
+            </div>
+            <div class="s-table-wrap">
+                <table class="s-table">
+                    <thead><tr><th>Code</th><th>Subject Name</th><th>Grades</th><th style="width:100px">Actions</th></tr></thead>
+                    <tbody id="courseSettingsTable"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3 -->
+    <div class="s-panel" id="settings-tab-3">
+        <div class="s-layout">
+            <div class="s-forms">
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon blue"><i class="fa-solid fa-calendar-week"></i></div>
+                        <div><h3>Term Dates</h3><p>Opening and closing dates for each term.</p></div>
+                    </div>
+                    <form id="termDatesForm">
+                        <div class="s-term-block"><div class="s-term-label"><span class="s-term-dot"></span> Term 1</div><div class="s-field-grid-2"><div class="s-field"><label>Start Date</label><input type="date" id="term1Start" class="s-input"></div><div class="s-field"><label>End Date</label><input type="date" id="term1End" class="s-input"></div></div></div>
+                        <div class="s-term-block"><div class="s-term-label"><span class="s-term-dot"></span> Term 2</div><div class="s-field-grid-2"><div class="s-field"><label>Start Date</label><input type="date" id="term2Start" class="s-input"></div><div class="s-field"><label>End Date</label><input type="date" id="term2End" class="s-input"></div></div></div>
+                        <div class="s-term-block"><div class="s-term-label"><span class="s-term-dot"></span> Term 3</div><div class="s-field-grid-2"><div class="s-field"><label>Start Date</label><input type="date" id="term3Start" class="s-input"></div><div class="s-field"><label>End Date</label><input type="date" id="term3End" class="s-input"></div></div></div>
+                        <div class="s-card-actions"><button type="submit" class="s-btn s-btn-primary"><i class="fa-solid fa-check"></i> Save Term Dates</button></div>
+                    </form>
+                </div>
+                <div class="s-card">
+                    <div class="s-card-head">
+                        <div class="s-card-icon orange"><i class="fa-solid fa-calendar-check"></i></div>
+                        <div><h3>Academic Calendar</h3><p>Key events and activities for the year.</p></div>
+                    </div>
+                    <form id="addEventForm">
+                        <div class="s-event-row">
+                            <div class="s-field" style="flex:2"><label>Event Title</label><input type="text" id="eventTitle" class="s-input" placeholder="e.g. Mid-Term Exams" required></div>
+                            <div class="s-field"><label>Date</label><input type="date" id="eventDate" class="s-input" required></div>
+                            <div class="s-field" style="align-self:flex-end"><button type="submit" class="s-btn s-btn-success"><i class="fa-solid fa-plus"></i> Add</button></div>
+                        </div>
+                    </form>
+                    <div class="s-table-wrap">
+                        <table class="s-table">
+                            <thead><tr><th>Date</th><th>Event / Activity</th><th style="width:80px">Action</th></tr></thead>
+                            <tbody id="eventsTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="s-preview-col">
+                <div class="s-preview-card">
+                    <div class="s-preview-label"><i class="fa-solid fa-calendar-alt"></i> Year at a Glance</div>
+                    <div class="s-glance-list" id="yearGlanceList"><div class="s-glance-empty">No events added yet</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 4 -->
+    <div class="s-panel" id="settings-tab-4">
+        <div class="s-data-grid">
+            <div class="s-data-card s-data-export">
+                <div class="s-data-icon"><i class="fa-solid fa-cloud-arrow-down"></i></div>
+                <h3>System Backup</h3>
+                <p>Download a complete JSON snapshot of your current database.</p>
+                <button class="s-btn s-btn-success" id="btnExportBackup"><i class="fa-solid fa-download"></i> Export Backup</button>
+            </div>
+            <div class="s-data-card s-data-import">
+                <div class="s-data-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                <h3>Restore Data</h3>
+                <p>Restore system data from a previous backup file.</p>
+                <input type="file" id="importFile" accept=".json" hidden>
+                <button class="s-btn s-btn-warning" id="btnImportBackup"><i class="fa-solid fa-upload"></i> Import Backup</button>
+            </div>
+            <div class="s-data-card s-data-reset">
+                <div class="s-data-icon"><i class="fa-solid fa-trash-can"></i></div>
+                <h3>Reset System</h3>
+                <p>Permanently delete all data and restore defaults.</p>
+                <button class="s-btn s-btn-danger" id="btnResetSystem"><i class="fa-solid fa-triangle-exclamation"></i> Reset System</button>
+            </div>
+        </div>
+        <div class="s-repair-card">
+            <div class="s-repair-head">
+                <i class="fa-solid fa-wrench"></i>
+                <div><h3>Data Repair Tools</h3><p>Use these if data appears missing on other devices or reports show blank fields.</p></div>
+            </div>
+            <div class="s-repair-actions">
+                <button onclick="repairData()" class="s-btn s-btn-danger s-btn-sm"><i class="fa-solid fa-database"></i> Repair Database</button>
+                <button onclick="forceSyncAll()" class="s-btn s-btn-warning s-btn-sm"><i class="fa-solid fa-rotate"></i> Force Full Sync</button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+function switchSettingsTab(i){
+    document.querySelectorAll('#settingsTabs .s-tab').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('#settings .s-panel').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('#settingsTabs .s-tab')[i]?.classList.add('active');
+    document.getElementById('settings-tab-'+i)?.classList.add('active');
+}
+</script>
     
     <!-- MODALS -->
     <div class="modal-backdrop" id="batchAdmissionModal">
