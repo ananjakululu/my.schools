@@ -19,6 +19,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bcryptjs/2.4.3/bcrypt.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 
     
     <!-- Main Stylesheet -->
@@ -2512,23 +2513,26 @@
 
             <!-- Student Selector Bar -->
             <div class="report-student-selector" id="reportStudentSelectorBar">
-                <div class="rss-left">
-                    <div class="filter-group" style="margin-bottom:0;">
-                        <label style="margin-bottom:0.25rem;">Select Learner</label>
-                        <select id="reportLearnerSelect" class="filter-select-modern" style="min-width:260px;">
-                            <option value="">-- Choose a learner --</option>
-                        </select>
-                    </div>
-                    <button class="btn btn-primary btn-sm" id="btnGenerateIndividual" style="align-self:flex-end;">
-                        <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Report
-                    </button>
-                </div>
-                <div class="rss-right">
-                    <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" title="Download all report cards for the selected grade as one PDF">
-                        <i class="fa-solid fa-file-zipper"></i> Download Grade Reports
-                    </button>
-                </div>
-            </div>
+    <div class="rss-left">
+        <div class="filter-group" style="margin-bottom:0;">
+            <label style="margin-bottom:0.25rem;">Select Learner</label>
+            <select id="reportLearnerSelect" class="filter-select-modern" style="min-width:260px;">
+                <option value="">-- Choose a learner --</option>
+            </select>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btnGenerateIndividual" style="align-self:flex-end;">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Report
+        </button>
+    </div>
+    <div class="rss-right">
+        <button class="btn btn-outline-primary btn-sm" id="btnDownloadIndividualPDF" title="Download this learner's report card as PDF" style="margin-right:8px;">
+            <i class="fa-solid fa-download"></i> Download Report
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" title="Download all report cards for the selected grade as one PDF">
+            <i class="fa-solid fa-file-zipper"></i> Download Grade Reports
+        </button>
+    </div>
+</div>
 
             <!-- The Actual Report Page (hidden until student selected) -->
             <div class="report-page" id="individualReportPage" style="display:none;">
