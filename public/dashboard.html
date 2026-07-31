@@ -3677,15 +3677,7 @@
     </div>
 </section>
 
-<script>
-function switchSettingsTab(i){
-    document.querySelectorAll('#settingsTabs .s-tab').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('#settings .s-panel').forEach(p=>p.classList.remove('active'));
-    document.querySelectorAll('#settingsTabs .s-tab')[i]?.classList.add('active');
-    document.getElementById('settings-tab-'+i)?.classList.add('active');
-}
-</script>
-    
+
     <!-- MODALS -->
     <div class="modal-backdrop" id="batchAdmissionModal">
         <div class="modal modal-lg" style="max-width: 1100px;">
