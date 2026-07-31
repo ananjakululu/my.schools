@@ -4372,12 +4372,370 @@ function renderTimetable() { const c = $('ttGridWrapper'); if (c) c.innerHTML = 
 function openTimetableSlotModal() { showToast('Timetable slot modal — paste your original code.', 'info'); }
 function exportTimetablePDF() { showToast('Timetable PDF — paste your original code.', 'info'); }
 function handleTimetableSlotSubmit(e) { e.preventDefault(); showToast('Slot saved (stub).'); }
-function populateTimetableSlotSubjects() {}
 
 
 
+// ==========================================================================
+//   ANALYSIS SECTION LOGIC
+// ==========================================================================
 
-function renderAnalysis() { showToast('Analysis section — paste your original code.', 'info'); }
+let subjectChartInstance = null;
+let distChartInstance = null;
+let analysisTrendChartInstance = null;
+let genderComparisonChartInstance = null;
+let leaderboardCurrentSubject = 'overall';
+function renderAnalysis() {
+    // 1. Get Context
+    const selectedGrade = $('analysisGradeSelect') ? $('analysisGradeSelect').value : 'all';
+    
+    // 2. Filter Data
+    let relevantStudents = StudentRepo.getAll();
+    if (selectedGrade !== 'all') {
+        relevantStudents = relevantStudents.filter(s => s.grade === selectedGrade);
+    }
+
+    const studentIds = relevantStudents.map(s => s.id);
+    const relevantExams = store.exams.filter(e => studentIds.includes(e.studentId));
+
+    // 3. Calculate Metrics
+    let totalScore = 0;
+    let count = 0;
+    let subjectScores = {}; // { 'Math': [80, 90], 'Eng': [70] }
+    
+    relevantExams.forEach(e => {
+        const score = parseInt(e.score) || 0;
+        if(score > 0) {
+            totalScore += score;
+            count++;
+            
+            const subName = e.subjectName || 'Unknown';
+            if(!subjectScores[subName]) subjectScores[subName] = [];
+            subjectScores[subName].push(score);
+        }
+    });
+
+    const avgScore = count > 0 ? Math.round(totalScore / count) : 0;
+
+    // 4. Update KPIs
+    animateValue('anaClassAvg', 0, avgScore, 800, '%');
+    
+    // CBC Categories (Exceeding: 80+, Meeting: 50-79, Below: <50)
+    let exceeding = 0, approaching = 0, below = 0;
+    Object.values(subjectScores).flat().forEach(s => {
+        if(s >= 80) exceeding++;
+        else if(s >= 50) approaching++;
+        else below++;
+    });
+
+    animateValue('anaExceeding', 0, exceeding, 600);
+    animateValue('anaApproaching', 0, approaching, 600);
+    animateValue('anaBelow', 0, below, 600);
+
+    // 4b. Trend indicators (compare first half vs second half of assessment list)
+    const allScores = Object.values(subjectScores).flat();
+    const trendData = computeTrendStats(allScores);
+    updateTrendIndicator('anaClassAvgTrend', trendData, '%');
+    updateTrendIndicator('anaExceedingTrend', computeCategoryTrend(relevantExams, s => s >= 80), '');
+    updateTrendIndicator('anaApproachingTrend', computeCategoryTrend(relevantExams, s => s >= 50 && s < 80), '', true);
+    updateTrendIndicator('anaBelowTrend', computeCategoryTrend(relevantExams, s => s < 50), '', true);
+
+    // 4c. Sparklines
+    renderSparkline('sparkClassAvg', trendData.series, '#22C55E');
+    renderSparkline('sparkExceeding', computeCategorySeries(relevantExams, s => s >= 80), '#14B8A6');
+    renderSparkline('sparkApproaching', computeCategorySeries(relevantExams, s => s >= 50 && s < 80), '#f59e0b');
+    renderSparkline('sparkBelow', computeCategorySeries(relevantExams, s => s < 50), '#ef4444');
+
+    // 4d. Context label
+    const ctxLabel = $('chartContextLabel');
+    if (ctxLabel) ctxLabel.textContent = selectedGrade === 'all' ? 'Whole school context' : `${selectedGrade} context`;
+
+    // 5. Render Charts
+    renderSubjectBarChart(subjectScores);
+    renderCompetencyDonut(exceeding, approaching, below);
+    renderAnalysisTrendChart(subjectScores);
+    renderGenderComparisonChart(relevantStudents, relevantExams);
+    renderSubjectHeatmap(relevantStudents, relevantExams);
+    renderLeaderboard(relevantStudents, relevantExams);
+}
+
+// ==========================================================================
+//   ANALYTICS ENGINE
+// ==========================================================================
+function renderAnalysisTab() {
+    const container = $('analysisContent');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="analysis-layout">
+            <aside class="analysis-sidebar">
+                <div class="analysis-search-header">
+                    <div class="form-group" style="margin:0 0 0.5rem 0;">
+                        <label style="font-size:0.7rem; text-transform:uppercase; color:var(--text-muted);">Select Learner</label>
+                        <select id="analysisStudentSelect" class="form-control">
+                            <option value="">-- Select --</option>
+                        </select>
+                    </div>
+                    <div class="search-wrapper" style="margin-top:0.5rem; width:100%;">
+                        <input type="text" id="analysisSearchInput" class="form-control" placeholder="Filter list..." style="padding-left: 0.5rem;">
+                    </div>
+                </div>
+                <div class="analysis-student-list" id="analysisStudentList"></div>
+            </aside>
+            
+            <main class="analysis-main">
+                <div class="student-hero-card">
+                    <div class="shc-info">
+                        <h2 id="analysisHeroName">Select a Learner</h2>
+                        <p id="analysisHeroGrade">Grade: --</p>
+                    </div>
+                    <div class="shc-stats">
+                        <div>
+                            <div class="shc-stat-val" id="analysisMeanScore">--</div>
+                            <div class="shc-stat-label">Mean Score</div>
+                        </div>
+                        <div>
+                            <div class="shc-stat-val" id="analysisRank">--</div>
+                            <div class="shc-stat-label">Rank</div>
+                        </div>
+                        <div>
+                            <div class="shc-stat-val" id="analysisTotalPoints">--</div>
+                            <div class="shc-stat-label">Total Points</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="analysis-grid-2">
+                    <div class="chart-card-modern">
+                        <div class="chart-header"><h3>Performance Trend</h3></div>
+                        <div id="trendChartContainer" style="position:relative; height:180px;">
+                             <canvas id="trendChart"></canvas>
+                             <div id="trendEmptyState" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); text-align:center; color:var(--text-muted);">
+                                <i class="fa-solid fa-chart-line" style="font-size:1.5rem; margin-bottom:0.5rem;"></i>
+                                <p>No history yet</p>
+                             </div>
+                        </div>
+                    </div>
+                    <div class="chart-card-modern">
+                        <div class="chart-header"><h3>Subject Breakdown</h3></div>
+                        <div class="visual-bar-chart" id="analysisBarChart"></div>
+                    </div>
+                </div>
+
+                <div class="action-toolbar">
+                    <div class="at-info" id="analysisStatus">Select a learner to view detailed analysis.</div>
+                    <div class="at-actions">
+                        <button class="btn btn-secondary btn-sm" id="btnAnalysisWindow" disabled>
+                            <i class="fa-solid fa-eye"></i> View Performance
+                        </button>
+                    </div>
+                </div>
+            </main>
+        </div>`;
+
+    const listContainer = $('analysisStudentList'); 
+    const select = $('analysisStudentSelect');
+    const searchInput = $('analysisSearchInput');
+
+    const students = StudentRepo.getAll();
+    if (students.length === 0) {
+        listContainer.innerHTML = `<div class="p-4 text-center text-muted">No learners admitted yet.</div>`;
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    
+    students.forEach(s => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'analysis-student-item';
+        itemDiv.dataset.id = s.id;
+        itemDiv.dataset.name = s.name.toLowerCase(); 
+        itemDiv.innerHTML = `
+            <div class="asi-avatar"><i class="fa-solid fa-user"></i></div>
+            <div class="asi-info">
+                <h4>${escapeHtml(s.name)}</h4>
+                <span>${s.grade}</span>
+            </div>`;
+        fragment.appendChild(itemDiv);
+
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name} (${s.grade})`;
+        select.appendChild(opt);
+    });
+    
+    listContainer.appendChild(fragment);
+
+    listContainer.addEventListener('click', (e) => { 
+        const item = e.target.closest('.analysis-student-item'); 
+        if(item) { 
+            listContainer.querySelectorAll('.analysis-student-item').forEach(i => i.classList.remove('active')); 
+            item.classList.add('active'); 
+            
+            $('analysisStudentSelect').value = item.dataset.id; 
+            updateAnalysisDashboard(item.dataset.id); 
+        } 
+    });
+
+    select.addEventListener('change', (e) => {
+        const id = e.target.value;
+        if(id) {
+            const item = listContainer.querySelector(`[data-id="${id}"]`);
+            if(item) {
+                listContainer.querySelectorAll('.analysis-student-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+                item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            updateAnalysisDashboard(id);
+        }
+    });
+
+    searchInput.addEventListener('input', (e) => {
+        const term = e.target.value.toLowerCase();
+        const items = listContainer.querySelectorAll('.analysis-student-item');
+        items.forEach(item => {
+            const name = item.dataset.name;
+            item.style.display = name.includes(term) ? 'flex' : 'none';
+        });
+    });
+
+    $('btnAnalysisWindow')?.addEventListener('click', () => { 
+        const sid = $('analysisStudentSelect').value; 
+        if(sid) { 
+            openPerformanceAnalysisModal(sid); 
+        } 
+    });
+}
+
+function updateAnalysisDashboard(studentId) {
+    const student = StudentRepo.getById(studentId); 
+    if(!student) return;
+
+    $('analysisHeroName').innerText = student.name; 
+    $('analysisHeroGrade').innerText = `${student.grade} (${student.stream})`; 
+    $('analysisStatus').innerText = "Viewing performance analytics.";
+    $('btnAnalysisWindow').disabled = false;
+
+    const exams = store.exams.filter(e => e.studentId === studentId);
+    const avg = exams.length > 0 ? Math.round(exams.reduce((a,b) => a + parseInt(b.score), 0) / exams.length) : 0;
+    
+    $('analysisMeanScore').innerText = avg + '%';
+
+    const allStudents = StudentRepo.findBy('grade', student.grade);
+    
+    const ranked = allStudents.map(s => {
+        const sExams = store.exams.filter(e => e.studentId === s.id);
+        const sAvg = sExams.length > 0 ? sExams.reduce((a,b) => a + parseInt(b.score), 0) / sExams.length : 0;
+        return { id: s.id, avg: sAvg };
+    }).sort((a,b) => b.avg - a.avg);
+
+    const rank = ranked.findIndex(s => s.id === studentId) + 1;
+
+    $('analysisRank').innerText = `#${rank > 0 ? rank : '--'}`;
+    
+    const totalPoints = exams.reduce((a, b) => a + (parseInt(b.score) || 0), 0);
+    $('analysisTotalPoints').innerText = totalPoints;
+
+    renderTrendChart(exams); 
+    renderAnalysisBarChart(studentId, student.grade);
+}
+
+function renderTrendChart(exams) {
+    const ctx = $('trendChart')?.getContext('2d'); 
+    const emptyState = $('trendEmptyState');
+    
+    if(!ctx) return;
+    
+    if(window.trendChartInstance) window.trendChartInstance.destroy();
+
+    const sorted = [...exams].sort((a,b) => new Date(a.date) - new Date(b.date)).slice(-10);
+
+    if (sorted.length === 0) {
+        if(emptyState) emptyState.style.display = 'block';
+        ctx.canvas.style.display = 'none';
+        return;
+    }
+
+    ctx.canvas.style.display = 'block';
+    if(emptyState) emptyState.style.display = 'none';
+
+    window.trendChartInstance = new Chart(ctx, { 
+        type: 'line', 
+        data: { 
+            labels: sorted.map(e => new Date(e.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })), 
+            datasets: [{ 
+                label: 'Score', 
+                data: sorted.map(e => e.score), 
+                borderColor: '#2563eb', 
+                backgroundColor: 'rgba(37, 99, 235, 0.1)', 
+                fill: true, 
+                tension: 0.4, 
+                pointBackgroundColor: '#2563eb',
+                pointRadius: 4,
+                pointHoverRadius: 6
+            }] 
+        }, 
+        options: { 
+            responsive: true, 
+            maintainAspectRatio: false,
+            plugins: { 
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    titleFont: { size: 12 },
+                    bodyFont: { size: 14 },
+                    callbacks: {
+                        label: function(context) {
+                            return `Score: ${context.parsed.y}%`;
+                        }
+                    }
+                }
+            }, 
+            scales: { 
+                y: { 
+                    beginAtZero: true, 
+                    max: 100,
+                    grid: { color: 'rgba(0,0,0,0.05)' }
+                },
+                x: {
+                    grid: { display: false }
+                }
+            } 
+        } 
+    });
+}
+
+function renderAnalysisBarChart(studentId, grade) {
+    const container = $('analysisBarChart'); 
+    if(!container) return; 
+    container.innerHTML = '';
+    
+    const subjects = store.learningAreas.filter(s => !s.applicableLevels || s.applicableLevels.includes(grade));
+    
+    if (subjects.length === 0) {
+        container.innerHTML = `<div class="p-4 text-center text-muted">No subjects found for this grade.</div>`;
+        return;
+    }
+
+    subjects.forEach(sub => {
+        const exam = store.exams.find(e => e.studentId === studentId && e.unitCode === sub.code); 
+        const score = exam ? parseInt(exam.score) : 0; 
+        const comp = getCompetenceStatus(score);
+        
+        const item = document.createElement('div'); 
+        item.className = 'vbc-item';
+        
+        item.innerHTML = `
+            <div class="vbc-label" title="${sub.name}">${sub.code}</div>
+            <div class="vbc-track">
+                <div class="vbc-fill" style="width: ${score}%; background: ${comp.class === 'status-c' ? '#10b981' : '#ef4444'}"></div>
+            </div>
+            <div class="vbc-value" title="${comp.level}">
+                <span style="font-size:0.7rem; color:var(--text-muted); margin-right:2px;">${comp.abbr}</span> 
+                ${score}%
+            </div>`;
+        container.appendChild(item);
+    });
+}
 
 // ==========================================================================
 //   STAFF ANALYTICS (Modern dashboard)
@@ -5822,15 +6180,6 @@ function exportTimetablePDF() {
     doc.save(filename);
 }
 
-// ==========================================================================
-//   REPORTS CENTER ENGINE — Full Implementation
-// ==========================================================================
-
-const rptState = {
-    currentType: null,
-    selectedStudentId: null,
-    selectedAssessId: null
-};
 
 
 // ==========================================================================
@@ -7341,6 +7690,15 @@ function patchAssessmentIntegrity() {
 // ==========================================================================
 //   REPORTS CENTER — CBC Harmonized with Assessment Section
 // ==========================================================================
+// ==========================================================================
+//   REPORTS CENTER ENGINE — Full Implementation
+// ==========================================================================
+
+const rptState = {
+    currentType: null,
+    selectedStudentId: null,
+    selectedAssessId: null
+};
 
 // ── Shared helpers (used by both Assessment and Reports) ──
 function getSubjectName(subjectId) {
@@ -7353,10 +7711,84 @@ function getApplicableLearningAreas(grade) {
     return (store.learningAreas || []).filter(la => la.applicableLevels && la.applicableLevels.includes(grade));
 }
 
+// ── Matches subject ID, Name, or Code reliably ──
+function resolveLaId(scoreRecord, applicableAreas) {
+    if (!scoreRecord || !applicableAreas || !applicableAreas.length) return null;
+    const subId = (scoreRecord.subjectId || scoreRecord.learningAreaId || '').trim();
+    if (!subId) return null;
+    
+    let la = applicableAreas.find(l => l.id === subId);
+    if (la) return la.id;
+    
+    const lower = subId.toLowerCase();
+    la = applicableAreas.find(l => l.id.toLowerCase() === lower);
+    if (la) return la.id;
+    
+    la = applicableAreas.find(l => l.name.trim().toLowerCase() === lower);
+    if (la) return la.id;
+    
+    la = applicableAreas.find(l => l.code && l.code.trim().toLowerCase() === lower);
+    if (la) return la.id;
+
+    const globalLa = (store.learningAreas || []).find(l => 
+        l.id === subId || l.name.trim().toLowerCase() === lower || (l.code && l.code.trim().toLowerCase() === lower)
+    );
+    if (globalLa) {
+        const match = applicableAreas.find(a => a.id === globalLa.id);
+        if (match) return match.id;
+    }
+    return null;
+}
+
+// ── Fetches scores safely even if 'grade' or 'term' fields are missing from the record ──
+function getStudentScoresDirect(studentId, studentGrade) {
+    if (!studentId) return [];
+    const gradeStr = (studentGrade || '').toString().trim().toLowerCase();
+    
+    return flattenExams().filter(e => {
+        if (e.studentId !== studentId) return false;
+        if (!e.score || parseFloat(e.score) <= 0) return false;
+        
+        const eGrade = (e.grade || '').toString().trim().toLowerCase();
+        if (eGrade && eGrade !== gradeStr) return false;
+        
+        return true;
+    });
+}
+// ── UNPACKS NESTED VIRTUAL SCORES INTO FLAT RECORDS ──
+function flattenExams() {
+    const flat = [];
+    (store.exams || []).forEach(e => {
+        // If it's a properly flat record with a valid score, use it directly
+        if (e.studentId && e.score != null && parseFloat(e.score) > 0) {
+            flat.push(e);
+            return;
+        }
+        // If it's a wrapper record with a nested scores map, unpack it
+        if (e.scores && typeof e.scores === 'object' && Object.keys(e.scores).length > 0) {
+            Object.values(e.scores).forEach(s => {
+                if (s && s.score != null && parseFloat(s.score) > 0) {
+                    flat.push({
+                        ...s,
+                        grade: e.grade || s.grade,
+                        term: e.term || s.term,
+                        year: e.year || s.year,
+                        assessId: e.id,
+                        assessType: e.assessType || s.assessType,
+                        assessName: e.name
+                    });
+                }
+            });
+        }
+    });
+    return flat;
+}
 // ── Entry point called by router ──
 function renderReportsAnalytics() {
     populateReportFilters();
     showReportTypeGrid();
+    wireDownloadButtons();
+
 }
 
 function showReportTypeGrid() {
@@ -7479,15 +7911,15 @@ function getFilteredScores(overrides = {}) {
     const aId    = overrides.assessId ?? ($('reportExamFilter')?.value || 'all');
     const sId    = overrides.studentId ?? null;
 
-    let scores = (store.exams || []).filter(e => parseFloat(e.score) > 0);
-    if (grade !== 'all') scores = scores.filter(e => e.grade === grade);
-    if (term !== 'all')  scores = scores.filter(e => e.term === term);
+    // CRITICAL FIX: Use flattenExams() instead of (store.exams || [])
+    let scores = flattenExams();
+    if (grade !== 'all') scores = scores.filter(e => (e.grade || '').toString().trim().toLowerCase() === grade.toLowerCase().trim());
+    if (term !== 'all')  scores = scores.filter(e => (e.term || '').toString().trim().toLowerCase() === term.toLowerCase().trim());
     if (year !== 'all')  scores = scores.filter(e => String(e.year) === String(year));
     if (aId !== 'all')   scores = scores.filter(e => (e.assessId || e.examId) === aId);
     if (sId)             scores = scores.filter(e => e.studentId === sId);
     return scores;
 }
-
 function bestScorePerSubject(scores) {
     const map = {};
     scores.forEach(s => {
@@ -7553,7 +7985,7 @@ function fillSchoolBanner(logoId, placeholderId, nameId, mottoId, addrId) {
     const logo = $(logoId), ph = $(placeholderId);
     if (logo && s.logo) { logo.src = s.logo; logo.style.display = ''; if (ph) ph.style.display = 'none'; }
     else if (ph) ph.style.display = '';
-    setText(nameId, s.schoolName || 'SCHOOL NAME');
+    setText(nameId, s.schoolName || 'FRIENDS TANDE PRIMARY & JS');
     setText(mottoId, s.motto || '');
     setText(addrId, `${s.address || ''} · ${s.phone || ''} · ${s.email || ''}`);
 }
@@ -7573,10 +8005,13 @@ function populateReportLearnerSelect() {
     let students = StudentRepo.getAll();
     if (grade !== 'all') students = students.filter(s => s.grade === grade);
 
-    // Prioritise learners with score data
-    const scores = getFilteredScores();
+    // Use DIRECT fetch for accurate score counts
     const cntMap = {};
-    scores.forEach(e => { cntMap[e.studentId] = (cntMap[e.studentId] || 0) + 1; });
+    students.forEach(st => {
+        const sc = getStudentScoresDirect(st.id, st.grade);
+        if (sc.length > 0) cntMap[st.id] = sc.length;
+    });
+    
     students.sort((a, b) => {
         const d = (cntMap[b.id] || 0) - (cntMap[a.id] || 0);
         return d !== 0 ? d : (a.name || '').localeCompare(b.name || '');
@@ -7592,7 +8027,6 @@ function populateReportLearnerSelect() {
     const page = $('individualReportPage');
     if (page) page.style.display = 'none';
 }
-
 function generateIndividualReport() {
     const sel = $('reportLearnerSelect');
     if (!sel || !sel.value) { showToast('Select a learner first.', 'error'); return; }
@@ -7602,28 +8036,26 @@ function generateIndividualReport() {
     const page = $('individualReportPage');
     if (page) page.style.display = '';
 
-    // Learning areas for this grade — same resolution as Assessment score entry
     const areas = getApplicableLearningAreas(student.grade);
 
-    // Scores for this student — same filter pipeline
-    const scores = getFilteredScores({ studentId: student.id });
+    // Use direct fetcher — bypasses strict dropdowns, tolerates missing grade fields
+    const scores = getStudentScoresDirect(student.id, student.grade);
 
-    // Discover assessment-type columns (Opener, Midterm, Endterm, End Year)
     const types = [...new Set(scores.map(e => e.assessType || e.examType || 'Assessment'))].sort();
     const multiCol = types.length > 1;
 
-    // Build lookup: subjectId → { typeKey: scoreEntry }
+    // Build lookup using the universal subject resolver
     const lookup = {};
-    scores.forEach(s => {
-        const sid = s.subjectId;
-        const tk = s.assessType || s.examType || 'Assessment';
-        if (!lookup[sid]) lookup[sid] = {};
-        if (!lookup[sid][tk] || parseFloat(s.score) > parseFloat(lookup[sid][tk].score)) {
-            lookup[sid][tk] = s;
+    scores.forEach(sc => {
+        const laId = resolveLaId(sc, areas);
+        if (!laId) return; 
+        const tk = sc.assessType || sc.examType || 'Assessment';
+        if (!lookup[laId]) lookup[laId] = {};
+        if (!lookup[laId][tk] || parseFloat(sc.score) > parseFloat(lookup[laId][tk].score)) {
+            lookup[laId][tk] = sc;
         }
     });
 
-    // ── Header ──
     const head = $('individualReportHead');
     if (head) {
         let h = '<tr><th style="width:30px">#</th><th>Learning Area</th><th style="width:55px">Code</th>';
@@ -7632,7 +8064,6 @@ function generateIndividualReport() {
         head.innerHTML = h;
     }
 
-    // ── Body ──
     const body = $('individualReportBody');
     let totalSc = 0, assessedN = 0;
 
@@ -7663,7 +8094,6 @@ function generateIndividualReport() {
         }).join('');
     }
 
-    // ── Footer (totals row) ──
     const foot = $('individualReportFoot');
     if (foot) {
         const avg = assessedN > 0 ? Math.round(totalSc / assessedN) : 0;
@@ -7676,7 +8106,6 @@ function generateIndividualReport() {
         </tr>`;
     }
 
-    // ── Learner identity ──
     setText('rptLearnerName', student.name || '---');
     setText('rptLearnerAdm', student.reg || 'N/A');
     setText('rptLearnerGrade', student.grade || '---');
@@ -7688,12 +8117,10 @@ function generateIndividualReport() {
         setText('rptLearnerAge', age > 0 ? age + ' yrs' : '---');
     } else { setText('rptLearnerAge', '---'); }
 
-    // Position — compare with grade peers using same filter pipeline
     const rank = computeRank(student);
     setText('rptLearnerPosition', rank.pos);
     setText('rptOutOf', rank.total);
 
-    // Performance strip
     const areasAssessed = areas.filter(la => lookup[la.id]).length;
     const allBest = areas.map(la => {
         const em = lookup[la.id] || {}; let b = 0;
@@ -7706,23 +8133,26 @@ function generateIndividualReport() {
     setText('rptOverallRating', or2 ? or2.code : '—');
     setText('rptSubjectsAssessed', `${areasAssessed}/${areas.length}`);
 
-    // Remarks
     setText('rptTeacherRemarks', autoRemark(or2 ? or2.code : null));
     setText('rptHeadRemarks', headRemark(or2 ? or2.code : null));
     setText('rptReportDate', new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' }));
 }
 
 function computeRank(student) {
-    const grade = $('reportGradeFilter')?.value || student.grade;
-    const term = $('reportTermFilter')?.value || 'all';
-    const year = $('reportYearFilter')?.value || 'all';
-    const aId = $('reportExamFilter')?.value || 'all';
-
-    let peers = StudentRepo.getAll().filter(s => s.grade === student.grade);
+    const studentGradeStr = (student.grade || '').toString().trim().toLowerCase();
+    const areas = getApplicableLearningAreas(student.grade);
+    let peers = StudentRepo.getAll().filter(s => 
+        (s.grade || '').toString().trim().toLowerCase() === studentGradeStr
+    );
 
     const avgs = peers.map(s => {
-        let sc = getFilteredScores({ studentId: s.id, grade, term, year, assessId: aId });
-        const bp = bestScorePerSubject(sc);
+        const sc = getStudentScoresDirect(s.id, student.grade);
+        const bp = {};
+        sc.forEach(score => {
+            const laId = resolveLaId(score, areas);
+            if (!laId) return;
+            if (!bp[laId] || parseFloat(score.score) > parseFloat(bp[laId].score)) bp[laId] = score;
+        });
         const vals = Object.values(bp).map(e => parseFloat(e.score));
         return { id: s.id, avg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0 };
     }).filter(p => p.avg > 0).sort((a, b) => b.avg - a.avg);
@@ -7731,7 +8161,6 @@ function computeRank(student) {
     if (idx === -1) return { pos: '—', total: avgs.length || '—' };
     return { pos: idx + 1, total: avgs.length };
 }
-
 function autoRemark(code) {
     return {
         EE: 'Excellent performance! The learner consistently exceeds expectations across learning areas and demonstrates deep understanding and creativity.',
@@ -7761,13 +8190,32 @@ function generateClassReport() {
     setText('classReportSubtitle', `${CBC_LEVELS[grade]?.name || grade}`);
 
     const students = StudentRepo.getAll().filter(st => st.grade === grade);
-    const scores = getFilteredScores({ grade });
     const areas = getApplicableLearningAreas(grade);
+
+        // ═══ FIX: Use flattenExams() to unpack nested virtual scores ═══
+    const gradeStr = grade.toString().trim().toLowerCase();
+    const scores = flattenExams().filter(e => {
+        const eGrade = (e.grade || '').toString().trim().toLowerCase();
+        if (eGrade && eGrade !== gradeStr) return false;
+        return true;
+    });
+    // ═══ FIX: Robust helper to get best scores per learning area for a set of scores ═══
+    function getResolvedBestScores(scoreList) {
+        const bp = {};
+        scoreList.forEach(sc => {
+            const laId = resolveLaId(sc, areas);
+            if (!laId) return;
+            if (!bp[laId] || parseFloat(sc.score) > parseFloat(bp[laId].score)) {
+                bp[laId] = sc;
+            }
+        });
+        return bp;
+    }
 
     // Per-student averages for ranking
     const studentStats = students.map(st => {
         const stScores = scores.filter(e => e.studentId === st.id);
-        const bp = bestScorePerSubject(stScores);
+        const bp = getResolvedBestScores(stScores);
         const vals = Object.values(bp).map(e => parseFloat(e.score));
         const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
         return { ...st, avg, areasDone: Object.keys(bp).length };
@@ -7784,8 +8232,9 @@ function generateClassReport() {
     const subBody = $('classSubjectBody');
     if (subBody) {
         subBody.innerHTML = areas.map((la, i) => {
-            const laScores = scores.filter(e => e.subjectId === la.id);
-            const bp = bestScorePerSubject(laScores);
+            // FIX: Filter using the universal resolver instead of strict ID match
+            const laScores = scores.filter(e => resolveLaId(e, areas) === la.id);
+            const bp = getResolvedBestScores(laScores);
             const vals = Object.values(bp).map(e => parseFloat(e.score));
             const mean = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
             const rc = countRatings(vals.map(v => ({ score: v })));
@@ -7819,7 +8268,6 @@ function generateClassReport() {
         }).join('') || '<tr><td colspan="7" style="text-align:center;padding:24px;color:#94a3b8">No scored learners in this grade.</td></tr>';
     }
 }
-
 // ═══════════════════════════════════════════════════════════════
 //   4C. SUBJECT ANALYSIS REPORT
 // ═══════════════════════════════════════════════════════════════
@@ -8476,4 +8924,474 @@ function initReportListeners() {
 }, 200));
     // Wire legacy modals
     wireReportModals();
+}
+
+
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   PDF DOWNLOAD ENGINE — Robust Version (no silent failures)
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function ensureHtml2Pdf() {
+    if (typeof html2pdf !== 'undefined') return true;
+    return new Promise((resolve, reject) => {
+        if (document.querySelector('script[src*="html2pdf"]')) {
+            let tries = 0;
+            const iv = setInterval(() => {
+                tries++;
+                if (typeof html2pdf !== 'undefined') { clearInterval(iv); resolve(true); }
+                if (tries > 150) { clearInterval(iv); reject(new Error('Timeout loading PDF library')); }
+            }, 100);
+            return;
+        }
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+        s.onload = () => { console.log('[PDF] Library loaded'); resolve(true); };
+        s.onerror = () => reject(new Error('Cannot load PDF library — check internet'));
+        document.head.appendChild(s);
+    });
+}
+
+// Convert logo URL to base64 to avoid CORS issues
+async function logoToBase64(url) {
+    if (!url) return null;
+    try {
+        const resp = await fetch(url, { mode: 'cors' });
+        const blob = await resp.blob();
+        return new Promise((res, rej) => {
+            const reader = new FileReader();
+            reader.onloadend = () => res(reader.result);
+            reader.onerror = rej;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.warn('[PDF] Logo CORS blocked, skipping logo', e);
+        return null;
+    }
+}
+
+// Show a full-screen loading overlay so user sees progress
+function showPdfOverlay(msg) {
+    let ov = document.getElementById('pdfLoadingOverlay');
+    if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'pdfLoadingOverlay';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);';
+        document.body.appendChild(ov);
+    }
+    ov.style.display = 'flex';
+    ov.innerHTML = `
+        <div style="background:white;border-radius:16px;padding:40px 50px;text-align:center;box-shadow:0 25px 60px rgba(0,0,0,0.3);max-width:380px;">
+            <div style="width:48px;height:48px;border:4px solid #e2e8f0;border-top-color:#22c55e;border-radius:50%;animation:pdfspin 0.8s linear infinite;margin:0 auto 20px;"></div>
+            <p id="pdfOverlayMsg" style="font-size:15px;font-weight:600;color:#1e293b;margin:0 0 6px 0;">${msg}</p>
+            <p style="font-size:12px;color:#94a3b8;margin:0;">Please wait, do not close this tab...</p>
+        </div>
+        <style>@keyframes pdfspin{to{transform:rotate(360deg)}}</style>
+    `;
+}
+function updatePdfOverlay(msg) {
+    const el = document.getElementById('pdfOverlayMsg');
+    if (el) el.textContent = msg;
+}
+function hidePdfOverlay() {
+    const ov = document.getElementById('pdfLoadingOverlay');
+    if (ov) ov.style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════════════
+//   BUILD REPORT HTML (returns a complete standalone string)
+// ═══════════════════════════════════════════════════════════════
+function buildIndividualReportHTML(studentId, logoBase64) {
+    const student = StudentRepo.getById(studentId);
+    if (!student) return '';
+    const s = store.settings;
+    const term = ($('reportTermFilter')?.value || 'all') === 'all' ? 'All Terms' : $('reportTermFilter').value;
+    const year = ($('reportYearFilter')?.value || 'all') === 'all' ? 'All Years' : $('reportYearFilter').value;
+    const areas = getApplicableLearningAreas(student.grade);
+
+    // ═══ FIX: Uses shared helper that tolerates missing 'grade' fields in score records ═══
+    const rawScores = getStudentScoresDirect(student.id, student.grade);
+
+    // ═══ FIX: Uses shared helper that matches by ID, Name, or Code ═══
+    const lookup = {};
+    rawScores.forEach(sc => {
+        const laId = resolveLaId(sc, areas);
+        if (!laId) return;
+        const tk = sc.assessType || sc.examType || 'Assessment';
+        if (!lookup[laId]) lookup[laId] = {};
+        if (!lookup[laId][tk] || parseFloat(sc.score) > parseFloat(lookup[laId][tk].score)) {
+            lookup[laId][tk] = sc;
+        }
+    });
+
+    const types = [...new Set(rawScores.map(e => e.assessType || e.examType || 'Assessment'))].sort();
+    const multiCol = types.length > 1;
+
+    let totalSc = 0, assessedN = 0;
+    const rows = areas.map((la, i) => {
+        const em = lookup[la.id] || {};
+        let best = 0;
+        if (multiCol) { types.forEach(t => { if (em[t]) { const v = parseFloat(em[t].score); if (v > best) best = v; } }); }
+        else { const k = types[0] || 'Assessment'; if (em[k]) best = parseFloat(em[k].score); }
+        const r = best > 0 ? cbcRating(best) : null;
+        if (best > 0) { totalSc += best; assessedN++; }
+
+        let cells = `<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;font-size:10px;text-align:center;">${i + 1}</td>
+            <td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;font-size:10px;text-align:left;">${escapeHtml(la.name)}</td>
+            <td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;font-size:9px;color:#64748b;text-align:center;">${escapeHtml(la.code || '')}</td>`;
+        if (multiCol) types.forEach(t => {
+            const e = em[t]; const v = e ? parseFloat(e.score) : 0; const rr = v > 0 ? cbcRating(v) : null;
+            cells += `<td style="text-align:center;padding:5px 6px;border-bottom:1px solid #e2e8f0;font-size:10px;">${rr ? `<span style="color:${rr.color};font-weight:600">${v}%</span>` : '<span style="color:#cbd5e1">—</span>'}</td>`;
+        });
+        cells += `<td style="text-align:center;padding:5px 6px;border-bottom:1px solid #e2e8f0;font-weight:700;font-size:10px;">${best > 0 ? best + '%' : '<span style="color:#cbd5e1">—</span>'}</td>
+            <td style="text-align:center;padding:5px 6px;border-bottom:1px solid #e2e8f0;font-size:10px;">${r ? `<span style="display:inline-block;padding:2px 10px;border-radius:10px;font-weight:700;font-size:9px;background:${r.color}20;color:${r.color}">${r.code}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>`;
+        return `<tr style="${i % 2 !== 0 ? 'background:#f8fafc;' : ''}">${cells}</tr>`;
+    }).join('');
+
+    const avg = assessedN ? Math.round(totalSc / assessedN) : 0;
+    const or1 = avg > 0 ? cbcRating(avg) : null;
+    const colSpan = 3 + (multiCol ? types.length : 0);
+
+    const rank = computeRank(student);
+    let ageText = '---';
+    if (student.dob) { const a = Math.floor((Date.now() - new Date(student.dob).getTime()) / 31557600000); if (a > 0) ageText = a + ' yrs'; }
+    const areasAssessed = areas.filter(la => lookup[la.id]).length;
+    const allBest = areas.map(la => { const em = lookup[la.id] || {}; let b = 0; Object.values(em).forEach(e => { const v = parseFloat(e.score); if (v > b) b = v; }); return b; }).filter(v => v > 0);
+    const avg2 = allBest.length ? Math.round(allBest.reduce((a, b) => a + b, 0) / allBest.length) : 0;
+    const or2 = avg2 > 0 ? cbcRating(avg2) : null;
+
+    const logoImg = logoBase64
+        ? `<img src="${logoBase64}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;margin-right:14px;">`
+        : `<div style="width:52px;height:52px;border-radius:8px;background:linear-gradient(135deg,#dcfce7,#bbf7d0);display:flex;align-items:center;justify-content:center;color:#16a34a;font-size:22px;margin-right:14px;flex-shrink:0;border:1px solid #86efac;">&#127891;</div>`;
+
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <style>
+        @page { size: A4; margin: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .a4-page {
+            width: 210mm;
+            height: 297mm;
+            padding: 12mm 15mm 10mm 15mm;
+            background: #fff;
+            color: #1e293b;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    </style></head>
+    <body>
+    <div class="a4-page">
+        
+        <!-- 1. SCHOOL HEADER -->
+        <div style="display:flex;align-items:center;border-bottom:3px solid #16a34a;padding-bottom:8px;margin-bottom:10px;flex-shrink:0;">
+            ${logoImg}
+            <div style="flex:1;">
+                <h1 style="font-size:16px;font-weight:800;color:#1e293b;line-height:1.2;">${escapeHtml(s.schoolName || 'FRIENDS TANDE PRIMARY & JS')}</h1>
+                ${s.motto ? `<p style="font-size:9px;color:#475569;font-style:italic;margin-top:2px;letter-spacing:0.5px;">${escapeHtml(s.motto)}</p>` : ''}
+                <p style="font-size:8px;color:#64748b;margin-top:2px;">${escapeHtml([s.address, s.phone, s.email].filter(Boolean).join('  |  '))}</p>
+            </div>
+        </div>
+
+        <!-- 2. REPORT TITLE -->
+        <div style="text-align:center;margin-bottom:10px;flex-shrink:0;">
+            <h2 style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;color:#334155;">LEARNER REPORT CARD</h2>
+            <p style="font-size:10px;color:#64748b;margin-top:3px;font-weight:500;">${escapeHtml(term)} — ${escapeHtml(year)}</p>
+        </div>
+
+        <!-- 3. LEARNER DETAILS -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;margin-bottom:10px;padding:8px 12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;flex-shrink:0;">
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Name:</span><span style="font-size:11px;font-weight:600;text-align:right;max-width:70%;">${escapeHtml(student.name || '---')}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Adm No:</span><span style="font-size:11px;font-weight:600;">${escapeHtml(student.reg || 'N/A')}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Grade:</span><span style="font-size:11px;font-weight:600;">${escapeHtml(student.grade || '---')}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Stream:</span><span style="font-size:11px;font-weight:600;">${escapeHtml(student.stream || 'N/A')}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Gender:</span><span style="font-size:11px;font-weight:600;">${escapeHtml(student.gender || '---')}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Age:</span><span style="font-size:11px;font-weight:600;">${ageText}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Position:</span><span style="font-size:11px;font-weight:700;color:#16a34a;">${rank.pos} out of ${rank.total}</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="font-size:8px;color:#64748b;text-transform:uppercase;">Date:</span><span style="font-size:11px;font-weight:600;">${new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
+        </div>
+
+        <!-- 4. PERFORMANCE TABLE -->
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+            <table>
+                <thead>
+                    <tr style="background:#16a34a;color:#fff;">
+                        <th style="width:25px;padding:6px 4px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;text-align:center;">#</th>
+                        <th style="padding:6px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;text-align:left;">Learning Area</th>
+                        <th style="width:40px;padding:6px 4px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;text-align:center;">Code</th>
+                        ${multiCol ? types.map(t => `<th style="width:55px;padding:6px 4px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;text-align:center;">${escapeHtml(t)}</th>`).join('') : ''}
+                        <th style="width:50px;padding:6px 4px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;text-align:center;">Score</th>
+                        <th style="width:65px;padding:6px 4px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;text-align:center;">Rating</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+                <tfoot>
+                    <tr style="background:#f0fdf4;font-weight:800;border-top:2px solid #16a34a;">
+                        <td colspan="${colSpan}" style="text-align:right;padding:6px 10px;font-size:11px;color:#334155;">OVERALL MEAN</td>
+                        <td style="text-align:center;padding:6px 4px;font-size:13px;color:${or1 ? or1.color : '#94a3b8'};">${avg > 0 ? avg + '%' : '—'}</td>
+                        <td style="text-align:center;padding:6px 4px;">${or1 ? `<span style="display:inline-block;padding:2px 12px;border-radius:10px;font-weight:800;font-size:10px;background:${or1.color}20;color:${or1.color}">${or1.code}</span>` : '—'}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+        <!-- 5. COMPETENCY LEGEND -->
+        <div style="display:flex;justify-content:center;gap:16px;margin-top:6px;padding:4px 0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;flex-shrink:0;">
+            <span style="font-size:8px;color:#475569;"><b style="color:#16a34a;">EE</b> Exceeding (80-100)</span>
+            <span style="font-size:8px;color:#475569;"><b style="color:#2563eb;">ME</b> Meeting (50-79)</span>
+            <span style="font-size:8px;color:#475569;"><b style="color:#d97706;">AE</b> Approaching (30-49)</span>
+            <span style="font-size:8px;color:#475569;"><b style="color:#dc2626;">BE</b> Below (0-29)</span>
+        </div>
+
+        <!-- 6. PERFORMANCE SUMMARY STRIP -->
+        <div style="display:flex;gap:0;margin-top:6px;flex-shrink:0;border:1px solid #bbf7d0;border-radius:6px;overflow:hidden;">
+            <div style="flex:1;text-align:center;padding:8px 10px;background:linear-gradient(to right,#f0fdf4,#dcfce7);border-right:1px solid #bbf7d0;">
+                <div style="font-size:7px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Mean Score</div>
+                <div style="font-size:18px;font-weight:800;margin-top:2px;color:${or2 ? or2.color : '#94a3b8'};">${avg2 > 0 ? avg2 + '%' : '0%'}</div>
+            </div>
+            <div style="flex:1;text-align:center;padding:8px 10px;background:linear-gradient(to right,#dcfce7,#bbf7d0);border-right:1px solid #bbf7d0;">
+                <div style="font-size:7px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Rating</div>
+                <div style="font-size:18px;font-weight:800;margin-top:2px;color:${or2 ? or2.color : '#94a3b8'};">${or2 ? or2.code : '—'}</div>
+            </div>
+            <div style="flex:1;text-align:center;padding:8px 10px;background:linear-gradient(to right,#bbf7d0,#a7f3d0);">
+                <div style="font-size:7px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Areas Done</div>
+                <div style="font-size:18px;font-weight:800;margin-top:2px;color:#1e293b;">${areasAssessed}/${areas.length}</div>
+            </div>
+        </div>
+
+        <!-- 7. REMARKS -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;flex-shrink:0;">
+            <div style="padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;">
+                <div style="font-size:8px;color:#92400e;text-transform:uppercase;letter-spacing:.5px;font-weight:700;margin-bottom:4px;">Class Teacher's Remarks</div>
+                <p style="font-size:9px;line-height:1.5;color:#334155;text-align:justify;">${autoRemark(or2 ? or2.code : null)}</p>
+            </div>
+            <div style="padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;">
+                <div style="font-size:8px;color:#1e40af;text-transform:uppercase;letter-spacing:.5px;font-weight:700;margin-bottom:4px;">Head Teacher's Remarks</div>
+                <p style="font-size:9px;line-height:1.5;color:#334155;text-align:justify;">${headRemark(or2 ? or2.code : null)}</p>
+            </div>
+        </div>
+
+        <!-- 8. SIGNATURES -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:auto;padding-top:20px;flex-shrink:0;">
+            <div style="text-align:center;">
+                <div style="border-top:1.5px solid #334155;padding-top:6px;margin-top:20px;"></div>
+                <span style="font-size:9px;color:#475569;font-weight:600;">Class Teacher</span>
+            </div>
+            <div style="text-align:center;">
+                <div style="border-top:1.5px solid #334155;padding-top:6px;margin-top:20px;"></div>
+                <span style="font-size:9px;color:#475569;font-weight:600;">Head Teacher</span>
+            </div>
+            <div style="text-align:center;">
+                <div style="border-top:1.5px solid #334155;padding-top:6px;margin-top:20px;"></div>
+                <span style="font-size:9px;color:#475569;font-weight:600;">Parent / Guardian</span>
+            </div>
+        </div>
+
+    </div>
+    </body></html>`;
+}
+// ═══════════════════════════════════════════════════════════════
+//   CORE DOWNLOAD FUNCTION — uses iframe + blob (most reliable)
+// ═══════════════════════════════════════════════════════════════
+async function renderHtmlToPdfBlob(htmlString, filename) {
+    await ensureHtml2Pdf();
+    console.log('[PDF] Starting render for:', filename);
+
+    // STRICT A4 IFRAME: Exactly 210x297mm so nothing bleeds or cuts off
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;left:0;top:0;width:210mm;height:297mm;border:none;z-index:1;pointer-events:none;background:white;overflow:hidden;';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    doc.open(); doc.write(htmlString); doc.close();
+
+    // Wait for fonts and layout to paint
+    await new Promise(r => setTimeout(r, 800));
+
+    const element = doc.body || doc.documentElement;
+
+    const opt = {
+        margin: 0,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+            scale: 2, 
+            useCORS: true, 
+            logging: false, 
+            width: 794,   // 210mm at 96dpi
+            height: 1123, // 297mm at 96dpi
+            windowWidth: 794,
+            windowHeight: 1123
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    const blob = await html2pdf().set(opt).from(element).outputPdf('blob');
+    console.log('[PDF] Blob generated, size:', blob.size, 'bytes');
+
+    document.body.removeChild(iframe);
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+// ═══════════════════════════════════════════════════════════════
+//   DOWNLOAD SINGLE INDIVIDUAL REPORT
+// ═══════════════════════════════════════════════════════════════
+async function downloadIndividualReportPDF() {
+    const sel = $('reportLearnerSelect');
+    if (!sel || !sel.value) { showToast('Select a learner first.', 'error'); return; }
+    const student = StudentRepo.getById(sel.value);
+    if (!student) { showToast('Learner not found.', 'error'); return; }
+
+    // Auto-generate if not yet done
+    const page = $('individualReportPage');
+    if (page && page.style.display === 'none') {
+        generateIndividualReport();
+        await new Promise(r => setTimeout(r, 150));
+    }
+
+    const cleanName = (student.name || 'Student').replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_').substring(0, 30);
+    const cleanGrade = (student.grade || '').replace(/\s/g, '_');
+
+    showPdfOverlay('Generating report card...');
+
+    try {
+        const logoB64 = await logoToBase64(store.settings?.logo);
+        const html = buildIndividualReportHTML(student.id, logoB64);
+        await renderHtmlToPdfBlob(html, `Report_Card_${cleanName}_${cleanGrade}.pdf`);
+        hidePdfOverlay();
+        showToast('Report card downloaded!', 'success');
+    } catch (err) {
+        hidePdfOverlay();
+        console.error('[PDF] Individual download failed:', err);
+        showToast('Download failed: ' + err.message, 'error');
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//   DOWNLOAD ALL GRADE REPORTS AS ONE PDF
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//   DOWNLOAD ALL GRADE REPORTS AS ONE PDF — FIXED
+// ═══════════════════════════════════════════════════════════════
+async function downloadGradeReportsPDF() {
+    const grade = $('reportGradeFilter')?.value;
+    if (!grade || grade === 'all') { 
+        showToast('Select a specific grade first.', 'error'); 
+        return; 
+    }
+
+    // Get ALL students in this grade — do NOT filter by scores
+    let students = StudentRepo.getAll().filter(s => s.grade === grade);
+    if (!students.length) { 
+        showToast('No students enrolled in ' + grade, 'error'); 
+        return; 
+    }
+
+    // Sort by name for clean ordering
+    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    showPdfOverlay(`Preparing ${students.length} report cards...`);
+
+    try {
+        await ensureHtml2Pdf();
+        const logoB64 = await logoToBase64(store.settings?.logo);
+
+        // First, do a quick diagnostic check
+        const allScores = (store.exams || []).filter(e => parseFloat(e.score) > 0);
+        const gradeScores = allScores.filter(e => e.grade === grade);
+        const studentsWithScores = new Set(gradeScores.map(e => e.studentId));
+        const scoredCount = students.filter(s => studentsWithScores.has(s.id)).length;
+
+        console.log('[PDF] Grade:', grade, '| Students:', students.length, '| With scores:', scoredCount, '| Total score records for grade:', gradeScores.length);
+
+        // If NO scores at all, warn but continue (reports will show "—")
+        if (scoredCount === 0) {
+            console.log('[PDF] No scores found for this grade. Checking all scores structure...');
+            if (allScores.length > 0) {
+                // Debug: show what grades exist in the data
+                const gradesInData = [...new Set(allScores.map(e => e.grade))];
+                console.log('[PDF] Grades found in score data:', gradesInData);
+                console.log('[PDF] Sample score record:', allScores[0]);
+            }
+            hidePdfOverlay();
+            showToast(`No assessment data found for ${grade}. Reports will be blank. Check that scores exist for this grade.`, 'error');
+            return;
+        }
+
+        // Build combined HTML — each student gets a full report page
+        const parts = [];
+        for (let i = 0; i < students.length; i++) {
+            updatePdfOverlay(`Building card ${i + 1} of ${students.length}...`);
+            const html = buildIndividualReportHTML(students[i].id, logoB64);
+            // Extract just the inner content (skip DOCTYPE/html/body wrapper)
+            const match = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+            parts.push(match ? match[1] : html);
+        }
+
+        // Combine with page breaks
+        const combinedHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+            <style>
+                .report-page-break { page-break-after: always; clear: both; height: 0; border: none; margin: 0; }
+                @page { size: A4; margin: 0; }
+            </style></head><body style="margin:0;padding:0;">
+            ${parts.join('<div class="report-page-break"></div>')}
+            </body></html>`;
+
+        updatePdfOverlay('Rendering PDF...');
+        const cleanGrade = grade.replace(/\s/g, '_');
+        const dateStr = new Date().toISOString().slice(0, 10);
+        await renderHtmlToPdfBlob(combinedHtml, `Grade_Reports_${cleanGrade}_${dateStr}.pdf`);
+
+        hidePdfOverlay();
+        showToast(`${students.length} report cards downloaded!`, 'success');
+
+    } catch (err) {
+        hidePdfOverlay();
+        console.error('[PDF] Grade download failed:', err);
+        showToast('Download failed: ' + err.message, 'error');
+    }
+}
+// ═══════════════════════════════════════════════════════════════
+//   WIRE ALL BUTTONS
+// ═══════════════════════════════════════════════════════════════
+function wireDownloadButtons() {
+    // Individual download button
+    const btnInd = $('btnDownloadIndividualPDF');
+    if (btnInd) {
+        const clone = btnInd.cloneNode(true);
+        btnInd.parentNode.replaceChild(clone, btnInd);
+        clone.addEventListener('click', downloadIndividualReportPDF);
+    }
+
+    // Grade reports download button
+    const btnGrade = $('btnDownloadGradePDFs');
+    if (btnGrade) {
+        const clone = btnGrade.cloneNode(true);
+        btnGrade.parentNode.replaceChild(clone, btnGrade);
+        clone.addEventListener('click', downloadGradeReportsPDF);
+    }
+
+    // Toolbar PDF button — smart routing
+    const btnPdf = $('reportsExportPdfBtn');
+    if (btnPdf) {
+        const clone = btnPdf.cloneNode(true);
+        btnPdf.parentNode.replaceChild(clone, btnPdf);
+        clone.addEventListener('click', () => {
+            if ($('reportIndividualPreview')?.style.display !== 'none') {
+                downloadIndividualReportPDF();
+            } else {
+                printCurrentReport();
+            }
+        });
+    }
 }
