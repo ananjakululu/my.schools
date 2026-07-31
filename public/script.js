@@ -9670,3 +9670,30 @@ function previewLogo(input) { processAndSaveImage(input, 'logo', 'settingsLogoPr
 function previewStamp(input) { processAndSaveImage(input, 'stamp', 'stampPreview'); }
 function previewHOISignature(input) { processAndSaveImage(input, 'hoiSignature', 'hoiSignaturePreview'); }
 function previewCTSignature(input) { processAndSaveImage(input, 'ctSignature', 'classTeacherSignaturePreview'); }
+// Upload button wiring
+document.getElementById('btnUploadLogo').addEventListener('click', function() {
+    document.getElementById('logoInput').click();
+});
+document.getElementById('btnUploadStamp').addEventListener('click', function() {
+    document.getElementById('stampInput').click();
+});
+document.getElementById('btnUploadHoiSignature').addEventListener('click', function() {
+    document.getElementById('hoiSignatureInput').click();
+});
+document.getElementById('btnUploadClassTeacherSignature').addEventListener('click', function() {
+    document.getElementById('classTeacherSignatureInput').click();
+});
+
+// File input change handlers
+document.getElementById('logoInput').addEventListener('change', function() {
+    previewLogo(this);
+});
+document.getElementById('stampInput').addEventListener('change', function() {
+    previewStamp(this);
+});
+document.getElementById('hoiSignatureInput').addEventListener('change', function() {
+    previewHOISignature(this);
+});
+document.getElementById('classTeacherSignatureInput').addEventListener('change', function() {
+    previewCTSignature(this);
+});
