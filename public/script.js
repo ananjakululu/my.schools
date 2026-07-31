@@ -379,6 +379,12 @@ function initializeApp(user) {
     patchAssessmentIntegrity();
     router('dashboard');
     updateSettingsForm();
+    setVal('term1Start', store.settings.term1Start || '');
+setVal('term1End', store.settings.term1End || '');
+setVal('term2Start', store.settings.term2Start || '');
+setVal('term2End', store.settings.term2End || '');
+setVal('term3Start', store.settings.term3Start || '');
+setVal('term3End', store.settings.term3End || '');
     updateHeaderAndDashboard();
     setTimeout(() => { const loader = $('appLoader'); if (loader) loader.style.display = 'none'; }, 800);
 }
@@ -9395,3 +9401,272 @@ function wireDownloadButtons() {
         });
     }
 }
+
+
+// ==========================================================================
+//   SETTINGS
+// ==========================================================================
+function switchSettingsTab(index) {
+    document.querySelectorAll('#settingsTabs .s-tab').forEach((btn, i) => btn.classList.toggle('active', i === index));
+    document.querySelectorAll('#settings .s-panel').forEach((content, i) => content.classList.toggle('active', i === index));
+}
+function saveInstitutionDetails(e) { 
+    e.preventDefault(); 
+    store.settings.schoolName = getVal('setSchoolName'); store.settings.schoolCode = getVal('setSchoolCode'); store.settings.motto = getVal('setMotto'); store.settings.level = getVal('setSchoolLevel'); store.settings.category = getVal('setSchoolCategory'); store.settings.academicYear = getVal('setAcademicYear'); store.settings.currentTerm = getVal('setCurrentTerm'); store.settings.address = getVal('setAddress'); store.settings.phone = getVal('setPhone'); store.settings.email = getVal('setEmail');
+    saveData(); updateHeaderAndDashboard(); showToast('School Details Saved Successfully!'); 
+}
+
+function saveHOIDetails(e) {
+    e.preventDefault();
+    const name = getVal('hoiName');
+    if (!name) { showToast('HOI Name is required.', 'error'); return; }
+    store.settings.hoiName = name; 
+    store.settings.hoiTitle = getVal('hoiTitle'); 
+    store.settings.hoiTsc = getVal('hoiTsc'); 
+    store.settings.hoiPhone = getVal('hoiPhone'); 
+    store.settings.hoiEmail = getVal('hoiEmail');
+    saveData(); updateHOIPreview(); showToast('HOI Details Saved!');
+}
+
+function updateSettingsForm() { 
+    setVal('setSchoolName', store.settings.schoolName); setVal('setSchoolCode', store.settings.schoolCode); setVal('setMotto', store.settings.motto); setVal('setSchoolLevel', store.settings.level || 'Primary School'); setVal('setSchoolCategory', store.settings.category || 'Public'); setVal('setAcademicYear', store.settings.academicYear || '2024'); setVal('setCurrentTerm', store.settings.currentTerm || 'Term 1'); setVal('setAddress', store.settings.address || ''); setVal('setPhone', store.settings.phone || ''); setVal('setEmail', store.settings.email || ''); 
+    setVal('hoiName', store.settings.hoiName || ''); setVal('hoiTitle', store.settings.hoiTitle || 'Principal'); setVal('hoiTsc', store.settings.hoiTsc || ''); setVal('hoiPhone', store.settings.hoiPhone || ''); setVal('hoiEmail', store.settings.hoiEmail || '');
+    if (store.settings.logo) { const el = $('settingsLogoPreview'); if(el) el.innerHTML = `<img src="${store.settings.logo}" alt="Logo" style="width:100%; height:100%; object-fit:contain;">`; }
+    if (store.settings.stamp) { const el = $('stampPreview'); if(el) el.innerHTML = `<img src="${store.settings.stamp}" alt="Stamp">`; }
+    if (store.settings.hoiSignature) { const el = $('hoiSignaturePreview'); if(el) el.innerHTML = `<img src="${store.settings.hoiSignature}" alt="HOI Signature">`; }
+    if (store.settings.ctSignature) { const el = $('classTeacherSignaturePreview'); if(el) el.innerHTML = `<img src="${store.settings.ctSignature}" alt="Class Teacher Signature">`; }
+    
+    setVal('setEventName', store.settings.eventName || '');
+    setVal('setEventDate', store.settings.eventDate || '');
+    setVal('setEventDesc', store.settings.eventDesc || '');
+    setVal('setNoticeTitle', store.settings.noticeTitle || '');
+    setVal('setNoticeBody', store.settings.noticeBody || '');
+
+  
+    updateHeaderAndDashboard(); updateHOIPreview(); 
+}
+
+// Replace saveEventsDetails entirely with an ADD-event function:
+function addEvent(e) {
+    e.preventDefault();
+    const title = getVal('eventTitle');
+    const date = getVal('eventDate');
+    if (!title || !date) { showToast('Title and date are required.', 'error'); return; }
+    if (!store.settings.events) store.settings.events = [];
+    store.settings.events.push({ title, date });
+    saveData();
+    renderEventsList();
+    $('eventTitle').value = '';
+    $('eventDate').value = '';
+    showToast('Event added!');
+}
+// In updateSettingsForm — remove these 4 lines entirely:
+// setVal('setEventName', ...);  ← DELETE
+// setVal('setEventDate', ...);  ← DELETE
+// setVal('setEventDesc', ...);  ← DELETE
+// setVal('setNoticeTitle', ...); ← DELETE
+// setVal('setNoticeBody', ...);  ← DELETE
+
+// Replace saveEventsDetails entirely with an ADD-event function:
+function addEvent(e) {
+    e.preventDefault();
+    const title = getVal('eventTitle');
+    const date = getVal('eventDate');
+    if (!title || !date) { showToast('Title and date are required.', 'error'); return; }
+    if (!store.settings.events) store.settings.events = [];
+    store.settings.events.push({ title, date });
+    saveData();
+    renderEventsList();
+    $('eventTitle').value = '';
+    $('eventDate').value = '';
+    showToast('Event added!');
+}
+
+function renderEventsList() {
+    const events = store.settings.events || [];
+    const tbody = $('eventsTableBody');
+    const glance = $('yearGlanceList');
+    if (!tbody || !glance) return;
+
+    if (events.length === 0) {
+        tbody.innerHTML = '';
+        glance.innerHTML = '<div class="s-glance-empty">No events added yet</div>';
+        return;
+    }
+
+    tbody.innerHTML = events.map((ev, i) => `
+        <tr>
+            <td>${ev.date}</td>
+            <td>${ev.title}</td>
+            <td><button class="s-btn s-btn-danger s-btn-sm" onclick="deleteEvent(${i})"><i class="fa-solid fa-trash"></i></button></td>
+        </tr>
+    `).join('');
+
+    glance.innerHTML = events.map((ev, i) => `
+        <div class="s-glance-item">
+            <span class="s-glance-date">${ev.date}</span>
+            <span class="s-glance-title">${ev.title}</span>
+            <button class="s-glance-del" onclick="deleteEvent(${i})"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+    `).join('');
+}
+function deleteEvent(i) {
+    store.settings.events.splice(i, 1);
+    saveData();
+    renderEventsList();
+}
+function updateHOIPreview() {
+    const name = getVal('hoiName') || 'Head of Institution';
+    const title = getVal('hoiTitle') || 'Principal';
+    const tsc = getVal('hoiTsc') || '---';
+    const prevName = $('prevName'); if (prevName) prevName.innerText = name;
+    const pName = $('hoiPreviewName'); if (pName) pName.innerText = name;
+    const pTitle = $('hoiPreviewTitle'); if (pTitle) pTitle.innerText = title;
+    const pTsc = $('hoiPreviewTsc'); if (pTsc) pTsc.innerText = `TSC: ${tsc}`;
+    const sigPreview = $('hoiPreviewSigImg');
+    if (store.settings.hoiSignature && sigPreview) { sigPreview.src = store.settings.hoiSignature; sigPreview.style.display = 'block'; }
+}
+
+function initSettingsListeners() {
+    // Institution form
+    const instForm = $('institutionForm');
+    if (instForm) instForm.addEventListener('submit', saveInstitutionDetails);
+
+    // HOI form
+    const hoiForm = $('hoiForm');
+    if (hoiForm) hoiForm.addEventListener('submit', saveHOIDetails);
+
+    // Event form
+    const evtForm = $('addEventForm');
+    if (evtForm) evtForm.addEventListener('submit', addEvent);
+
+    // Term dates form
+    const termForm = $('termDatesForm');
+    if (termForm) termForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        store.settings.term1Start = getVal('term1Start');
+        store.settings.term1End = getVal('term1End');
+        store.settings.term2Start = getVal('term2Start');
+        store.settings.term2End = getVal('term2End');
+        store.settings.term3Start = getVal('term3Start');
+        store.settings.term3End = getVal('term3End');
+        saveData();
+        showToast('Term dates saved!');
+    });
+
+    // Image uploads
+    const btnLogo = $('btnUploadLogo');
+    const logoInput = $('logoInput');
+    if (btnLogo && logoInput) btnLogo.addEventListener('click', () => logoInput.click());
+    if (logoInput) logoInput.addEventListener('change', function() { previewLogo(this); });
+
+    const btnStamp = $('btnUploadStamp');
+    const stampInput = $('stampInput');
+    if (btnStamp && stampInput) btnStamp.addEventListener('click', () => stampInput.click());
+    if (stampInput) stampInput.addEventListener('change', function() { previewStamp(this); });
+
+    const btnHoiSig = $('btnUploadHoiSignature');
+    const hoiSigInput = $('hoiSignatureInput');
+    if (btnHoiSig && hoiSigInput) btnHoiSig.addEventListener('click', () => hoiSigInput.click());
+    if (hoiSigInput) hoiSigInput.addEventListener('change', function() { previewHOISignature(this); });
+
+    const btnCtSig = $('btnUploadClassTeacherSignature');
+    const ctSigInput = $('classTeacherSignatureInput');
+    if (btnCtSig && ctSigInput) btnCtSig.addEventListener('click', () => ctSigInput.click());
+    if (ctSigInput) ctSigInput.addEventListener('change', function() { previewCTSignature(this); });
+
+    // Backup buttons
+    const btnExport = $('btnExportBackup');
+    if (btnExport) btnExport.addEventListener('click', exportBackup);
+
+    const btnImport = $('btnImportBackup');
+    const importFile = $('importFile');
+    if (btnImport && importFile) btnImport.addEventListener('click', () => importFile.click());
+    if (importFile) importFile.addEventListener('change', function() { importBackup(this); });
+
+    const btnReset = $('btnResetSystem');
+    if (btnReset) btnReset.addEventListener('click', function() {
+        if (confirm('⚠️ This will permanently delete ALL data. Are you sure?')) {
+            localStorage.clear();
+            location.reload();
+        }
+    });
+}
+function repairData() { saveData(); showToast('Database repaired.'); }
+function forceSyncAll() { showToast('Sync complete.'); }
+function updateHeaderAndDashboard() { 
+    if ($('dashSchoolName')) $('dashSchoolName').innerText = store.settings.schoolName; 
+    if ($('dashAdminName')) $('dashAdminName').innerText = CURRENT_USER?.name || 'Admin'; 
+    if ($('brandName')) $('brandName').innerText = store.settings.schoolName; 
+    if ($('prevName')) $('prevName').innerText = store.settings.schoolName; 
+    if ($('prevMotto')) $('prevMotto').innerText = store.settings.motto; 
+    if ($('prevCode')) $('prevCode').innerText = "Code: " + store.settings.schoolCode;
+    const brandIconImg = document.querySelector('.brand-icon img'); 
+    if (brandIconImg && store.settings.logo) { brandIconImg.src = store.settings.logo; }
+}
+
+function exportBackup() { 
+    const dataStr = JSON.stringify(store, null, 2); 
+    const blob = new Blob([dataStr], { type: 'application/json' }); 
+    const a = document.createElement('a'); 
+    a.href = URL.createObjectURL(blob); 
+    a.download = `elimutrack_backup_${new Date().toISOString().split('T')[0]}.json`; 
+    a.click(); 
+    showToast('Backup Exported'); 
+}
+
+function importBackup(input) { 
+    const file = input.files[0]; if (!file) return; 
+    const reader = new FileReader(); 
+    reader.onload = function(e) { 
+        try { 
+            const importedData = JSON.parse(e.target.result); 
+            if (importedData.students && importedData.settings) { 
+                Object.assign(store, importedData); 
+                saveData(); 
+                initializeApp(CURRENT_USER); 
+                showToast('Backup Imported Successfully'); 
+            } else { 
+                showToast('Invalid backup file structure', 'error'); 
+            } 
+        } catch (err) { 
+            showToast('Error Importing File', 'error'); 
+        } 
+    }; 
+    reader.readAsText(file); input.value = ''; 
+}
+
+function handleGlobalSearch(val) { 
+    if (val.length > 2) { 
+        if ($('studentSearch')) $('studentSearch').value = val; 
+        router('students'); 
+        applyFilters(); 
+    } 
+}
+// 2. HANDLE STEPS (Next / Back)
+//    Removed handleStaffStep(): it duplicated the body-level listener in
+//    initGlobalListeners() but skipped Step 1 validation, letting users
+//    jump to Step 2 with empty required fields. The validated path
+//    (nextStaffStep/prevStaffStep) is the single source of truth now.
+
+function processAndSaveImage(input, key, previewId) {
+    const file = input.files[0]; if (!file) return; if (!file.type.startsWith('image/')) { showToast('Please select a valid image file.', 'error'); return; }
+    const reader = new FileReader(); reader.onload = function(e) {
+        const img = new Image(); img.onload = function() {
+            const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d'); const MAX_WIDTH = 300; const MAX_HEIGHT = 300;
+            let width = img.width; let height = img.height;
+            if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
+            canvas.width = width; canvas.height = height; ctx.drawImage(img, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8); store.settings[key] = dataUrl; saveData();
+            const preview = $(previewId); if (preview) { preview.innerHTML = `<img src="${dataUrl}" alt="${key}" style="width:100%; height:100%; object-fit:contain;">`; }
+            if (key === 'logo') updateHeaderAndDashboard();
+            if (key === 'hoiSignature') updateHOIPreview();
+            showToast('Image uploaded successfully.');
+        }; img.src = e.target.result;
+    }; reader.readAsDataURL(file);
+}
+
+function previewLogo(input) { processAndSaveImage(input, 'logo', 'settingsLogoPreview'); }
+function previewStamp(input) { processAndSaveImage(input, 'stamp', 'stampPreview'); }
+function previewHOISignature(input) { processAndSaveImage(input, 'hoiSignature', 'hoiSignaturePreview'); }
+function previewCTSignature(input) { processAndSaveImage(input, 'ctSignature', 'classTeacherSignaturePreview'); }
