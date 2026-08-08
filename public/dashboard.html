@@ -125,7 +125,7 @@
 
         <div class="content-area">
             
-           <!-- 1. DASHBOARD (NEXT-GEN OBSERVABILITY) -->
+          <!-- 1. DASHBOARD (NEXT-GEN OBSERVABILITY) -->
 <section id="dashboard" class="view-section active">
 
     <!-- DASHBOARD COMMAND BAR -->
@@ -133,7 +133,7 @@
         <div class="dash-greeting">
             <div class="dash-greeting-emoji"><i class="fa-solid fa-chart-line"></i></div>
             <div>
-                <h2 id="dashGreetingTitle">Welcome back, Head of Institution</h2>
+                <h2 id="dashGreetingTitle">Welcome back, <span id="dashUserName">Admin</span></h2>
                 <p id="dashGreetingSub">Here's the live operational pulse of your school today.</p>
             </div>
         </div>
@@ -141,13 +141,13 @@
             <div class="dash-range-pill" id="dashRangePill" role="tablist" aria-label="Time range">
                 <button data-range="today" class="range-btn">Today</button>
                 <button data-range="week" class="range-btn">Week</button>
-                <button data-range="term" class="range-btn active">Term</button>
+                <button data-range="term" class="range-btn active" role="tab" aria-selected="true">Term</button>
                 <button data-range="year" class="range-btn">Year</button>
             </div>
-            <button class="dash-refresh-btn" id="dashRefreshBtn" title="Refresh dashboard">
+            <button class="dash-icon-btn" id="dashRefreshBtn" title="Refresh data" aria-label="Refresh dashboard">
                 <i class="fa-solid fa-arrows-rotate"></i>
             </button>
-            <button class="dash-export-btn" id="dashExportBtn" title="Export dashboard snapshot">
+            <button class="dash-export-btn" id="dashExportBtn" title="Export snapshot" aria-label="Export dashboard">
                 <i class="fa-solid fa-download"></i>
                 <span>Export</span>
             </button>
@@ -155,12 +155,12 @@
     </div>
 
     <!-- HERO KPI ROW -->
-    <div class="dash-kpi-row" id="dashKpiRow">
+    <div class="dash-kpi-row">
         <!-- 1. Total Learners -->
-        <div class="modern-card kpi-hero" data-accent="green" onclick="router('students')" tabindex="0">
+        <div class="modern-card kpi-hero" data-accent="green" onclick="router('students')" tabindex="0" role="button" aria-label="View Learners">
             <div class="kpi-hero-top">
-                <div class="kpi-hero-icon"><i class="fa-solid fa-users"></i></div>
-                <div class="kpi-hero-badge up"><i class="fa-solid fa-arrow-trend-up"></i> <span data-trend="enrollment">+0%</span></div>
+                <div class="kpi-hero-icon green"><i class="fa-solid fa-users"></i></div>
+                <div class="kpi-hero-badge up"><i class="fa-solid fa-arrow-trend-up"></i> <span data-trend="enrollment">+12%</span></div>
             </div>
             <div class="kpi-hero-body">
                 <div class="kpi-hero-label">Total Learners</div>
@@ -171,95 +171,77 @@
                     <span><i class="fa-solid fa-layer-group"></i> <span id="kpiGradeCount">0</span> grades</span>
                 </div>
             </div>
-            <canvas class="kpi-spark" id="sparkEnrollment" height="40"></canvas>
+            <div class="kpi-spark-wrap"><canvas class="kpi-spark" id="sparkEnrollment" height="40"></canvas></div>
         </div>
 
         <!-- 2. Teaching Staff -->
-        <div class="modern-card kpi-hero" data-accent="indigo" onclick="router('staff')" tabindex="0">
+        <div class="modern-card kpi-hero" data-accent="indigo" onclick="router('staff')" tabindex="0" role="button" aria-label="View Staff">
             <div class="kpi-hero-top">
-                <div class="kpi-hero-icon"><i class="fa-solid fa-chalkboard-user"></i></div>
-                <div class="kpi-hero-badge neutral"><i class="fa-solid fa-minus"></i> Stable</div>
+                <div class="kpi-hero-icon indigo"><i class="fa-solid fa-chalkboard-user"></i></div>
+                <div class="kpi-hero-badge neutral">Stable</div>
             </div>
             <div class="kpi-hero-body">
                 <div class="kpi-hero-label">Teaching Staff</div>
                 <div class="kpi-hero-value" id="statStaff">0</div>
                 <div class="kpi-hero-meta">
-                    <span><i class="fa-solid fa-user-tie"></i> <span id="kpiStaffTeaching">0</span> teaching</span>
-                    <span><i class="fa-solid fa-ratio"></i> 1:<span id="kpiStaffRatio">0</span></span>
+                    <span><i class="fa-solid fa-user-tie"></i> <span id="kpiStaffTeaching">0</span></span>
+                    <span><i class="fa-solid fa-divide"></i> 1:<span id="kpiStaffRatio">0</span> ratio</span>
                 </div>
             </div>
-            <canvas class="kpi-spark" id="sparkStaff" height="40"></canvas>
+            <div class="kpi-spark-wrap"><canvas class="kpi-spark" id="sparkStaff" height="40"></canvas></div>
         </div>
 
         <!-- 3. Avg. Competency -->
-        <div class="modern-card kpi-hero" data-accent="amber" tabindex="0">
+        <div class="modern-card kpi-hero" data-accent="amber" tabindex="0" role="button" aria-label="View Competency">
             <div class="kpi-hero-top">
-                <div class="kpi-hero-icon"><i class="fa-solid fa-gauge-high"></i></div>
-                <div class="kpi-hero-badge up"><i class="fa-solid fa-arrow-trend-up"></i> <span data-trend="competency">+0%</span></div>
+                <div class="kpi-hero-icon amber"><i class="fa-solid fa-gauge-high"></i></div>
+                <div class="kpi-hero-badge up"><i class="fa-solid fa-arrow-trend-up"></i> <span data-trend="competency">+5%</span></div>
             </div>
             <div class="kpi-hero-body">
                 <div class="kpi-hero-label">Avg. Competency</div>
                 <div class="kpi-hero-value" id="statCompetent">0%</div>
                 <div class="kpi-hero-meta">
-                    <span><i class="fa-solid fa-circle-check" style="color:var(--success)"></i> <span id="kpiCompetentCount">0</span> meeting</span>
-                    <span><i class="fa-solid fa-circle-exclamation" style="color:var(--warning)"></i> <span id="kpiBelowCount">0</span> below</span>
+                    <span style="color:var(--success)"><i class="fa-solid fa-circle-check"></i> <span id="kpiCompetentCount">0</span> met</span>
+                    <span style="color:var(--warning)"><i class="fa-solid fa-circle-exclamation"></i> <span id="kpiBelowCount">0</span> below</span>
                 </div>
             </div>
-            <canvas class="kpi-spark" id="sparkCompetency" height="40"></canvas>
+            <div class="kpi-spark-wrap"><canvas class="kpi-spark" id="sparkCompetency" height="40"></canvas></div>
         </div>
 
         <!-- 4. Pending Tasks -->
-        <div class="modern-card kpi-hero" data-accent="rose" onclick="router('exams')" tabindex="0">
+        <div class="modern-card kpi-hero" data-accent="rose" onclick="router('exams')" tabindex="0" role="button" aria-label="View Pending Assessments">
             <div class="kpi-hero-top">
-                <div class="kpi-hero-icon"><i class="fa-solid fa-list-check"></i></div>
-                <div class="kpi-hero-badge down"><i class="fa-solid fa-circle-exclamation"></i> Action Required</div>
+                <div class="kpi-hero-icon rose"><i class="fa-solid fa-list-check"></i></div>
+                <div class="kpi-hero-badge down">Action Req.</div>
             </div>
             <div class="kpi-hero-body">
                 <div class="kpi-hero-label">Pending Assessments</div>
                 <div class="kpi-hero-value" id="statPending">0</div>
                 <div class="kpi-hero-meta">
-                    <span><i class="fa-solid fa-clock"></i> learners unassessed</span>
+                    <span><i class="fa-solid fa-clock"></i> Learners unassessed</span>
                 </div>
             </div>
-            <canvas class="kpi-spark" id="sparkPending" height="40"></canvas>
-        </div>
-
-        <!-- 5. Attendance Rate (NEW) -->
-        <div class="modern-card kpi-hero" data-accent="teal" tabindex="0">
-            <div class="kpi-hero-top">
-                <div class="kpi-hero-icon"><i class="fa-solid fa-calendar-check"></i></div>
-                <div class="kpi-hero-badge up"><i class="fa-solid fa-arrow-trend-up"></i> <span data-trend="attendance">+0%</span></div>
-            </div>
-            <div class="kpi-hero-body">
-                <div class="kpi-hero-label">Attendance Rate</div>
-                <div class="kpi-hero-value" id="statAttendance">0%</div>
-                <div class="kpi-hero-meta">
-                    <span><i class="fa-solid fa-circle" style="color:var(--success); font-size:8px"></i> Present <span id="kpiPresent">0</span></span>
-                    <span><i class="fa-solid fa-circle" style="color:var(--danger); font-size:8px"></i> Absent <span id="kpiAbsent">0</span></span>
-                </div>
-            </div>
-            <canvas class="kpi-spark" id="sparkAttendance" height="40"></canvas>
+            <div class="kpi-spark-wrap"><canvas class="kpi-spark" id="sparkPending" height="40"></canvas></div>
         </div>
     </div>
 
     <!-- BENTO ANALYTICS GRID -->
     <div class="dash-bento-grid">
-
-        <!-- MAIN CHART: Enrollment by Grade (Chart.js powered) -->
-        <div class="modern-card chart-section">
+        
+        <!-- MAIN CHART: Enrollment by Grade -->
+        <div class="modern-card chart-section bento-2col">
             <div class="dash-card-header">
                 <div class="dash-card-title">
-                    <h3>Learner Distribution by Grade</h3>
-                    <small>Enrollment headcount across CBC levels</small>
+                    <h3>Learner Distribution</h3>
+                    <small>Headcount across CBC levels</small>
                 </div>
                 <div class="dash-card-tools">
                     <div class="dash-chart-toggle" id="enrollmentChartToggle" role="tablist">
                         <button data-type="bar" class="active" title="Bar"><i class="fa-solid fa-chart-column"></i></button>
                         <button data-type="line" title="Line"><i class="fa-solid fa-chart-line"></i></button>
                         <button data-type="doughnut" title="Doughnut"><i class="fa-solid fa-chart-pie"></i></button>
-                        <button data-type="polarArea" title="Polar"><i class="fa-solid fa-bullseye"></i></button>
                     </div>
-                    <select id="chartFilter" class="filter-select-modern dash-filter-sm">
+                    <select id="chartFilter" class="filter-select-modern">
                         <option value="all">All Levels</option>
                         <option value="pp">Pre-Primary</option>
                         <option value="lower">Lower Primary</option>
@@ -268,10 +250,7 @@
                     </select>
                 </div>
             </div>
-            <div class="dash-canvas-wrap">
-                <canvas id="enrollmentChart"></canvas>
-            </div>
-            <div class="dash-chart-legend" id="enrollmentChartLegend"></div>
+            <div class="dash-canvas-wrap"><canvas id="enrollmentChart"></canvas></div>
         </div>
 
         <!-- CBC COMPETENCY BREAKDOWN -->
@@ -279,14 +258,14 @@
             <div class="dash-card-header">
                 <div class="dash-card-title">
                     <h3>CBC Competency Mix</h3>
-                    <small>EE &middot; ME &middot; AE &middot; BE distribution</small>
+                    <small>EE · ME · AE · BE</small>
                 </div>
             </div>
             <div class="competency-donut-wrap">
                 <canvas id="competencyChart"></canvas>
                 <div class="competency-center">
                     <span class="num" id="competencyCenterNum">0</span>
-                    <span class="lbl">Total Assessments</span>
+                    <span class="lbl">Assessments</span>
                 </div>
             </div>
             <div class="competency-legend" id="competencyLegend"></div>
@@ -336,56 +315,36 @@
             </div>
         </div>
 
-        <!-- PERFORMANCE TREND (NEW) -->
+        <!-- PERFORMANCE TREND -->
         <div class="modern-card trend-section">
             <div class="dash-card-header">
-                <div class="dash-card-title">
-                    <h3>Performance Trend</h3>
-                    <small>Average score across recent assessments</small>
-                </div>
-                <div class="dash-card-tools">
-                    <span class="dash-trend-pill" id="trendPill"><i class="fa-solid fa-arrow-trend-up"></i> &mdash;</span>
-                </div>
+                <div class="dash-card-title"><h3>Performance Trend</h3><small>Averages over time</small></div>
+                <span class="dash-trend-pill" id="trendPill"><i class="fa-solid fa-arrow-trend-up"></i> &mdash;</span>
             </div>
-            <div class="dash-canvas-wrap dash-canvas-sm">
-                <canvas id="performanceTrendChart"></canvas>
-            </div>
+            <div class="dash-canvas-wrap"><canvas id="performanceTrendChart"></canvas></div>
         </div>
 
-        <!-- SUBJECT PERFORMANCE RADAR (NEW) -->
+        <!-- SUBJECT PERFORMANCE RADAR -->
         <div class="modern-card radar-section">
             <div class="dash-card-header">
-                <div class="dash-card-title">
-                    <h3>Subject Performance</h3>
-                    <small>Multi-dimensional competency view</small>
-                </div>
+                <div class="dash-card-title"><h3>Subject Radar</h3><small>Multi-dimensional view</small></div>
             </div>
-            <div class="dash-canvas-wrap dash-canvas-sm">
-                <canvas id="subjectRadarChart"></canvas>
-            </div>
+            <div class="dash-canvas-wrap"><canvas id="subjectRadarChart"></canvas></div>
         </div>
 
-        <!-- TOP PERFORMERS LEADERBOARD (NEW) -->
+        <!-- TOP PERFORMERS LEADERBOARD -->
         <div class="modern-card leaderboard-section">
             <div class="dash-card-header">
-                <div class="dash-card-title">
-                    <h3><i class="fa-solid fa-trophy" style="color:#f59e0b"></i> Top Performers</h3>
-                    <small>Highest avg. scores this term</small>
-                </div>
+                <div class="dash-card-title"><h3><i class="fa-solid fa-trophy" style="color:#f59e0b"></i> Top Performers</h3><small>Highest averages</small></div>
                 <button class="dash-link-btn" onclick="router('analysis')">View All <i class="fa-solid fa-arrow-right"></i></button>
             </div>
-            <div class="leaderboard-list" id="leaderboardList">
-                <!-- Populated by JS -->
-            </div>
+            <div class="leaderboard-list" id="leaderboardList"></div>
         </div>
 
-        <!-- QUICK ACTIONS (MODERN) -->
+        <!-- QUICK ACTIONS -->
         <div class="modern-card quickactions-section">
             <div class="dash-card-header">
-                <div class="dash-card-title">
-                    <h3>Quick Actions</h3>
-                    <small>Jump straight to a task</small>
-                </div>
+                <div class="dash-card-title"><h3>Quick Actions</h3><small>Jump to a task</small></div>
             </div>
             <div class="quickactions-grid">
                 <button class="quickaction-btn" onclick="router('intake')">
@@ -394,19 +353,19 @@
                 </button>
                 <button class="quickaction-btn" onclick="router('exams')">
                     <span class="qa-icon" style="--qa-c1:#E0E7FF; --qa-c2:#6366f1;"><i class="fa-solid fa-pen-to-square"></i></span>
-                    <span class="qa-label">Record Assessment</span>
+                    <span class="qa-label">Assessment</span>
                 </button>
                 <button class="quickaction-btn" onclick="router('reports')">
                     <span class="qa-icon" style="--qa-c1:#FEF3C7; --qa-c2:#f59e0b;"><i class="fa-solid fa-print"></i></span>
-                    <span class="qa-label">Generate Report</span>
+                    <span class="qa-label">Reports</span>
                 </button>
                 <button class="quickaction-btn" onclick="router('staff')">
                     <span class="qa-icon" style="--qa-c1:#FEE2E2; --qa-c2:#ef4444;"><i class="fa-solid fa-id-card"></i></span>
-                    <span class="qa-label">Manage Staff</span>
+                    <span class="qa-label">Staff</span>
                 </button>
                 <button class="quickaction-btn" onclick="router('exams')">
                     <span class="qa-icon" style="--qa-c1:#CCFBF1; --qa-c2:#14B8A6;"><i class="fa-solid fa-clipboard-check"></i></span>
-                    <span class="qa-label">Take Attendance</span>
+                    <span class="qa-label">Attendance</span>
                 </button>
                 <button class="quickaction-btn" onclick="router('settings')">
                     <span class="qa-icon" style="--qa-c1:#F1F5F9; --qa-c2:#64748b;"><i class="fa-solid fa-gear"></i></span>
@@ -415,13 +374,10 @@
             </div>
         </div>
 
-        <!-- ACTIVITY TIMELINE (ENHANCED) -->
+        <!-- ACTIVITY TIMELINE -->
         <div class="modern-card activity-section">
             <div class="dash-card-header">
-                <div class="dash-card-title">
-                    <h3>Activity Stream</h3>
-                    <small>Latest events across the system</small>
-                </div>
+                <div class="dash-card-title"><h3>Activity Stream</h3><small>Latest events</small></div>
                 <div class="dash-activity-filter" id="activityFilter">
                     <button data-filter="all" class="active">All</button>
                     <button data-filter="student">Admissions</button>
@@ -429,24 +385,22 @@
                     <button data-filter="staff">Staff</button>
                 </div>
             </div>
-            <div class="activity-list-modern" id="dashboardActivity">
-                <!-- Populated by JS -->
-            </div>
+            <div class="activity-list-modern" id="dashboardActivity"></div>
         </div>
 
     </div>
 </section>
 
 <!-- ANALYSIS SECTION -->
-<section id="analysis" class="view-section" aria-label="Analysis Section">
+<section id="analysis" class="view-section" aria-label="Academic Analytics Section">
 
     <div class="section-header-modern">
         <div class="header-info">
-            <h2>Academic Analytics</h2>
-            <p>Deep dive into curriculum performance, competency trends, and learner metrics across the institution.</p>
+            <h2><i class="fa-solid fa-chart-mixed" style="margin-right:8px; color:var(--primary)"></i>Academic Analytics</h2>
+            <p>Deep dive into curriculum performance, competency trends, and learner metrics.</p>
         </div>
         <div class="header-actions">
-            <select id="analysisGradeSelect" class="filter-select-modern" style="min-width: 150px;">
+            <select id="analysisGradeSelect" class="filter-select-modern">
                 <option value="all">Whole School</option>
                 <option value="Grade 7">Grade 7 (JSS)</option>
                 <option value="Grade 8">Grade 8 (JSS)</option>
@@ -454,24 +408,29 @@
                 <option value="Grade 4">Grade 4</option>
                 <option value="Grade 5">Grade 5</option>
                 <option value="Grade 6">Grade 6</option>
+                <option value="Grade 1">Grade 1</option>
+                <option value="Grade 2">Grade 2</option>
+                <option value="Grade 3">Grade 3</option>
             </select>
-            <select id="analysisMetricSelect" class="filter-select-modern" style="min-width: 130px;">
+            <select id="analysisMetricSelect" class="filter-select-modern">
                 <option value="avg">Average</option>
                 <option value="highest">Highest</option>
                 <option value="lowest">Needs Support</option>
             </select>
-            <button class="btn btn-secondary btn-sm" onclick="showToast('Report Generated')"><i class="fa-solid fa-download"></i> Export PDF</button>
+            <button class="dash-export-btn" onclick="showToast('Report Generated')">
+                <i class="fa-solid fa-download"></i> Export PDF
+            </button>
         </div>
     </div>
 
     <!-- ANALYSIS BENTO GRID -->
-    <div class="analysis-container modern-bento">
+    <div class="analysis-container">
 
         <!-- TOP ROW: SPARKLINE KPI CARDS -->
-        <div class="analysis-kpi-row kpi-sparkline-row">
+        <div class="analysis-kpi-row">
             <div class="modern-card kpi-spark-card" data-tone="primary">
                 <div class="ksc-top">
-                    <div class="ksc-icon"><i class="fa-solid fa-chart-line"></i></div>
+                    <div class="ksc-icon primary"><i class="fa-solid fa-chart-line"></i></div>
                     <div class="ksc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="anaClassAvgTrend">+0%</span></div>
                 </div>
                 <div class="ksc-body">
@@ -483,7 +442,7 @@
 
             <div class="modern-card kpi-spark-card" data-tone="success">
                 <div class="ksc-top">
-                    <div class="ksc-icon"><i class="fa-solid fa-star"></i></div>
+                    <div class="ksc-icon success"><i class="fa-solid fa-star"></i></div>
                     <div class="ksc-trend trend-up"><i class="fa-solid fa-arrow-trend-up"></i> <span id="anaExceedingTrend">+0</span></div>
                 </div>
                 <div class="ksc-body">
@@ -495,8 +454,8 @@
 
             <div class="modern-card kpi-spark-card" data-tone="warning">
                 <div class="ksc-top">
-                    <div class="ksc-icon"><i class="fa-solid fa-bullseye"></i></div>
-                    <div class="ksc-trend trend-down"><i class="fa-solid fa-arrow-trend-down"></i> <span id="anaApproachingTrend">-0</span></div>
+                    <div class="ksc-icon warning"><i class="fa-solid fa-bullseye"></i></div>
+                    <div class="ksc-trend trend-neutral"><i class="fa-solid fa-minus"></i> <span id="anaApproachingTrend">0</span></div>
                 </div>
                 <div class="ksc-body">
                     <div class="ksc-label">Meeting Expectation</div>
@@ -507,7 +466,7 @@
 
             <div class="modern-card kpi-spark-card" data-tone="danger">
                 <div class="ksc-top">
-                    <div class="ksc-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="ksc-icon danger"><i class="fa-solid fa-triangle-exclamation"></i></div>
                     <div class="ksc-trend trend-down"><i class="fa-solid fa-arrow-trend-down"></i> <span id="anaBelowTrend">-0</span></div>
                 </div>
                 <div class="ksc-body">
@@ -520,60 +479,51 @@
 
         <!-- ROW 2: SUBJECT BAR + POLAR COMPETENCY -->
         <div class="analysis-grid-visuals">
-            <div class="modern-card chart-card-lg">
-                <div class="card-header">
-                    <div>
+            <div class="modern-card bento-2col">
+                <div class="dash-card-header">
+                    <div class="dash-card-title">
                         <h3>Average Performance by Subject</h3>
-                        <small id="chartContextLabel" style="color: var(--text-muted);">Based on selected grade context</small>
+                        <small>Based on selected grade context</small>
                     </div>
                     <div class="chart-legend-pills">
                         <span class="lp-item lp-primary"><i></i> Score</span>
                         <span class="lp-item lp-muted"><i></i> Target 80%</span>
                     </div>
                 </div>
-                <div class="chart-wrapper-canvas">
-                    <canvas id="subjectPerformanceChart"></canvas>
-                </div>
+                <div class="dash-canvas-wrap"><canvas id="subjectPerformanceChart"></canvas></div>
             </div>
 
-            <div class="modern-card chart-card-sm">
-                <div class="card-header">
-                    <h3>Competency Mix</h3>
-                    <small style="color: var(--text-muted);">CBC distribution</small>
+            <div class="modern-card">
+                <div class="dash-card-header">
+                    <div class="dash-card-title">
+                        <h3>Competency Mix</h3>
+                        <small>CBC distribution</small>
+                    </div>
                 </div>
-                <div class="chart-wrapper-canvas">
-                    <canvas id="competencyDistributionChart"></canvas>
-                </div>
-                <div class="polar-legend" id="competencyLegend"></div>
+                <div class="dash-canvas-wrap" style="height: 220px;"><canvas id="competencyDistributionChart"></canvas></div>
+                <div class="competency-legend" id="competencyLegend" style="margin-top:12px;"></div>
             </div>
         </div>
 
         <!-- ROW 3: TREND + GENDER + HEATMAP -->
         <div class="analysis-grid-tertiary">
-            <div class="modern-card chart-card-md">
-                <div class="card-header">
-                    <h3>Performance Trend</h3>
-                    <small style="color: var(--text-muted);">Across recent assessments</small>
+            <div class="modern-card">
+                <div class="dash-card-header">
+                    <div class="dash-card-title"><h3>Performance Trend</h3><small>Recent assessments</small></div>
                 </div>
-                <div class="chart-wrapper-canvas">
-                    <canvas id="analysisTrendChart"></canvas>
-                </div>
+                <div class="dash-canvas-wrap"><canvas id="analysisTrendChart"></canvas></div>
             </div>
 
-            <div class="modern-card chart-card-md">
-                <div class="card-header">
-                    <h3>Gender Performance</h3>
-                    <small style="color: var(--text-muted);">Comparative averages</small>
+            <div class="modern-card">
+                <div class="dash-card-header">
+                    <div class="dash-card-title"><h3>Gender Performance</h3><small>Comparative averages</small></div>
                 </div>
-                <div class="chart-wrapper-canvas">
-                    <canvas id="genderComparisonChart"></canvas>
-                </div>
+                <div class="dash-canvas-wrap"><canvas id="genderComparisonChart"></canvas></div>
             </div>
 
-            <div class="modern-card chart-card-md heatmap-card">
-                <div class="card-header">
-                    <h3>Subject Mastery Heatmap</h3>
-                    <small style="color: var(--text-muted);">Per-grade mastery levels</small>
+            <div class="modern-card heatmap-card">
+                <div class="dash-card-header">
+                    <div class="dash-card-title"><h3>Mastery Heatmap</h3><small>Per-grade subject levels</small></div>
                 </div>
                 <div class="heatmap-wrapper" id="subjectHeatmap">
                     <div class="heatmap-empty">Loading heatmap...</div>
@@ -582,24 +532,23 @@
         </div>
 
         <!-- BOTTOM ROW: TOP PERFORMERS LEADERBOARD -->
-        <div class="modern-card table-card-lg leaderboard-modern">
-            <div class="card-header">
-                <h3><i class="fa-solid fa-trophy" style="color: gold; margin-right: 8px;"></i> Top Performers Leaderboard</h3>
-                <div class="leaderboard-filter" id="leaderboardFilter">
-                    <button class="lf-btn active" data-subject="overall">Overall</button>
-                    <button class="lf-btn" data-subject="Mathematics">Maths</button>
-                    <button class="lf-btn" data-subject="English">English</button>
-                    <button class="lf-btn" data-subject="Science">Science</button>
+        <div class="modern-card">
+            <div class="dash-card-header">
+                <div class="dash-card-title"><h3><i class="fa-solid fa-trophy" style="color:#f59e0b; margin-right:8px;"></i>Top Performers</h3><small>Highest averages</small></div>
+                <div class="dash-activity-filter" id="leaderboardFilter">
+                    <button class="active" data-subject="overall">Overall</button>
+                    <button data-subject="Mathematics">Maths</button>
+                    <button data-subject="English">English</button>
+                    <button data-subject="Science">Science</button>
                 </div>
             </div>
-            <div class="leaderboard-grid" id="analysisLeaderboard">
+            <div class="leaderboard-grid-modern" id="analysisLeaderboard">
                 <!-- JS injects modern leaderboard cards -->
             </div>
         </div>
 
     </div>
 </section>
-
 
             
 <!-- PROFILE SECTION (MODERN SPLIT LAYOUT) -->
@@ -4052,7 +4001,7 @@
     <div class="ai-fab" data-modal="aiAssistantModal" title="AI Assistant"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
 
     <!-- Sidebar Toggle Logic -->
-    <script src="script.js?v=2"></script>
+    <script src="script.js?v=4"></script>
     
 </body>
 </html>
