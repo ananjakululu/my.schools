@@ -19,193 +19,154 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ==========================================================================
-//   POSTGRESQL CONNECTION
+//   POSTGRESQL CONNECTION (TUNED FOR SLOW/REMOTE DATABASES)
 // ==========================================================================
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // Required for most cloud Postgres providers
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 30000,   // 30s to establish connection
+    idleTimeoutMillis: 30000,         // Keep idle connections longer
+    statement_timeout: 15000,         // 15s max per query
+    max: 5,                           // Small pool - don't overwhelm free tier DBs
+    allowExitOnIdle: true
 });
 
-// Helper to execute multiple statements
-const execMulti = async (sql) => {
-    const statements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
-    for (const stmt of statements) {
-        await pool.query(stmt);
+// ==========================================================================
+//   HELPER: Run queries in small batches (prevents pool exhaustion)
+// ==========================================================================
+const runInBatches = async (items, batchSize, executor) => {
+    for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        await Promise.all(batch.map(executor));
     }
 };
 
-// ==========================================================================
-//   DATABASE INITIALIZATION & MIGRATIONS
-// ==========================================================================
 const runMigration = async (sql, msg) => {
-    try { 
-        await pool.query(sql); 
-        console.log(`[DB] Migration: ${msg}`); 
+    try {
+        await pool.query(sql);
+        console.log(`  ✓ ${msg}`);
     } catch (e) { /* Column already exists, ignore */ }
 };
 
+// ==========================================================================
+//   DATABASE INITIALIZATION (BATCHED FOR SLOW CONNECTIONS)
+// ==========================================================================
 const initDatabase = async () => {
     console.log('[DB] Connecting to PostgreSQL...');
+    const startTime = Date.now();
 
-    // ── MIGRATIONS: Add new columns to existing databases ──
-    await runMigration(`ALTER TABLE users ADD COLUMN "department" TEXT DEFAULT 'General';`, 'Added department');
-    await runMigration(`ALTER TABLE users ADD COLUMN "isActive" INTEGER DEFAULT 1;`, 'Added isActive');
-    await runMigration(`ALTER TABLE users ADD COLUMN "failedLoginAttempts" INTEGER DEFAULT 0;`, 'Added failedLoginAttempts');
-    await runMigration(`ALTER TABLE users ADD COLUMN "lockedUntil" TEXT;`, 'Added lockedUntil');
-    await runMigration(`ALTER TABLE exams ADD COLUMN "grade" TEXT;`, 'Added grade to exams');
-    await runMigration(`ALTER TABLE exams ADD COLUMN "type" TEXT;`, 'Added type to exams');
-    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "type" TEXT;`, 'Added type to examSchedules');
-    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "grade" TEXT;`, 'Added grade to examSchedules');
-    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "status" TEXT DEFAULT 'open';`, 'Added status to examSchedules');
-    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "notes" TEXT;`, 'Added notes to examSchedules');
-    await runMigration(`ALTER TABLE "examSchedules" ADD COLUMN "createdAt" TEXT;`, 'Added createdAt to examSchedules');
+    // Test connection
+    try {
+        await pool.query('SELECT 1');
+        console.log(`[DB] ✓ Connected (${Date.now() - startTime}ms)`);
+    } catch (err) {
+        console.error(`[DB] ❌ Connection failed after ${Date.now() - startTime}ms`);
+        console.error('  Check your DATABASE_URL in .env file');
+        console.error('  Error:', err.message);
+        process.exit(1);
+    }
 
-    // ── SCHEMA: Create tables if they don't exist (fresh install) ──
-    await execMulti(`
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            role TEXT NOT NULL,
-            "passwordHash" TEXT NOT NULL,
-            "department" TEXT DEFAULT 'General',
-            "isActive" INTEGER DEFAULT 1,
-            "failedLoginAttempts" INTEGER DEFAULT 0,
-            "lockedUntil" TEXT
-        );
+    // ── MIGRATIONS (batches of 4 to avoid overwhelming the DB) ──
+    const migrations = [
+        [`ALTER TABLE users ADD COLUMN "department" TEXT DEFAULT 'General';`, 'users.department'],
+        [`ALTER TABLE users ADD COLUMN "isActive" INTEGER DEFAULT 1;`, 'users.isActive'],
+        [`ALTER TABLE users ADD COLUMN "failedLoginAttempts" INTEGER DEFAULT 0;`, 'users.failedLoginAttempts'],
+        [`ALTER TABLE users ADD COLUMN "lockedUntil" TEXT;`, 'users.lockedUntil'],
+        [`ALTER TABLE exams ADD COLUMN "grade" TEXT;`, 'exams.grade'],
+        [`ALTER TABLE exams ADD COLUMN "type" TEXT;`, 'exams.type'],
+        [`ALTER TABLE "examSchedules" ADD COLUMN "type" TEXT;`, 'examSchedules.type'],
+        [`ALTER TABLE "examSchedules" ADD COLUMN "grade" TEXT;`, 'examSchedules.grade'],
+        [`ALTER TABLE "examSchedules" ADD COLUMN "status" TEXT DEFAULT 'open';`, 'examSchedules.status'],
+        [`ALTER TABLE "examSchedules" ADD COLUMN "notes" TEXT;`, 'examSchedules.notes'],
+        [`ALTER TABLE "examSchedules" ADD COLUMN "createdAt" TEXT;`, 'examSchedules.createdAt'],
+        [`ALTER TABLE exams ADD COLUMN "name" TEXT;`, 'exams.name'],
+        [`ALTER TABLE exams ADD COLUMN "subjects" TEXT;`, 'exams.subjects'],
+        [`ALTER TABLE exams ADD COLUMN "scores" TEXT;`, 'exams.scores'],
+        [`ALTER TABLE exams ADD COLUMN "assessType" TEXT;`, 'exams.assessType'],
+        [`ALTER TABLE exams ADD COLUMN "status" TEXT DEFAULT 'draft';`, 'exams.status'],
+        [`ALTER TABLE exams ADD COLUMN "virtualId" TEXT;`, 'exams.virtualId'],
+        [`ALTER TABLE exams ADD COLUMN "startDate" TEXT;`, 'exams.startDate'],
+        [`ALTER TABLE exams ADD COLUMN "endDate" TEXT;`, 'exams.endDate'],
+        [`ALTER TABLE exams ADD COLUMN "notes" TEXT;`, 'exams.notes'],
+        [`ALTER TABLE exams ADD COLUMN "createdAt" TEXT;`, 'exams.createdAt'],
+    ];
 
-        CREATE TABLE IF NOT EXISTS "passwordResetTokens" (
-            id TEXT PRIMARY KEY,
-            "userId" TEXT NOT NULL,
-            "tokenHash" TEXT NOT NULL,
-            "expiresAt" TEXT NOT NULL,
-            used INTEGER DEFAULT 0,
-            "createdAt" TEXT DEFAULT NOW()::TEXT
-        );
+    console.log('[DB] Running migrations...');
+    const migStart = Date.now();
+    await runInBatches(migrations, 4, ([sql, msg]) => runMigration(sql, msg));
+    console.log(`[DB] ✓ Migrations done (${Date.now() - migStart}ms)`);
 
-        CREATE TABLE IF NOT EXISTS students (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            gender TEXT,
-            dob TEXT,
-            "idNumber" TEXT,
-            phone TEXT,
-            grade TEXT,
-            stream TEXT,
-            reg TEXT,
-            photo TEXT,
-            "guardianName" TEXT,
-            "guardianPhone" TEXT,
-            "guardianRel" TEXT,
-            "upiNumber" TEXT,
-            "prevSchool" TEXT,
-            "entryLevel" TEXT,
-            "yearCompleted" TEXT,
-            "nemisNumber" TEXT,
-            disability TEXT
-        );
+    // ── TABLE CREATION (sequential - safer, and overhead is network latency) ──
+    const tables = [
+        [`users`, `CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL,
+            "passwordHash" TEXT NOT NULL, "department" TEXT DEFAULT 'General',
+            "isActive" INTEGER DEFAULT 1, "failedLoginAttempts" INTEGER DEFAULT 0, "lockedUntil" TEXT
+        )`],
+        [`passwordResetTokens`, `CREATE TABLE IF NOT EXISTS "passwordResetTokens" (
+            id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "tokenHash" TEXT NOT NULL,
+            "expiresAt" TEXT NOT NULL, used INTEGER DEFAULT 0, "createdAt" TEXT DEFAULT NOW()::TEXT
+        )`],
+        [`students`, `CREATE TABLE IF NOT EXISTS students (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, gender TEXT, dob TEXT, "idNumber" TEXT,
+            phone TEXT, grade TEXT, stream TEXT, reg TEXT, photo TEXT, "guardianName" TEXT,
+            "guardianPhone" TEXT, "guardianRel" TEXT, "upiNumber" TEXT, "prevSchool" TEXT,
+            "entryLevel" TEXT, "yearCompleted" TEXT, "nemisNumber" TEXT, disability TEXT
+        )`],
+        [`staff`, `CREATE TABLE IF NOT EXISTS staff (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT, role TEXT, "department" TEXT,
+            phone TEXT, "tscNumber" TEXT, photo TEXT, subjects TEXT
+        )`],
+        [`exams`, `CREATE TABLE IF NOT EXISTS exams (
+            id TEXT PRIMARY KEY, "studentId" TEXT, "subjectId" TEXT, score INTEGER,
+            term TEXT, year TEXT, comments TEXT, "grade" TEXT, "type" TEXT,
+            name TEXT, subjects TEXT, scores TEXT, "assessType" TEXT, status TEXT DEFAULT 'draft',
+            "virtualId" TEXT, "startDate" TEXT, "endDate" TEXT, notes TEXT, "createdAt" TEXT
+        )`],
+        [`settings`, `CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), "schoolName" TEXT, motto TEXT, email TEXT,
+            phone TEXT, "schoolCode" TEXT, "academicYear" TEXT, "currentTerm" TEXT, level TEXT,
+            category TEXT, address TEXT, "hoiName" TEXT, "hoiTitle" TEXT, "hoiTsc" TEXT,
+            "hoiPhone" TEXT, "hoiEmail" TEXT, logo TEXT, stamp TEXT, "hoiSignature" TEXT, "ctSignature" TEXT
+        )`],
+        [`learningAreas`, `CREATE TABLE IF NOT EXISTS "learningAreas" (
+            id TEXT PRIMARY KEY, name TEXT, code TEXT, "applicableLevels" TEXT
+        )`],
+        [`notes`, `CREATE TABLE IF NOT EXISTS notes (
+            id TEXT PRIMARY KEY, title TEXT, content TEXT, "createdAt" TEXT, "createdBy" TEXT
+        )`],
+        [`timetable`, `CREATE TABLE IF NOT EXISTS timetable (
+            id TEXT PRIMARY KEY, day TEXT, time TEXT, subject TEXT, grade TEXT, teacher TEXT
+        )`],
+        [`examSchedules`, `CREATE TABLE IF NOT EXISTS "examSchedules" (
+            id TEXT PRIMARY KEY, name TEXT, "type" TEXT, grade TEXT, term TEXT, year TEXT,
+            "startDate" TEXT, "endDate" TEXT, subjects TEXT, status TEXT DEFAULT 'open',
+            notes TEXT, "createdAt" TEXT
+        )`],
+        [`auditLogs`, `CREATE TABLE IF NOT EXISTS "auditLogs" (
+            id SERIAL PRIMARY KEY, "timestamp" TEXT NOT NULL DEFAULT NOW()::TEXT,
+            "userId" TEXT, "userName" TEXT, action TEXT NOT NULL, details TEXT
+        )`]
+    ];
 
-        CREATE TABLE IF NOT EXISTS staff (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            email TEXT,
-            role TEXT,
-            "department" TEXT,
-            phone TEXT,
-            "tscNumber" TEXT,
-            photo TEXT,
-            subjects TEXT
-        );
+    console.log('[DB] Verifying tables...');
+    const tblStart = Date.now();
+    for (const [name, sql] of tables) {
+        try {
+            await pool.query(sql);
+            console.log(`  ✓ ${name}`);
+        } catch (err) {
+            console.error(`  ✗ ${name}: ${err.message}`);
+        }
+    }
+    console.log(`[DB] ✓ Tables done (${Date.now() - tblStart}ms)`);
 
-        CREATE TABLE IF NOT EXISTS exams (
-            id TEXT PRIMARY KEY,
-            "studentId" TEXT,
-            "subjectId" TEXT,
-            score INTEGER,
-            term TEXT,
-            year TEXT,
-            comments TEXT,
-            "grade" TEXT,
-            "type" TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            "schoolName" TEXT,
-            motto TEXT,
-            email TEXT,
-            phone TEXT,
-            "schoolCode" TEXT,
-            "academicYear" TEXT,
-            "currentTerm" TEXT,
-            level TEXT,
-            category TEXT,
-            address TEXT,
-            "hoiName" TEXT,
-            "hoiTitle" TEXT,
-            "hoiTsc" TEXT,
-            "hoiPhone" TEXT,
-            "hoiEmail" TEXT,
-            logo TEXT,
-            stamp TEXT,
-            "hoiSignature" TEXT,
-            "ctSignature" TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS "learningAreas" (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            code TEXT,
-            "applicableLevels" TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS notes (
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            content TEXT,
-            "createdAt" TEXT,
-            "createdBy" TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS timetable (
-            id TEXT PRIMARY KEY,
-            day TEXT,
-            time TEXT,
-            subject TEXT,
-            grade TEXT,
-            teacher TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS "examSchedules" (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            "type" TEXT,
-            grade TEXT,
-            term TEXT,
-            year TEXT,
-            "startDate" TEXT,
-            "endDate" TEXT,
-            subjects TEXT,
-            status TEXT DEFAULT 'open',
-            notes TEXT,
-            "createdAt" TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS "auditLogs" (
-            id SERIAL PRIMARY KEY,
-            "timestamp" TEXT NOT NULL DEFAULT NOW()::TEXT,
-            "userId" TEXT,
-            "userName" TEXT,
-            action TEXT NOT NULL,
-            details TEXT
-        );
-    `);
-
-    console.log('[DB] Tables verified.');
     await seedDatabase();
+    console.log(`[DB] ═══ Total init: ${Date.now() - startTime}ms ═══`);
 };
+
 // ==========================================================================
-//   SEEDING
+//   SEEDING (GENTLE ON SLOW CONNECTIONS)
 // ==========================================================================
 const DEFAULT_LEARNING_AREAS = [
     { id: 'pp_lang', name: 'Language Activities', code: 'PP-LA', applicableLevels: ['PP1', 'PP2'] },
@@ -229,31 +190,51 @@ const DEFAULT_LEARNING_AREAS = [
 ];
 
 const seedDatabase = async () => {
-    const seedUser = async (id, email, name, role, dept, pass) => {
-        const res = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (res.rows.length === 0) {
-            await pool.query('INSERT INTO users (id, email, name, role, "department", "passwordHash") VALUES ($1,$2,$3,$4,$5,$6)', [id, email, name, role, dept, bcrypt.hashSync(pass, 10)]);
-            console.log(`[DB] Seeded: ${name}`);
-        }
-    };
-    await seedUser('u1', 'admin@school.com', 'System Admin', 'admin', 'Administration', 'admin123');
-    await seedUser('u2', 'hoi@school.com', 'Head Teacher', 'hoi', 'Administration', 'hoi123');
-    await seedUser('u3', 'exam@school.com', 'Exam Officer', 'exam_officer', 'Exams', 'exam123');
+    console.log('[DB] Checking seed data...');
+    const seedStart = Date.now();
 
-    const areaCount = await pool.query('SELECT COUNT(*) as c FROM "learningAreas"');
-    if (areaCount.rows[0].c === 0) {
-        for (const i of DEFAULT_LEARNING_AREAS) {
-            await pool.query('INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ($1,$2,$3,$4)', [i.id, i.name, i.code, JSON.stringify(i.applicableLevels)]);
-        }
-        console.log('[DB] Seeded: Learning Areas');
-    }
+    // Single query to check all seed status at once
+    const [userCheck, areaCount, settingsCheck] = await Promise.all([
+        pool.query('SELECT email FROM users'),
+        pool.query('SELECT COUNT(*) as c FROM "learningAreas"'),
+        pool.query('SELECT id FROM settings WHERE id = 1')
+    ]);
+
+    const existingEmails = new Set(userCheck.rows.map(r => r.email));
     
-    const settingsExists = await pool.query('SELECT id FROM settings WHERE id = 1');
-    if (settingsExists.rows.length === 0) {
-        await pool.query(`INSERT INTO settings (id,"schoolName",motto,email,phone,"schoolCode","academicYear","currentTerm",level,category,address) VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, 
-            ["Tande Primary & JSS", "Excellence in Learning", "info@tande.ac.ke", "0712345678", "123456", "2024", "Term 1", "Primary & JSS", "Public", "P.O. Box 123, Nairobi"]);
-        console.log('[DB] Seeded: Settings');
+    // Seed users
+    const usersToSeed = [
+        { id: 'u1', email: 'admin@school.com', name: 'System Admin', role: 'admin', dept: 'Administration', pass: 'admin123' },
+        { id: 'u2', email: 'hoi@school.com', name: 'Head Teacher', role: 'hoi', dept: 'Administration', pass: 'hoi123' },
+        { id: 'u3', email: 'exam@school.com', name: 'Exam Officer', role: 'exam_officer', dept: 'Exams', pass: 'exam123' }
+    ].filter(u => !existingEmails.has(u.email));
+
+    for (const u of usersToSeed) {
+        await pool.query(
+            'INSERT INTO users (id, email, name, role, "department", "passwordHash") VALUES ($1,$2,$3,$4,$5,$6)',
+            [u.id, u.email, u.name, u.role, u.dept, bcrypt.hashSync(u.pass, 10)]
+        );
+        console.log(`  ✓ Seeded: ${u.name}`);
     }
+
+    // Seed learning areas as a SINGLE bulk insert (1 query instead of 18)
+    if (areaCount.rows[0].c === 0) {
+        const placeholders = DEFAULT_LEARNING_AREAS.map((_, i) => `($${i*4+1}, $${i*4+2}, $${i*4+3}, $${i*4+4})`).join(',');
+        const values = DEFAULT_LEARNING_AREAS.flatMap(a => [a.id, a.name, a.code, JSON.stringify(a.applicableLevels)]);
+        await pool.query(`INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ${placeholders}`, values);
+        console.log('  ✓ Seeded: 18 Learning Areas');
+    }
+
+    // Seed settings
+    if (settingsCheck.rows.length === 0) {
+        await pool.query(
+            `INSERT INTO settings (id,"schoolName",motto,email,phone,"schoolCode","academicYear","currentTerm",level,category,address) VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            ["Tande Primary & JSS", "Excellence in Learning", "info@tande.ac.ke", "0712345678", "123456", "2024", "Term 1", "Primary & JSS", "Public", "P.O. Box 123, Nairobi"]
+        );
+        console.log('  ✓ Seeded: Settings');
+    }
+
+    console.log(`[DB] ✓ Seeding done (${Date.now() - seedStart}ms)`);
 };
 
 // ==========================================================================
@@ -263,7 +244,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan('dev'));
 
 // ==========================================================================
-//   CORS — NUCLEAR OPTION: Allow everything during development
+//   CORS
 // ==========================================================================
 app.use((req, res, next) => {
     const origin = req.headers.origin || 'no-origin';
@@ -274,12 +255,7 @@ app.use((req, res, next) => {
     res.header('Access-Control-Max-Age', '3600');
 
     if (req.method === 'OPTIONS') {
-        console.log(`[CORS] Preflight from ${origin} → 204`);
         return res.status(204).end();
-    }
-
-    if (origin !== 'no-origin' && origin !== `http://localhost:${PORT}` && origin !== `http://127.0.0.1:${PORT}`) {
-        console.log(`[CORS] ${req.method} from ${origin} → ${req.path}`);
     }
     next();
 });
@@ -306,7 +282,7 @@ const validatePasswordStrength = (password) => {
 
 const logAction = async (userId, userName, action, details) => {
     try { await pool.query('INSERT INTO "auditLogs" ("userId", "userName", action, details) VALUES ($1,$2,$3,$4)', [userId, userName, action, details]); }
-    catch (e) { console.error("Log fail:", e); }
+    catch (e) { /* silent */ }
 };
 
 const authenticateToken = (req, res, next) => {
@@ -364,16 +340,9 @@ app.post('/api/login', rateLimit({ windowMs: 60 * 60 * 1000, max: 15 }), async (
         
     } catch (err) { 
         console.error('[LOGIN ERROR]', err); 
-        
-        // CHECK IF IT'S A NETWORK / NO INTERNET ERROR
         if (['ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET'].includes(err.code)) {
-            return res.status(503).json({ 
-                success: false, 
-                message: 'No internet connection. Cannot reach the database.' 
-            });
+            return res.status(503).json({ success: false, message: 'No internet connection. Cannot reach the database.' });
         }
-        
-        // FALLBACK FOR OTHER ERRORS (like syntax errors, etc)
         res.status(500).json({ error: 'Login failed.' }); 
     }
 });
@@ -460,7 +429,7 @@ app.get('/api/teacher/assignments', authenticateToken, requireRole('teacher'), a
 });
 
 // ==========================================================================
-//   RESOURCE ROUTES (Using Postgres Transactions)
+//   RESOURCE ROUTES
 // ==========================================================================
 app.get('/students', authenticateToken, async (req, res) => {
     const res2 = await pool.query('SELECT * FROM students');
@@ -512,21 +481,35 @@ app.get('/exams', authenticateToken, async (req, res) => {
 });
 
 app.post('/exams', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
-    const cols = ['id','studentId','subjectId','score','term','year','comments','grade','type'];
+    const cols = [
+        'id', 'studentId', 'subjectId', 'score', 'term', 'year', 'comments', 'grade', 'type',
+        'name', 'subjects', 'scores', 'assessType', 'status', 'virtualId',
+        'startDate', 'endDate', 'notes', 'createdAt'
+    ];
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query('DELETE FROM exams');
         for (const i of req.body) {
-            const values = cols.map(c => { const val = i[c]; return (val === null || val === undefined) ? '' : (typeof val === 'object' ? JSON.stringify(val) : val); });
+            const values = cols.map(c => {
+                const val = i[c];
+                if (val === null || val === undefined) return null;
+                if (typeof val === 'object') return JSON.stringify(val);
+                return val;
+            });
             const placeholders = values.map((_, idx) => `$${idx + 1}`).join(',');
             await client.query(`INSERT INTO exams ("${cols.join('","')}") VALUES (${placeholders})`, values);
         }
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'UPDATE_EXAMS', `${req.body.length} records`);
         res.json(req.body);
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'DB Error', details: err.message }); }
-    finally { client.release(); }
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[EXAMS SAVE ERROR]', err);
+        res.status(500).json({ error: 'DB Error', details: err.message });
+    } finally {
+        client.release();
+    }
 });
 
 app.get('/settings', authenticateToken, async (req, res) => {
@@ -566,14 +549,13 @@ app.post('/learningAreas', authenticateToken, async (req, res) => {
     } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'DB Error', details: err.message }); }
     finally { client.release(); }
 });
+
 app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi', 'admin'), async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query('DELETE FROM "examSchedules"');
-        
         const cols = ['id','name','type','grade','term','year','startDate','endDate','subjects','status','notes','createdAt'];
-        
         for (const item of req.body) {
             const values = cols.map(c => {
                 const val = item[c];
@@ -582,12 +564,8 @@ app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi',
                 return val;
             });
             const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
-            await client.query(
-                `INSERT INTO "examSchedules" ("${cols.join('","')}") VALUES (${placeholders})`,
-                values
-            );
+            await client.query(`INSERT INTO "examSchedules" ("${cols.join('","')}") VALUES (${placeholders})`, values);
         }
-        
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'UPDATE_EXAM_SCHEDULES', `${req.body.length} schedules`);
         res.json(req.body);
@@ -601,16 +579,13 @@ app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi',
 });
 
 // ==========================================================================
-//   NEW ENDPOINTS - Individual CRUD & Sync
+//   INDIVIDUAL CRUD & SYNC
 // ==========================================================================
-
-// --- INDIVIDUAL STUDENT OPERATIONS ---
 app.post('/api/student', authenticateToken, requireRole('hoi', 'admin'), async (req, res) => {
     const s = req.body;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        
         if (!s.reg || s.reg.trim() === '') {
             const year = new Date().getFullYear().toString().slice(-2);
             const grade = s.grade || 'UNKNOWN';
@@ -619,59 +594,31 @@ app.post('/api/student', authenticateToken, requireRole('hoi', 'admin'), async (
             const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
             s.reg = `${gCode}/${year}/${seq}`;
         }
-        
         if (!s.id) s.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-        
-        const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo',
-                      'guardianName','guardianPhone','guardianRel','upiNumber','prevSchool',
-                      'entryLevel','yearCompleted','nemisNumber','disability'];
-        
-        const values = cols.map(c => {
-            const val = s[c];
-            if (val === undefined) return null;
-            if (val === null) return null;
-            if (typeof val === 'object') return JSON.stringify(val);
-            return val;
-        });
-        
+        const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo','guardianName','guardianPhone','guardianRel','upiNumber','prevSchool','entryLevel','yearCompleted','nemisNumber','disability'];
+        const values = cols.map(c => { const val = s[c]; if (val === undefined || val === null) return null; if (typeof val === 'object') return JSON.stringify(val); return val; });
         const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
         const updateSet = cols.slice(1).map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
-        
-        await client.query(
-            `INSERT INTO students ("${cols.join('","')}") VALUES (${placeholders}) 
-             ON CONFLICT (id) DO UPDATE SET ${updateSet}`,
-            values
-        );
-        
+        await client.query(`INSERT INTO students ("${cols.join('","')}") VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, values);
         await client.query('COMMIT');
         res.json(s);
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[STUDENT SAVE ERROR]', err);
         res.status(500).json({ error: 'Failed to save student', details: err.message });
-    } finally {
-        client.release();
-    }
+    } finally { client.release(); }
 });
 
-// --- BATCH STUDENT UPSERT ---
 app.post('/api/students/sync', authenticateToken, requireRole('hoi', 'admin'), async (req, res) => {
     const students = req.body;
     if (!Array.isArray(students)) return res.status(400).json({ error: 'Expected array' });
-    
     const client = await pool.connect();
     let saved = 0;
-    
     try {
         await client.query('BEGIN');
-        
-        const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo',
-                      'guardianName','guardianPhone','guardianRel','upiNumber','prevSchool',
-                      'entryLevel','yearCompleted','nemisNumber','disability'];
-        
+        const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo','guardianName','guardianPhone','guardianRel','upiNumber','prevSchool','entryLevel','yearCompleted','nemisNumber','disability'];
         for (const s of students) {
             if (!s.id || !s.name) continue;
-            
             if (!s.reg || s.reg.trim() === '') {
                 const year = new Date().getFullYear().toString().slice(-2);
                 const grade = s.grade || 'UNKNOWN';
@@ -680,98 +627,50 @@ app.post('/api/students/sync', authenticateToken, requireRole('hoi', 'admin'), a
                 const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
                 s.reg = `${gCode}/${year}/${seq}`;
             }
-            
-            const values = cols.map(c => {
-                const val = s[c];
-                if (val === undefined || val === '') return null;
-                if (val === null) return null;
-                if (typeof val === 'object') return JSON.stringify(val);
-                return val;
-            });
-            
+            const values = cols.map(c => { const val = s[c]; if (val === undefined || val === '') return null; if (val === null) return null; if (typeof val === 'object') return JSON.stringify(val); return val; });
             const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
             const updateSet = cols.slice(1).map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
-            
-            const result = await client.query(
-                `INSERT INTO students ("${cols.join('","')}") VALUES (${placeholders}) 
-                 ON CONFLICT (id) DO UPDATE SET ${updateSet}`,
-                values
-            );
-            
+            const result = await client.query(`INSERT INTO students ("${cols.join('","')}") VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, values);
             if (result.rowCount > 0) saved++;
         }
-        
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'SYNC_STUDENTS', `${saved} synced`);
         res.json({ success: true, saved, total: students.length });
-        
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[SYNC ERROR]', err);
         res.status(500).json({ error: 'Sync failed', details: err.message });
-    } finally {
-        client.release();
-    }
+    } finally { client.release(); }
 });
 
-// --- INDIVIDUAL EXAM UPSERT ---
 app.post('/api/exam', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
     const exam = req.body;
     if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     try {
         await pool.query(`
-            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (id) DO UPDATE SET 
-                "studentId" = EXCLUDED."studentId",
-                "subjectId" = EXCLUDED."subjectId",
-                score = EXCLUDED.score,
-                term = EXCLUDED.term,
-                year = EXCLUDED.year,
-                comments = EXCLUDED.comments,
-                grade = EXCLUDED.grade,
-                type = EXCLUDED.type
-        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments, exam.grade || null, exam.type || null]);
+            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type, name, subjects, scores, "assessType", status, "virtualId", "startDate", "endDate", notes, "createdAt")
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+            ON CONFLICT (id) DO UPDATE SET "studentId"=EXCLUDED."studentId", "subjectId"=EXCLUDED."subjectId", score=EXCLUDED.score, term=EXCLUDED.term, year=EXCLUDED.year, comments=EXCLUDED.comments, grade=EXCLUDED.grade, type=EXCLUDED.type, name=EXCLUDED.name, subjects=EXCLUDED.subjects, scores=EXCLUDED.scores, "assessType"=EXCLUDED."assessType", status=EXCLUDED.status, "virtualId"=EXCLUDED."virtualId", "startDate"=EXCLUDED."startDate", "endDate"=EXCLUDED."endDate", notes=EXCLUDED.notes, "createdAt"=EXCLUDED."createdAt"
+        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments, exam.grade||null, exam.type||null, exam.name||null, exam.subjects?JSON.stringify(exam.subjects):null, exam.scores?JSON.stringify(exam.scores):null, exam.assessType||null, exam.status||'draft', exam.virtualId||null, exam.startDate||null, exam.endDate||null, exam.notes||null, exam.createdAt||null]);
         res.json(exam);
-    } catch (err) {
-        console.error('[EXAM SAVE ERROR]', err);
-        res.status(500).json({ error: 'Failed to save exam' });
-    }
+    } catch (err) { console.error('[EXAM SAVE ERROR]', err); res.status(500).json({ error: 'Failed to save exam' }); }
 });
-// --- BATCH EXAM SYNC ---
+
 app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
     const exams = req.body;
     if (!Array.isArray(exams)) return res.status(400).json({ error: 'Expected array' });
-    
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        
         for (const exam of exams) {
             if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-            if (!exam.studentId || !exam.subjectId) continue; 
-            
-            // In POST /api/exams/sync, change the INSERT to include type:
-await client.query(`
-    INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    ON CONFLICT (id) DO UPDATE SET 
-        score = EXCLUDED.score,
-        term = EXCLUDED.term,
-        comments = EXCLUDED.comments,
-        grade = EXCLUDED.grade,
-        type = EXCLUDED.type
-`, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments || null, exam.grade || null, exam.type || null]);
+            if (!exam.studentId || !exam.subjectId) continue;
+            await client.query(`INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO UPDATE SET score=EXCLUDED.score, term=EXCLUDED.term, comments=EXCLUDED.comments, grade=EXCLUDED.grade, type=EXCLUDED.type`, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments||null, exam.grade||null, exam.type||null]);
         }
-        
         await client.query('COMMIT');
         res.json({ success: true, total: exams.length });
-    } catch (err) {
-        await client.query('ROLLBACK');
-        res.status(500).json({ error: 'Exam sync failed' });
-    } finally {
-        client.release();
-    }
+    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'Exam sync failed' }); }
+    finally { client.release(); }
 });
 
 // ==========================================================================
@@ -784,76 +683,114 @@ app.get('/api/db', authenticateToken, requireRole('admin', 'hoi', 'teacher', 'ex
             pool.query('SELECT * FROM settings WHERE id=1'), pool.query('SELECT * FROM "learningAreas"'),
             pool.query('SELECT * FROM notes'), pool.query('SELECT * FROM timetable'), pool.query('SELECT * FROM "examSchedules"')
         ]);
-        res.json({
-            students: students.rows, 
-            staff: staff.rows, 
-            exams: exams.rows, 
-            settings: settings.rows[0] || {},
-            learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels) })),
-            notes: notes.rows, 
-            timetable: timetable.rows, 
-            examSchedules: examSchedules.rows
-        });
+        const parsedExams = exams.rows.map(e => { try { e.subjects = e.subjects ? JSON.parse(e.subjects) : []; } catch (_) { e.subjects = []; } try { e.scores = e.scores ? JSON.parse(e.scores) : {}; } catch (_) { e.scores = {}; } return e; });
+        res.json({ students: students.rows, staff: staff.rows, exams: parsedExams, settings: settings.rows[0] || {}, learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels) })), notes: notes.rows, timetable: timetable.rows, examSchedules: examSchedules.rows });
         await logAction(req.user.id, req.user.name, 'BACKUP_DB', 'Full backup downloaded');
-    } catch (err) { 
-        console.error('[BACKUP ERROR]', err);
-        res.status(500).json({ error: 'Backup failed' }); 
-    }
+    } catch (err) { console.error('[BACKUP ERROR]', err); res.status(500).json({ error: 'Backup failed' }); }
 });
 
 app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_officer', 'teacher'), async (req, res) => {
+    
+    // HELPER: Remove duplicate IDs from the backup file
+    const dedupe = (arr) => {
+        if (!Array.isArray(arr)) return arr;
+        const seen = new Set();
+        return arr.filter(item => {
+            if (!item.id) return false; 
+            if (seen.has(item.id)) return false; 
+            seen.add(item.id);
+            return true;
+        });
+    };
+
+    // CHUNKED BULK INSERT (Prevents 48,000 parameter crash)
     const safeReplace = async (client, table, data, columns) => {
-        if (!data || !Array.isArray(data)) return;
+        if (!data || !Array.isArray(data) || data.length === 0) return;
         await client.query(`DELETE FROM "${table}"`);
-        for (const r of data) {
-            const values = columns.map(c => { 
-                const val = r[c]; 
-                if (val === null || val === undefined) return null; 
-                if (typeof val === 'object') return JSON.stringify(val); 
-                return val; 
-            });
-            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(',');
-            await client.query(`INSERT INTO "${table}" ("${columns.join('","')}") VALUES (${placeholders})`, values);
+        
+        const CHUNK_SIZE = 500; // Send 500 rows at a time
+        
+        for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+            const chunk = data.slice(i, i + CHUNK_SIZE);
+            const allPlaceholders = [];
+            const allValues = [];
+            let paramIndex = 1;
+            
+            for (const r of chunk) {
+                const rowPlaceholders = [];
+                for (const c of columns) {
+                    let val = r[c];
+                    if (val === null || val === undefined) val = null;
+                    else if (typeof val === 'object') val = JSON.stringify(val);
+                    
+                    allValues.push(val);
+                    rowPlaceholders.push(`$${paramIndex++}`);
+                }
+                allPlaceholders.push(`(${rowPlaceholders.join(',')})`);
+            }
+            
+            const updateSet = columns.slice(1).map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
+            const sql = `INSERT INTO "${table}" ("${columns.join('","')}") VALUES ${allPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET ${updateSet}`;
+            
+            await client.query(sql, allValues);
         }
     };
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const { students, staff, exams, settings, learningAreas, notes, timetable, examSchedules } = req.body;
+        let { students, staff, exams, settings, learningAreas, notes, timetable, examSchedules } = req.body;
         
-        if (learningAreas && Array.isArray(learningAreas)) {
+        // CLEAN THE DATA (Remove duplicates)
+        students = dedupe(students);
+        staff = dedupe(staff);
+        exams = dedupe(exams);
+        learningAreas = dedupe(learningAreas);
+        notes = dedupe(notes);
+        timetable = dedupe(timetable);
+        examSchedules = dedupe(examSchedules);
+        
+        // BULK INSERT LEARNING AREAS
+        if (learningAreas && learningAreas.length > 0) {
             await client.query('DELETE FROM "learningAreas"');
+            const laPlaceholders = [];
+            const laValues = [];
+            let laIdx = 1;
             for (const i of learningAreas) {
-                await client.query('INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ($1,$2,$3,$4)', [i.id, i.name, i.code, JSON.stringify(i.applicableLevels)]);
+                laValues.push(i.id, i.name, i.code, JSON.stringify(i.applicableLevels));
+                laPlaceholders.push(`($${laIdx++}, $${laIdx++}, $${laIdx++}, $${laIdx++})`);
             }
+            await client.query(
+                `INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ${laPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, code=EXCLUDED.code, "applicableLevels"=EXCLUDED."applicableLevels"`, 
+                laValues
+            ); 
         }
+
         if (settings) {
             const s = { ...settings, id: 1 };
             const c = ['id','schoolName','motto','email','phone','schoolCode','academicYear','currentTerm','level','category','address','hoiName','hoiTitle','hoiTsc','hoiPhone','hoiEmail','logo','stamp','hoiSignature','ctSignature'];
             const colsQuoted = c.map(x => `"${x}"`);
             const placeholders = c.map((_, i) => `$${i + 1}`).join(', ');
             const updateSet = c.slice(1).map(x => `"${x}" = EXCLUDED."${x}"`).join(', ');
-            await client.query(`INSERT INTO settings (${colsQuoted.join(', ')}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, c.map(x => s[x] ?? ''));
+            await pool.query(`INSERT INTO settings (${colsQuoted.join(', ')}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, c.map(x => s[x] ?? ''));
         }
         
         await safeReplace(client, 'students', students, ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo','guardianName','guardianPhone','guardianRel','upiNumber','prevSchool','entryLevel','yearCompleted','nemisNumber','disability']);
         await safeReplace(client, 'staff', staff, ['id','name','email','role','department','phone','tscNumber','photo','subjects']);
-        // ✅ Added 'type' and 'grade' to exams
-        await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments','type','grade']);
+        await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments','grade','type','name','subjects','scores','assessType','status','virtualId','startDate','endDate','notes','createdAt']);
         await safeReplace(client, 'notes', notes, ['id','title','content','createdAt','createdBy']);
         await safeReplace(client, 'timetable', timetable, ['id','day','time','subject','grade','teacher']);
-        // ✅ Fixed: changed 'grades' to 'grade', added 'type','status','notes','createdAt'
         await safeReplace(client, 'examSchedules', examSchedules, ['id','name','type','grade','term','year','startDate','endDate','subjects','status','notes','createdAt']);
         
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'RESTORE_DB', 'Database restored from backup');
         res.json({ success: true, message: 'Database restored successfully!' });
     } catch (err) { 
-        await client.query('ROLLBACK');
-        console.error('[RESTORE ERROR]', err);
+        await client.query('ROLLBACK'); 
+        console.error('[RESTORE ERROR]', err); 
         res.status(500).json({ error: 'Restore failed.', details: err.message }); 
-    } finally { client.release(); }
+    }
+    finally { client.release(); }
 });
 
 // ==========================================================================
@@ -876,105 +813,74 @@ app.post('/api/repair-data', authenticateToken, requireRole('admin'), async (req
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        
-        await client.query(`
-            UPDATE students SET 
-                grade = NULLIF(grade, ''),
-                stream = NULLIF(stream, ''),
-                gender = NULLIF(gender, ''),
-                "idNumber" = NULLIF("idNumber", ''),
-                phone = NULLIF(phone, ''),
-                reg = NULLIF(reg, ''),
-                "guardianName" = NULLIF("guardianName", ''),
-                "guardianPhone" = NULLIF("guardianPhone", ''),
-                "nemisNumber" = NULLIF("nemisNumber", ''),
-                "upiNumber" = NULLIF("upiNumber", '')
-        `);
-        
-        const missingReg = await client.query(`
-            SELECT id, grade FROM students 
-            WHERE (reg IS NULL OR reg = '') AND grade IS NOT NULL AND grade != ''
-        `);
-        
-        for (const s of missingReg.rows) {
-            const year = new Date().getFullYear().toString().slice(-2);
-            const gCode = s.grade.replace(/\s/g, '');
-            const countRes = await client.query('SELECT COUNT(*) as c FROM students WHERE grade = $1', [s.grade]);
-            const seq = String((countRes.rows[0].c || 0) + 1).padStart(3, '0');
-            await client.query('UPDATE students SET reg = $1 WHERE id = $2', [`${gCode}/${year}/${seq}`, s.id]);
+        await client.query(`UPDATE students SET grade=NULLIF(grade,''), stream=NULLIF(stream,''), gender=NULLIF(gender,''), "idNumber"=NULLIF("idNumber",''), phone=NULLIF(phone,''), reg=NULLIF(reg,''), "guardianName"=NULLIF("guardianName",''), "guardianPhone"=NULLIF("guardianPhone",''), "nemisNumber"=NULLIF("nemisNumber",''), "upiNumber"=NULLIF("upiNumber",'')`);
+        const missingReg = await client.query(`SELECT id, grade FROM students WHERE (reg IS NULL OR reg = '') AND grade IS NOT NULL AND grade != ''`);
+        const year = new Date().getFullYear().toString().slice(-2);
+        for (const row of missingReg.rows) {
+            const gCode = row.grade.replace(/\s/g, '');
+            const countRes = await client.query('SELECT COUNT(*) as c FROM students WHERE grade = $1 AND id <= $2', [row.grade, row.id]);
+            const seq = String(countRes.rows[0].c).padStart(3, '0');
+            await client.query('UPDATE students SET reg = $1 WHERE id = $2', [`${gCode}/${year}/${seq}`, row.id]);
         }
-        
-        const orphanResult = await client.query(`DELETE FROM exams WHERE "studentId" NOT IN (SELECT id FROM students)`);
-        
         await client.query('COMMIT');
-        await logAction(req.user.id, req.user.name, 'REPAIR_DATA', `Reg: ${missingReg.rowCount}, Orphans: ${orphanResult.rowCount}`);
-        
-        res.json({ 
-            success: true, 
-            generatedRegNumbers: missingReg.rowCount,
-            deletedOrphanExams: orphanResult.rowCount
-        });
-        
+        await logAction(req.user.id, req.user.name, 'REPAIR_DATA', `Fixed ${missingReg.rowCount} records`);
+        res.json({ success: true, fixed: missingReg.rowCount });
     } catch (err) {
         await client.query('ROLLBACK');
+        console.error('[REPAIR ERROR]', err);
         res.status(500).json({ error: 'Repair failed', details: err.message });
-    } finally {
-        client.release();
-    }
-});
-
-app.get('/api/logs', authenticateToken, requireRole('admin'), async (req, res) => {
-    res.json((await pool.query('SELECT * FROM "auditLogs" ORDER BY "timestamp" DESC LIMIT 100')).rows);
+    } finally { client.release(); }
 });
 
 // ==========================================================================
-//   AI CHAT
+//   START SERVER (WITH REAL QR CODE)
 // ==========================================================================
-app.post('/api/ai/chat', authenticateToken, async (req, res) => {
-    if (!OPENAI_API_KEY) return res.status(500).json({ error: 'AI Service Unconfigured' });
-    try {
-        const r = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-            body: JSON.stringify({ model: 'gpt-3.5-turbo', messages: [{ role: 'system', content: `Assistant for ${req.body.context?.schoolName || 'the school'}.` }, { role: 'user', content: req.body.query }] })
-        });
-        if (!r.ok) throw new Error('AI API Error');
-        res.json({ reply: (await r.json()).choices[0].message.content });
-    } catch (err) { res.status(500).json({ error: 'AI request failed' }); }
-});
+const os = require('os');
+const qrcode = require('qrcode-terminal'); // Added for QR generation
 
-// ==========================================================================
-//   EMERGENCY RESET
-// ==========================================================================
-app.get('/api/reset-admin', async (req, res) => {
-    try {
-        const exists = (await pool.query('SELECT id FROM users WHERE id = $1', ['u1'])).rows[0];
-        if (exists) {
-            await pool.query('UPDATE users SET "passwordHash" = $1, "failedLoginAttempts" = 0, "lockedUntil" = NULL WHERE id = $2', [bcrypt.hashSync('admin123', 10), 'u1']);
-        } else {
-            await pool.query('INSERT INTO users (id, email, name, role, "department", "passwordHash") VALUES ($1,$2,$3,$4,$5,$6)', ['u1', 'admin@school.com', 'System Admin', 'admin', 'Administration', bcrypt.hashSync('admin123', 10)]);
-        }
-        res.json({ success: true, message: 'Admin reset.', note: 'admin@school.com / admin123' });
-    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
-});
-
-// ==========================================================================
-//   START SERVER
-// ==========================================================================
-initDatabase().then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
-        const nets = require('os').networkInterfaces();
-        let ip = '???';
-        for (const name of Object.keys(nets)) {
-            for (const n of nets[name]) {
-                if (n.family === 'IPv4' && !n.internal) { ip = n.address; break; }
+const getNetworkIPs = () => {
+    const interfaces = os.networkInterfaces();
+    const ips = [];
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                ips.push({ name, ip: iface.address });
             }
-            if (ip !== '???') break;
         }
-        console.log(`\n  ✅ Local:  http://localhost:${PORT}`);
-        console.log(`  ✅ Phone:  http://${ip}:${PORT}\n`);
+    }
+    return ips;
+};
+
+initDatabase().then(() => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
+        const networkIPs = getNetworkIPs();
+        
+        console.log('\n✅ Local:   http://localhost:' + PORT);
+
+        if (networkIPs.length > 0) {
+            const url = 'http://' + networkIPs[0].ip + ':' + PORT;
+            console.log('✅ Network: ' + url);
+            
+            console.log('\n📱 Point your phone camera at this QR code:\n');
+            
+            // This draws the actual scannable QR code in your terminal
+            qrcode.generate(url, { small: true }, function(qr) {
+                console.log(qr);
+                console.log('   ➡️  ' + url + '\n');
+            });
+        }
+    });
+
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`\n❌ Port ${PORT} is already in use.`);
+        } else {
+            console.error('\n❌ Server error:', err.message);
+        }
+        process.exit(1);
     });
 }).catch(err => {
-    console.error('[FATAL] Database connection failed:', err);
+    console.error('\n[FATAL] Database initialization failed:');
+    console.error('  Message:', err.message);
     process.exit(1);
 });
