@@ -836,7 +836,7 @@ app.post('/api/repair-data', authenticateToken, requireRole('admin'), async (req
 //   START SERVER (WITH REAL QR CODE)
 // ==========================================================================
 const os = require('os');
-const qrcode = require('qrcode-terminal'); // Added for QR generation
+ // Added for QR generation
 
 const getNetworkIPs = () => {
     const interfaces = os.networkInterfaces();
@@ -861,13 +861,9 @@ initDatabase().then(() => {
             const url = 'http://' + networkIPs[0].ip + ':' + PORT;
             console.log('✅ Network: ' + url);
             
-            console.log('\n📱 Point your phone camera at this QR code:\n');
+            //console.log('\n📱 Point your phone camera at this QR code:\n');
             
-            // This draws the actual scannable QR code in your terminal
-            qrcode.generate(url, { small: true }, function(qr) {
-                console.log(qr);
-                console.log('   ➡️  ' + url + '\n');
-            });
+            
         }
     });
 
