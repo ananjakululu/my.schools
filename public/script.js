@@ -10250,11 +10250,34 @@ function updateHeaderAndDashboard() {
 async function exportBackup() { 
     try {
         showToast('Fetching database backup...');
-        const token = localStorage.getItem('token'); 
+        
+        // SUPER SMART TOKEN FINDER: Checks all possible pockets
+        let token = localStorage.getItem('token') || localStorage.getItem('authToken') || localStorage.getItem('jwt');
+        
+        // If still not found, check if it's hidden inside a 'user' object
+        if (!token) {
+            try {
+                const userStr = localStorage.getItem('user') || localStorage.getItem('currentUser');
+                if (userStr) {
+                    const userObj = JSON.parse(userStr);
+                    if (userObj.token) token = userObj.token;
+                }
+            } catch(e) {}
+        }
+
+        if (!token) {
+            showToast('Error: You are not logged in. Please log out and log back in.', 'error');
+            return;
+        }
+
         const res = await fetch('/api/db', {
             headers: { 'Authorization': 'Bearer ' + token }
         });
-        if (!res.ok) throw new Error('Failed to fetch');
+        
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.error || 'Server blocked the request');
+        }
         
         const data = await res.json();
         const dataStr = JSON.stringify(data, null, 2); 
