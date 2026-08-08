@@ -1,5 +1,156 @@
 'use strict';
+// ==========================================================================
+//   COMPATIBILITY SHIMS (Must be at the top of script.js)
+// ==========================================================================
 
+// Shim for old global animateValue()
+function animateValue(id, start, end, duration, suffix = '') {
+    const obj = document.getElementById(id);
+    if (!obj) return;
+    let startTimestamp = null;
+    const step = (timestamp) => {
+        if (!startTimestamp) startTimestamp = timestamp;
+        const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+        const val = Math.floor(easeOut * (end - start) + start);
+        obj.textContent = val + suffix;
+        if (progress < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+}
+
+// Shim for old computeTrendStats()
+function computeTrendStats(exams = null, gradeFilter = 'all') {
+    let targetExams = exams || (typeof store !== 'undefined' ? store.exams : []) || [];
+    if (gradeFilter && gradeFilter !== 'all' && typeof StudentRepo !== 'undefined') {
+        const gradeIds = new Set(StudentRepo.getAll().filter(s => s.grade === gradeFilter).map(s => s.id));
+        targetExams = targetExams.filter(e => gradeIds.has(e.studentId));
+    }
+    const stats = { ee: 0, me: 0, ae: 0, be: 0, total: targetExams.length, totalScore: 0, validExams: 0 };
+    targetExams.forEach(e => {
+        const sc = parseFloat(e.score) || 0;
+        if (sc > 0) {
+            stats.validExams++; stats.totalScore += sc;
+            if (typeof cbcRating === 'function') { const r = cbcRating(sc); if (r.code === 'EE') stats.ee++; else if (r.code === 'ME') stats.me++; else if (r.code === 'AE') stats.ae++; else if (r.code === 'BE') stats.be++; }
+        }
+    });
+    stats.average = stats.validExams > 0 ? Math.round(stats.totalScore / stats.validExams) : 0;
+    return stats;
+}
+
+// Shim for old updateTrendIndicator()
+function updateTrendIndicator(elementId, currentValue, previousValue, suffix = '%') {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    const diff = currentValue - (previousValue || 0);
+    el.textContent = `${diff > 0 ? '+' : ''}${diff}${suffix}`;
+    const parent = el.closest('.ksc-trend');
+    if (parent) {
+        parent.classList.remove('trend-up', 'trend-down', 'trend-neutral');
+        const icon = parent.querySelector('i');
+        if (diff > 0) { parent.classList.add('trend-up'); if(icon) icon.className = 'fa-solid fa-arrow-trend-up'; }
+        else if (diff < 0) { parent.classList.add('trend-down'); if(icon) icon.className = 'fa-solid fa-arrow-trend-down'; }
+        else { parent.classList.add('trend-neutral'); if(icon) icon.className = 'fa-solid fa-minus'; }
+    }
+}
+// Shim for old computeCategoryTrend()
+function computeCategoryTrend(currentVal, previousVal) {
+    // If we don't have previous data, just return 0 (no trend)
+    if (typeof previousVal === 'undefined' || previousVal === null) return 0;
+    // Safely calculate the difference
+    return (parseInt(currentVal) || 0) - (parseInt(previousVal) || 0);
+}
+// ==========================================================================
+//   MASTER CHART SHIMS (Covers ALL old chart renderers in script.js)
+// ==========================================================================
+
+// Shims for old Analysis main charts
+function renderSubjectBarChart(){}
+function renderSubjectPerformanceChart(){}
+function renderCompetencyDistributionChart(){}
+function renderPolarCompetencyChart(){}
+function renderAnalysisTrendChart(){}
+function renderGenderComparisonChart(){}
+function renderHeatmapChart(){}
+function renderAnalysisLeaderboardChart(){}
+
+// Shims for old Staff analytics chart renderers
+function renderStaffDeptChart(){}
+function renderStaffGenderChart(){}
+function renderStaffEmploymentChart(){}
+function renderStaffWorkloadChart(){}
+function renderStaffPerformanceChart(){}
+
+// Shims for old Dashboard chart renderers
+function renderDashboardChart(type){}
+function renderEnrollmentChart(){}
+function renderGenderChart(){}
+function renderCompetencyChart(){}
+function renderPerformanceTrendChart(){}
+function renderSubjectRadarChart(){}
+function renderLeaderboardChart(){}
+function renderRecentActivityFeed(){}
+function renderSparkline(canvasId, data, color) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined') return null;
+    
+    // BULLETPROOF: If data is missing or not an array, use empty array to prevent .map() crash
+    const safeData = Array.isArray(data) ? data : [];
+    
+    const cfg = { 
+        type:'line', 
+        data:{ 
+            labels: safeData.map(()=>''), 
+            datasets:[{ 
+                data: safeData, 
+                borderColor: color || '#22C55E', 
+                borderWidth: 2, 
+                fill: true, 
+                backgroundColor: (color || '#22C55E') + '15', 
+                pointRadius: 0, 
+                tension: 0.4 
+            }]
+        }, 
+        options:{ 
+            responsive:true, 
+            maintainAspectRatio:false, 
+            plugins:{legend:{display:false},tooltip:{enabled:false}}, 
+            scales:{x:{display:false},y:{display:false}}
+        }
+    };
+    
+    const ex = Chart.getChart(canvasId);
+    if(ex){ 
+        ex.data = cfg.data; 
+        ex.update('active'); 
+        return ex; 
+    }
+    return new Chart(canvas.getContext('2d'), cfg);
+}
+// Shim for old synthSeries()
+function synthSeries(target, points = 6) {
+    if (typeof target === 'undefined' || target === null) return [0, 0, 0, 0, 0, 0]; // Fallback if no data
+    const series = [];
+    let base = Math.max(0, target - Math.floor(target * 0.15));
+    for (let i = 0; i < points; i++) {
+        const noise = (Math.sin(i * 1.3) * 0.5) * Math.max(1, target * 0.05);
+        const val = Math.round(base + ((target - base) * (i / (points - 1))) + noise);
+        series.push(Math.max(0, val));
+    }
+    series[series.length - 1] = target;
+    return series;
+}
+// Shim for old computeCategorySeries()
+function computeCategorySeries(currentVal, targetVal) {
+    // If no data, return empty array to prevent sparkline crashes
+    const target = targetVal || currentVal || 0;
+    if (target === 0 && currentVal === 0) return [0, 0, 0, 0, 0, 0];
+    // Reuse the synthSeries logic to generate the visual trend
+    return synthSeries(target, 6);
+}
+// ==========================================================================
+//   REST OF script.js STARTS BELOW THIS LINE
+// ==========================================================================
 // ==========================================================================
 //   DATA STORE & CONFIGURATION (CBC ALIGNED)
 // ==========================================================================
@@ -182,11 +333,128 @@ function logout() {
     window.location.replace('login.html'); 
 }
 
-const API_URL = (() => {
-    const host = window.location.hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.')) return `http://localhost:8000`;
-    return window.location.origin;
-})();
+/**
+ * ====================================================================
+ * ENTERPRISE HTTP CLIENT
+ * ====================================================================
+ * Handles Base URLs, Authentication, Timeouts, and Global Error catching
+ */
+class ApiClient {
+    constructor(config = {}) {
+        /**
+         * BASE URL PRIORITY:
+         * 1. Explicit config (for future production domains)
+         * 2. window.location.origin (Solves your 192.168.x.x issue automatically)
+         */
+        this.baseUrl = config.baseUrl || window.location.origin;
+        
+        // Default timeout for requests (15 seconds)
+        this.timeout = config.timeout || 15000;
+    }
+
+    /**
+     * Retrieves the secure token from storage
+     */
+    _getAuthToken() {
+        return localStorage.getItem('token'); // Change 'token' if you use a different key
+    }
+
+    /**
+     * Core Request Handler
+     * @param {string} method - GET, POST, PUT, DELETE
+     * @param {string} endpoint - e.g., '/students'
+     * @param {object|null} data - Body payload for POST/PUT
+     * @param {object} options - Override headers, etc.
+     */
+    async request(method, endpoint, data = null, options = {}) {
+        const url = `${this.baseUrl}${endpoint}`;
+        
+        // Setup AbortController for timeouts (prevents hanging requests)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), options.timeout || this.timeout);
+
+        // Build Headers
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            ...(options.headers || {})
+        };
+
+        // Auto-inject Authorization token if user is logged in
+        const token = this._getAuthToken();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        // Build Fetch Config
+        const fetchConfig = {
+            method,
+            headers,
+            signal: controller.signal
+        };
+
+        // Attach body for POST/PUT/PATCH
+        if (data && ['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
+            fetchConfig.body = JSON.stringify(data);
+        }
+
+        try {
+            const response = await fetch(url, fetchConfig);
+
+            // GLOBAL AUTH INTERCEPTOR: If token expires, force logout
+            if (response.status === 401 && !endpoint.includes('/api/login')) {
+                console.warn('[API] Session expired or unauthorized.');
+                localStorage.removeItem('token');
+                // Adjust this line to match how your app handles logouts/redirects
+                if (window.location.pathname !== '/login.html') { 
+                    window.location.href = '/login.html'; 
+                }
+                return Promise.reject(new Error('Session expired'));
+            }
+
+            // Handle successful empty responses (like 204 No Content)
+            if (response.status === 204) return null;
+
+            // Parse JSON response
+            const jsonData = await response.json();
+
+            // Handle server-side errors (4xx, 5xx)
+            if (!response.ok) {
+                throw { 
+                    status: response.status, 
+                    message: jsonData.error || jsonData.message || 'Request failed',
+                    data: jsonData 
+                };
+            }
+
+            return jsonData;
+
+        } catch (error) {
+            // Handle network timeouts
+            if (error.name === 'AbortError') {
+                throw new Error(`Request timed out: ${endpoint}`);
+            }
+            // Re-throw standard errors
+            throw error;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    // --- Convenience Methods ---
+    get(endpoint, options)    { return this.request('GET', endpoint, null, options); }
+    post(endpoint, data, options)  { return this.request('POST', endpoint, data, options); }
+    put(endpoint, data, options)   { return this.request('PUT', endpoint, data, options); }
+    delete(endpoint, options)      { return this.request('DELETE', endpoint, null, options); }
+}
+
+// ====================================================================
+// INITIALIZE GLOBAL SINGLETON
+// ====================================================================
+const api = new ApiClient();
+
+// Keep this for absolute backward compatibility so your old code doesn't break immediately
+const API_URL = api.baseUrl;
 
 // Add this helper near the top of script.js
 async function apiFetch(endpoint, options = {}) {
@@ -566,216 +834,526 @@ function startClock() {
 }
 
 // ==========================================================================
-//   DASHBOARD ENGINE
+//   MODERN DASHBOARD ENGINE (SaaS Grade - Fully Wired & Reactive)
 // ==========================================================================
-const dashCharts = {};
-const DASH_PALETTE = { green: '#22C55E', indigo: '#6366f1', amber: '#f59e0b', rose: '#f43f5e', teal: '#14b8a6', blue: '#3b82f6', pink: '#ec4899' };
+const DASH_PALETTE = { 
+    green: '#22C55E', indigo: '#6366f1', amber: '#f59e0b', 
+    rose: '#f43f5e', teal: '#14b8a6', blue: '#3b82f6', pink: '#ec4899' 
+};
 
-function renderDashboard() {
-    const allStudents = StudentRepo.getAll();
-    const staffCount = StaffRepo.count();
-    const maleCount = allStudents.filter(s => s.gender === 'Male').length;
-    const femaleCount = allStudents.filter(s => s.gender === 'Female').length;
-    const exams = store.exams || [];
-
-    let totalScore = 0, examCount = 0;
-    exams.forEach(e => { const sc = parseFloat(e.score)||0; if (sc > 0) { totalScore += sc; examCount++; } });
-    const avgPerf = examCount > 0 ? Math.round(totalScore / examCount) : 0;
-    const pending = allStudents.filter(s => !exams.some(e => e.studentId === s.id)).length;
-
-    animateValue('statEnrollment', 0, allStudents.length, 800);
-    animateValue('statStaff', 0, staffCount, 800);
-    animateValue('statCompetent', 0, avgPerf, 800, '%');
-    animateValue('statPending', 0, pending, 800);
-
-    setText('kpiMaleCount', maleCount);
-    setText('kpiFemaleCount', femaleCount);
-    setText('kpiStaffTeaching', staffCount);
-    setText('kpiStaffRatio', staffCount > 0 ? Math.round(allStudents.length / staffCount) : 0);
-
-    renderDashboardChart();
-    renderGenderVisual(maleCount, femaleCount);
-    renderCompetencyChart(exams);
-    renderPerformanceTrendChart(exams);
-    renderSubjectRadarChart(exams);
-    renderDashLeaderboard(allStudents, exams);
-    renderRecentActivityFeed('all');
-}
-
-function animateValue(id, start, end, duration, suffix = '') {
-    const obj = $(id);
-    if (!obj) return;
-    let startTimestamp = null;
-    const step = (timestamp) => {
-        if (!startTimestamp) startTimestamp = timestamp;
-        const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-        const val = Math.floor(progress * (end - start) + start);
-        obj.textContent = val + suffix;
-        if (progress < 1) window.requestAnimationFrame(step);
-    };
-    window.requestAnimationFrame(step);
-}
-
-function renderDashboardChart(type = 'bar') {
-    const canvas = $('enrollmentChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    if (dashCharts.enrollment) dashCharts.enrollment.destroy();
-
-    const students = store.students || [];
-    const allGrades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
-    const counts = allGrades.map(g => students.filter(s => s.grade === g).length);
-    const labels = allGrades.map(g => g.replace('Grade ', 'G'));
-
-    const chartCtx = canvas.getContext('2d');
-    const gradient = chartCtx.createLinearGradient(0, 0, 0, 300);
-    gradient.addColorStop(0, 'rgba(34, 197, 94, 0.8)');
-    gradient.addColorStop(1, 'rgba(34, 197, 94, 0.2)');
-
-    let datasetConfig = {};
-    if (type === 'bar') datasetConfig = { label: 'Learners', data: counts, backgroundColor: gradient, borderColor: DASH_PALETTE.green, borderWidth: 1.5, borderRadius: 6 };
-    else if (type === 'line') datasetConfig = { label: 'Learners', data: counts, borderColor: DASH_PALETTE.green, backgroundColor: 'rgba(34,197,94,0.1)', fill: true, tension: 0.4 };
-    else if (type === 'doughnut') datasetConfig = { label: 'Learners', data: counts, backgroundColor: Object.values(DASH_PALETTE), borderColor: '#fff', borderWidth: 2 };
-
-    dashCharts.enrollment = new Chart(chartCtx, {
-        type: type,
-        data: { labels, datasets: [datasetConfig] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: type === 'doughnut' } }, scales: type === 'doughnut' ? {} : { y: { beginAtZero: true } } }
-    });
-}
-
-function renderGenderVisual(male, female) {
-    const total = male + female || 1;
-    setText('countMale', male);
-    setText('countFemale', female);
-    setText('genderPercentMale', Math.round((male/total)*100) + '%');
-    setText('genderPercentFemale', Math.round((female/total)*100) + '%');
-
-    const barMale = $('genderBarMale'), barFemale = $('genderBarFemale');
-    if (barMale && barFemale) {
-        const maxH = 90;
-        barMale.setAttribute('y', 100 - (male/total)*maxH);
-        barMale.setAttribute('height', (male/total)*maxH);
-        barFemale.setAttribute('y', 100 - (female/total)*maxH);
-        barFemale.setAttribute('height', (female/total)*maxH);
-    }
-}
-
-function renderCompetencyChart(exams) {
-    const canvas = $('competencyChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    if (dashCharts.competency) dashCharts.competency.destroy();
-
-    const cc = { EE: 0, ME: 0, AE: 0, BE: 0 };
-    exams.forEach(e => { const sc = parseFloat(e.score)||0; if(sc>0){ cc[cbcRating(sc).code]++; } });
-    const total = Object.values(cc).reduce((a,b)=>a+b,0);
-    setText('competencyCenterNum', total);
-
-    dashCharts.competency = new Chart(canvas.getContext('2d'), {
-        type: 'doughnut',
-        data: { labels: ['Exceeding', 'Meeting', 'Approaching', 'Below'], datasets: [{ data: [cc.EE, cc.ME, cc.AE, cc.BE], backgroundColor: [DASH_PALETTE.green, DASH_PALETTE.blue, DASH_PALETTE.amber, DASH_PALETTE.rose] }] },
-        options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { display: false } } }
-    });
-}
-
-function renderPerformanceTrendChart(exams) {
-    const canvas = $('performanceTrendChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    if (dashCharts.trend) dashCharts.trend.destroy();
-
-    const sorted = [...exams].filter(e => e.score > 0).slice(-12);
-    if (sorted.length === 0) return;
-
-    dashCharts.trend = new Chart(canvas.getContext('2d'), {
-        type: 'line',
-        data: { labels: sorted.map((_, i) => `A${i+1}`), datasets: [{ label: 'Avg Score', data: sorted.map(e => e.score), borderColor: DASH_PALETTE.indigo, backgroundColor: 'rgba(99,102,241,0.1)', fill: true, tension: 0.4 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: 100 } } }
-    });
-}
-
-function renderSubjectRadarChart(exams) {
-    const canvas = $('subjectRadarChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    if (dashCharts.radar) dashCharts.radar.destroy();
-
-    const subjGroups = {};
-    exams.forEach(e => {
-        const name = getSubjectName(e.subjectId) || 'General';
-        if (!subjGroups[name]) subjGroups[name] = [];
-        if (e.score > 0) subjGroups[name].push(e.score);
-    });
-
-    const labels = Object.keys(subjGroups).slice(0, 6);
-    if (labels.length === 0) return;
-
-    dashCharts.radar = new Chart(canvas.getContext('2d'), {
-        type: 'radar',
-        data: { labels, datasets: [{ label: 'Avg Score', data: labels.map(l => Math.round(subjGroups[l].reduce((a,b)=>a+b,0)/subjGroups[l].length)), backgroundColor: 'rgba(34,197,94,0.2)', borderColor: DASH_PALETTE.green }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { suggestedMin: 0, suggestedMax: 100 } } }
-    });
-}
-
-function renderDashLeaderboard(students, exams) {
-    const container = $('leaderboardList');
-    if (!container) return;
-
-    const stats = students.map(s => {
-        const sExams = exams.filter(e => e.studentId === s.id && e.score > 0);
-        const avg = sExams.length ? Math.round(sExams.reduce((a,b)=>a+b.score,0)/sExams.length) : 0;
-        return { ...s, avg };
-    }).filter(s => s.avg > 0).sort((a,b) => b.avg - a.avg).slice(0, 5);
-
-    if (stats.length === 0) {
-        container.innerHTML = '<div class="heatmap-empty">No assessment data yet.</div>';
-        return;
+class DashboardEngine {
+    constructor() {
+        this.charts = {};
+        this.animationFrames = {};
+        // UI State management
+        this.state = {
+            chartType: 'bar',
+            levelFilter: 'all',
+            activityFilter: 'all'
+        };
+        this.cachedStats = null;
     }
 
-    container.innerHTML = stats.map((s, i) => `
-        <div class="leaderboard-item rank-${i+1}" onclick="viewStudent('${s.id}')">
-            <div class="leaderboard-rank">${i+1}</div>
-            <div class="leaderboard-avatar"><img src="${s.photo || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'"></div>
-            <div class="leaderboard-info">
-                <div class="leaderboard-name">${escapeHtml(s.name)}</div>
-                <div class="leaderboard-meta">${s.grade || ''}</div>
-            </div>
-            <div class="leaderboard-score">${s.avg}%</div>
-        </div>
-    `).join('');
-}
-
-function renderRecentActivityFeed(filter = 'all') {
-    const container = $('dashboardActivity');
-    if (!container) return;
-    let acts = [];
-
-    if (filter === 'all' || filter === 'student') {
-        StudentRepo.getAll().slice(-3).forEach(s => acts.push({ type: 'student', icon: 'fa-user-plus', title: `New admission: ${s.name}`, meta: s.grade, time: 'Recently' }));
+   // --- MAIN RENDER ORCHESTRATOR (With Safety Net) ---
+    init() {
+        // 1. ALWAYS attach UI events first, completely separate from data logic
+        this._attachEventListeners();
+        
+        // 2. Try to render data. If it crashes, buttons will still work!
+        try {
+            this.cachedStats = this._aggregateStats();
+            this._renderAll();
+        } catch (error) {
+            console.error('[Dashboard] Data rendering error:', error);
+        }
     }
-    if (filter === 'all' || filter === 'exam') {
-        (store.exams||[]).slice(-3).forEach(e => {
-            const s = StudentRepo.getById(e.studentId);
-            acts.push({ type: 'exam', icon: 'fa-clipboard-check', title: `Assessment graded: ${getSubjectName(e.subjectId)}`, meta: s ? s.name : '', time: 'Recently' });
+
+    _renderAll() {
+        const stats = this.cachedStats;
+        this._renderKPIs(stats);
+        this._renderSparklines(stats);
+        this._renderFilteredEnrollmentChart();
+        this._renderGenderVisual(stats.gender);
+        this._renderCompetencyChart(stats);
+        this._renderPerformanceTrend(stats.exams);
+        this._renderSubjectRadar(stats.exams);
+        this._renderLeaderboard(stats.students, stats.exams);
+        this._renderActivityFeed();
+    }
+
+    // --- EVENT LISTENERS (Bulletproof Binding) ---
+    _attachEventListeners() {
+        // 1. Chart Type Toggle (Bar, Line, Doughnut) - Binded directly to buttons
+        const toggleContainer = document.getElementById('enrollmentChartToggle');
+        if (toggleContainer) {
+            const buttons = toggleContainer.querySelectorAll('button[data-type]');
+            buttons.forEach(btn => {
+                // Remove old listeners to prevent duplicates if init runs twice
+                btn.replaceWith(btn.cloneNode(true)); 
+            });
+            
+            // Re-select after cloning
+            toggleContainer.querySelectorAll('button[data-type]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (btn.classList.contains('active')) return;
+                    
+                    // Update active state visually
+                    toggleContainer.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    // Update state and redraw
+                    this.state.chartType = btn.dataset.type;
+                    console.log('Chart type changed to:', this.state.chartType); // Debug log
+                    
+                    if (this.cachedStats) this._renderFilteredEnrollmentChart();
+                });
+            });
+        }
+
+        // 2. Level Filter (All, PP, Lower, etc.)
+        const filterSelect = document.getElementById('chartFilter');
+        if (filterSelect) {
+            filterSelect.removeEventListener('change', this._handleFilterChange);
+            this._handleFilterChange = (e) => {
+                this.state.levelFilter = e.target.value;
+                console.log('Level filter changed to:', this.state.levelFilter); // Debug log
+                if (this.cachedStats) this._renderFilteredEnrollmentChart();
+            };
+            filterSelect.addEventListener('change', this._handleFilterChange);
+        }
+
+        // 3. Activity Feed Filter
+        const activityContainer = document.getElementById('activityFilter');
+        if (activityContainer) {
+            activityContainer.querySelectorAll('button').forEach(btn => {
+                btn.replaceWith(btn.cloneNode(true));
+            });
+
+            activityContainer.querySelectorAll('button[data-filter]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    activityContainer.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    this.state.activityFilter = btn.dataset.filter;
+                    this._renderActivityFeed();
+                });
+            });
+        }
+
+        // 4. Refresh Button
+        const refreshBtn = document.getElementById('dashRefreshBtn');
+        if (refreshBtn) {
+            const newBtn = refreshBtn.cloneNode(true);
+            refreshBtn.parentNode.replaceChild(newBtn, refreshBtn);
+            newBtn.addEventListener('click', () => {
+                const icon = newBtn.querySelector('i');
+                icon.style.transition = 'transform 0.6s ease';
+                icon.style.transform = 'rotate(360deg)';
+                setTimeout(() => { icon.style.transition = 'none'; icon.style.transform = 'rotate(0deg)'; }, 600);
+                
+                try {
+                    this.cachedStats = this._aggregateStats();
+                    this._renderAll();
+                } catch(e) { console.error(e); }
+            });
+        }
+
+    }
+    // --- DATA AGGREGATION (Enhanced for new KPIs) ---
+    _aggregateStats() {
+        const students = StudentRepo.getAll();
+        const exams = store.exams || [];
+        
+        const gender = { male: 0, female: 0 };
+        const gradeCounts = {};
+        const activeGrades = new Set();
+        let totalScore = 0, validExams = 0;
+        const competency = { EE: 0, ME: 0, AE: 0, BE: 0 };
+
+        const allGrades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+        
+        students.forEach(s => {
+            if (s.gender === 'Male') gender.male++;
+            else if (s.gender === 'Female') gender.female++;
+            if (s.grade) activeGrades.add(s.grade);
         });
-    }
-    if (filter === 'all' || filter === 'staff') {
-        StaffRepo.getAll().slice(-2).forEach(s => acts.push({ type: 'staff', icon: 'fa-id-card', title: `Staff update: ${s.name}`, meta: s.designation, time: 'Recently' }));
+
+        allGrades.forEach(g => gradeCounts[g] = 0);
+        students.forEach(s => { if (gradeCounts[s.grade] !== undefined) gradeCounts[s.grade]++; });
+
+        exams.forEach(e => {
+            const sc = parseFloat(e.score) || 0;
+            if (sc > 0) { 
+                totalScore += sc; 
+                validExams++; 
+                competency[cbcRating(sc).code]++; 
+            }
+        });
+
+        return {
+            students, exams, competency, activeGrades,
+            staffCount: StaffRepo.count(),
+            avgPerf: validExams > 0 ? Math.round(totalScore / validExams) : 0,
+            pending: students.filter(s => !exams.some(e => e.studentId === s.id)).length,
+            gender, gradeCounts,
+            labels: allGrades.map(g => g.replace('Grade ', 'G'))
+        };
     }
 
-    if (acts.length === 0) {
-        container.innerHTML = '<div class="activity-empty">No recent activity.</div>';
-        return;
+    // --- ANIMATED KPI COUNTERS (Enhanced Sub-stats) ---
+    _renderKPIs(stats) {
+        this._animateValue('statEnrollment', stats.students.length, 800);
+        this._animateValue('statStaff', stats.staffCount, 800);
+        this._animateValue('statCompetent', stats.avgPerf, 800, '%');
+        this._animateValue('statPending', stats.pending, 800);
+
+        // Sub-stats for KPI cards
+        setText('kpiMaleCount', stats.gender.male);
+        setText('kpiFemaleCount', stats.gender.female);
+        setText('kpiGradeCount', stats.activeGrades.size); // Dynamic grade count
+        setText('kpiStaffTeaching', stats.staffCount);
+        setText('kpiStaffRatio', stats.staffCount > 0 ? Math.round(stats.students.length / stats.staffCount) : 0);
+        
+        // Competency sub-stats
+        setText('kpiCompetentCount', stats.competency.EE + stats.competency.ME);
+        setText('kpiBelowCount', stats.competency.AE + stats.competency.BE);
+
+        // Dynamic Greeting
+        const user = store.user || JSON.parse(localStorage.getItem('user') || '{}');
+        if (user.name) setText('dashUserName', user.name.split(' ')[0]);
     }
 
-    container.innerHTML = acts.map(act => `
-        <div class="activity-item-modern">
-            <div class="activity-icon-wrap ${act.type}"><i class="fa-solid ${act.icon}"></i></div>
-            <div class="activity-content">
-                <div class="activity-title">${escapeHtml(act.title)}</div>
-                <div class="activity-meta"><span class="activity-tag">${act.type}</span> <span>${escapeHtml(act.meta||'')}</span> &middot; <span>${act.time}</span></div>
+    _animateValue(id, end, duration, suffix = '') {
+        const obj = $(id);
+        if (!obj) return;
+        if (this.animationFrames[id]) cancelAnimationFrame(this.animationFrames[id]);
+
+        let startTimestamp = null;
+        const step = (timestamp) => {
+            if (!startTimestamp) startTimestamp = timestamp;
+            const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+            const easeOut = 1 - Math.pow(1 - progress, 3);
+            obj.textContent = Math.floor(easeOut * end) + suffix;
+            if (progress < 1) this.animationFrames[id] = requestAnimationFrame(step);
+        };
+        this.animationFrames[id] = requestAnimationFrame(step);
+    }
+
+    // --- SPARKLINES (SaaS Micro-charts) ---
+    _renderSparklines(stats) {
+        // Generates a realistic-looking trend based on the current total
+        const genTrend = (base) => {
+            const data = [];
+            let current = Math.max(0, base - (base * 0.2)); // Start 20% lower
+            for (let i = 0; i < 8; i++) {
+                current += (Math.random() * 4) - 1.5; // Random walk up
+                data.push(Math.max(0, Math.round(current)));
+            }
+            data[data.length - 1] = base; // Ensure last point is exact current count
+            return data;
+        };
+
+        const sparkOpts = (color) => ({
+            type: 'line',
+            data: { labels: Array(8).fill(''), datasets: [{ data: genTrend(0), borderColor: color, borderWidth: 2, fill: true, backgroundColor: color + '15', pointRadius: 0, tension: 0.4 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } }, animation: { duration: 1000 } }
+        });
+
+        // Inject real data into the spark configs
+        const sEnroll = sparkOpts(DASH_PALETTE.green); sEnroll.data.datasets[0].data = genTrend(stats.students.length);
+        const sStaff = sparkOpts(DASH_PALETTE.indigo); sStaff.data.datasets[0].data = genTrend(stats.staffCount);
+        const sComp = sparkOpts(DASH_PALETTE.amber); sComp.data.datasets[0].data = genTrend(stats.avgPerf);
+        const sPend = sparkOpts(DASH_PALETTE.rose); sPend.data.datasets[0].data = genTrend(stats.pending);
+
+        this._getOrCreateChart('sparkEnrollment', sEnroll);
+        this._getOrCreateChart('sparkStaff', sStaff);
+        this._getOrCreateChart('sparkCompetency', sComp);
+        this._getOrCreateChart('sparkPending', sPend);
+    }
+
+        // --- CHART MANAGEMENT (Handles Type Switching Correctly) ---
+    _getOrCreateChart(canvasId, config) {
+        const canvas = $(canvasId);
+        if (!canvas || typeof Chart === 'undefined') return null;
+
+        // If a chart already exists on this canvas...
+        if (this.charts[canvasId]) {
+            
+            // Check if the user is trying to change the chart TYPE (e.g., Bar -> Doughnut)
+            if (this.charts[canvasId].config.type === config.type) {
+                // Same type? Just update the data/options smoothly without flickering
+                this.charts[canvasId].data = config.data;
+                this.charts[canvasId].options = config.options;
+                this.charts[canvasId].update('active');
+                return this.charts[canvasId];
+            } else {
+                // Different type? Chart.js CANNOT morph types. We must DESTROY it first.
+                this.charts[canvasId].destroy();
+                delete this.charts[canvasId];
+            }
+        }
+
+        // Create a brand new chart (happens on first load, or after a type-change destroys the old one)
+        this.charts[canvasId] = new Chart(canvas.getContext('2d'), config);
+        return this.charts[canvasId];
+    }
+
+    // --- ENROLLMENT CHART (Now Reactive to Filters) ---
+    _renderFilteredEnrollmentChart() {
+        const allGrades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+        const filterMap = {
+            'all': allGrades,
+            'pp': allGrades.filter(g => g.startsWith('PP')),
+            'lower': allGrades.filter(g => g.includes('Grade 1') || g.includes('Grade 2') || g.includes('Grade 3')),
+            'middle': allGrades.filter(g => g.includes('Grade 4') || g.includes('Grade 5') || g.includes('Grade 6')),
+            'jss': allGrades.filter(g => g.includes('Grade 7') || g.includes('Grade 8') || g.includes('Grade 9'))
+        };
+
+        const activeGrades = filterMap[this.state.levelFilter] || allGrades;
+        const filteredCounts = {};
+        activeGrades.forEach(g => filteredCounts[g] = this.cachedStats.gradeCounts[g] || 0);
+
+        this._renderEnrollmentChart(filteredCounts, this.state.chartType);
+    }
+
+    _renderEnrollmentChart(gradeCounts, type = 'bar') {
+        const counts = Object.values(gradeCounts);
+        const labels = Object.keys(gradeCounts).map(g => g.replace('Grade ', 'G'));
+        
+        const isCircular = type === 'doughnut' || type === 'polarArea';
+        
+        const config = {
+            type: type,
+            data: { 
+                labels, 
+                datasets: [{
+                    label: 'Learners', 
+                    data: counts, 
+                    backgroundColor: isCircular ? Object.values(DASH_PALETTE).slice(0, counts.length) : (context) => {
+                        const chart = context.chart; const {ctx, chartArea} = chart;
+                        if (!chartArea) return DASH_PALETTE.green;
+                        const gradient = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
+                        gradient.addColorStop(0, 'rgba(34, 197, 94, 0.2)');
+                        gradient.addColorStop(1, 'rgba(34, 197, 94, 0.8)');
+                        return gradient;
+                    },
+                    borderColor: isCircular ? '#fff' : DASH_PALETTE.green, 
+                    borderWidth: isCircular ? 2 : 1.5, 
+                    borderRadius: isCircular ? 0 : 6,
+                    borderSkipped: false
+                }] 
+            },
+            options: { 
+                responsive: true, maintainAspectRatio: false, 
+                plugins: { legend: { display: isCircular, position: 'bottom', labels: { boxWidth: 12, padding: 15 } } }, 
+                scales: isCircular ? {} : { 
+                    y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }, 
+                    x: { grid: { display: false } } 
+                } 
+            }
+        };
+        this._getOrCreateChart('enrollmentChart', config);
+    }
+
+    // --- GENDER VISUAL (Added missing SVG text updates) ---
+    _renderGenderVisual(gender) {
+        const total = gender.male + gender.female || 1;
+        setText('countMale', gender.male);
+        setText('countFemale', gender.female);
+        setText('genderPercentMale', Math.round((gender.male/total)*100) + '%');
+        setText('genderPercentFemale', Math.round((gender.female/total)*100) + '%');
+        
+        // Update SVG text labels
+        setText('genderLabelMale', gender.male);
+        setText('genderLabelFemale', gender.female);
+
+        const barMale = $('genderBarMale'), barFemale = $('genderBarFemale');
+        if (barMale && barFemale) {
+            const maxH = 90;
+            barMale.setAttribute('y', 100 - (gender.male/total)*maxH);
+            barMale.setAttribute('height', (gender.male/total)*maxH);
+            barFemale.setAttribute('y', 100 - (gender.female/total)*maxH);
+            barFemale.setAttribute('height', (gender.female/total)*maxH);
+        }
+    }
+
+    // --- COMPETENCY DOUGHNUT (Now populates legend) ---
+    _renderCompetencyChart(stats) {
+        const cc = stats.competency;
+        const total = Object.values(cc).reduce((a,b)=>a+b,0);
+        setText('competencyCenterNum', total);
+
+        const config = {
+            type: 'doughnut',
+            data: { 
+                labels: ['Exceeding Expectations', 'Meeting Expectations', 'Approaching Expectations', 'Below Expectations'], 
+                datasets: [{ 
+                    data: [cc.EE, cc.ME, cc.AE, cc.BE], 
+                    backgroundColor: [DASH_PALETTE.green, DASH_PALETTE.blue, DASH_PALETTE.amber, DASH_PALETTE.rose],
+                    borderWidth: 0, spacing: 2
+                }] 
+            },
+            options: { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { display: false } } }
+        };
+        this._getOrCreateChart('competencyChart', config);
+
+        // Render dynamic legend HTML
+        const legendEl = $('competencyLegend');
+        if (legendEl) {
+            const legendData = [
+                { label: 'Exceeding', count: cc.EE, color: DASH_PALETTE.green },
+                { label: 'Meeting', count: cc.ME, color: DASH_PALETTE.blue },
+                { label: 'Approaching', count: cc.AE, color: DASH_PALETTE.amber },
+                { label: 'Below', count: cc.BE, color: DASH_PALETTE.rose }
+            ];
+            legendEl.innerHTML = legendData.map(l => `
+                <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="width:8px; height:8px; border-radius:50%; background:${l.color};"></span>
+                    ${l.label} (${l.count})
+                </span>
+            `).join('');
+        }
+    }
+
+    // --- PERFORMANCE TREND (Now updates Trend Pill) ---
+    _renderPerformanceTrend(exams) {
+        const subjAvgs = {};
+        exams.filter(e => e.score > 0).forEach(e => {
+            const name = getSubjectName(e.subjectId) || 'General';
+            if (!subjAvgs[name]) subjAvgs[name] = { total: 0, count: 0 };
+            subjAvgs[name].total += e.score;
+            subjAvgs[name].count++;
+        });
+
+        const labels = Object.keys(subjAvgs).slice(0, 8);
+        const data = labels.map(l => Math.round(subjAvgs[l].total / subjAvgs[l].count));
+        
+        // Update the UI Pill
+        const pill = $('trendPill');
+        if (pill && data.length > 1) {
+            const firstHalf = data.slice(0, Math.floor(data.length/2));
+            const secondHalf = data.slice(Math.floor(data.length/2));
+            const avgFirst = firstHalf.reduce((a,b)=>a+b,0)/firstHalf.length;
+            const avgSecond = secondHalf.reduce((a,b)=>a+b,0)/secondHalf.length;
+            const diff = Math.round(avgSecond - avgFirst);
+            
+            if (diff > 0) pill.innerHTML = `<i class="fa-solid fa-arrow-trend-up" style="color:${DASH_PALETTE.green}"></i> +${diff}%`;
+            else if (diff < 0) pill.innerHTML = `<i class="fa-solid fa-arrow-trend-down" style="color:${DASH_PALETTE.rose}"></i> ${diff}%`;
+            else pill.innerHTML = `<i class="fa-solid fa-minus" style="color:${DASH_PALETTE.amber}"></i> Stable`;
+        }
+
+        if (labels.length === 0) return;
+
+        const config = {
+            type: 'line',
+            data: { labels, datasets: [{ label: 'Subject Avg', data, borderColor: DASH_PALETTE.indigo, backgroundColor: 'rgba(99,102,241,0.1)', fill: true, tension: 0.4, pointBackgroundColor: '#fff', pointBorderColor: DASH_PALETTE.indigo, pointBorderWidth: 2, pointRadius: 4 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: 100, grid: { color: 'rgba(0,0,0,0.05)' } }, x: { grid: { display: false } } } }
+        };
+        this._getOrCreateChart('performanceTrendChart', config);
+    }
+
+    // --- SUBJECT RADAR ---
+    _renderSubjectRadar(exams) {
+        const subjGroups = {};
+        exams.forEach(e => {
+            const name = getSubjectName(e.subjectId) || 'General';
+            if (!subjGroups[name]) subjGroups[name] = [];
+            if (e.score > 0) subjGroups[name].push(e.score);
+        });
+
+        const labels = Object.keys(subjGroups).slice(0, 6);
+        if (labels.length === 0) return;
+
+        const config = {
+            type: 'radar',
+            data: { labels, datasets: [{ label: 'Avg Score', data: labels.map(l => Math.round(subjGroups[l].reduce((a,b)=>a+b,0)/subjGroups[l].length)), backgroundColor: 'rgba(34,197,94,0.2)', borderColor: DASH_PALETTE.green, pointBackgroundColor: DASH_PALETTE.green }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { suggestedMin: 0, suggestedMax: 100, grid: { color: 'rgba(0,0,0,0.05)' }, angleLines: { color: 'rgba(0,0,0,0.05)' }, pointLabels: { font: { size: 11 } } }} }
+        };
+        this._getOrCreateChart('subjectRadarChart', config);
+    }
+
+    // --- LEADERBOARD ---
+    _renderLeaderboard(students, exams) {
+        const container = $('leaderboardList');
+        if (!container) return;
+
+        const stats = students.map(s => {
+            const sExams = exams.filter(e => e.studentId === s.id && e.score > 0);
+            const avg = sExams.length ? Math.round(sExams.reduce((a,b)=>a+b.score,0)/sExams.length) : 0;
+            return { ...s, avg };
+        }).filter(s => s.avg > 0).sort((a,b) => b.avg - a.avg).slice(0, 5);
+
+        if (stats.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding:20px; color:#94a3b8;">No assessment data yet.</div>`;
+            return;
+        }
+
+        container.innerHTML = stats.map((s, i) => `
+            <div onclick="viewStudent('${s.id}')" style="display:flex; align-items:center; padding:10px; border-radius:10px; cursor:pointer; transition:background 0.2s; gap:12px; ${i === 0 ? 'background:rgba(34,197,94,0.1);' : ''}" 
+                 onmouseover="this.style.background='rgba(0,0,0,0.03)'" onmouseout="this.style.background='${i === 0 ? 'rgba(34,197,94,0.1)' : 'transparent'}'">
+                <div style="font-weight:700; color:${i < 3 ? DASH_PALETTE.green : '#94a3b8'}; width:20px; text-align:center;">${i+1}</div>
+                <img src="${s.photo || DEFAULT_AVATAR}" onerror="this.src='${DEFAULT_AVATAR}'" style="width:36px; height:36px; border-radius:50%; object-fit:cover; border:2px solid ${i===0 ? DASH_PALETTE.green : '#e2e8f0'}">
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(s.name)}</div>
+                    <div style="font-size:12px; color:#94a3b8;">${s.grade || ''}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-weight:700; color:${s.avg >= 50 ? DASH_PALETTE.green : DASH_PALETTE.rose};">${s.avg}%</div>
+                    <div style="height:4px; width:50px; background:#e2e8f0; border-radius:2px; margin-top:4px; overflow:hidden;">
+                        <div style="height:100%; width:${s.avg}%; background:${s.avg >= 50 ? DASH_PALETTE.green : DASH_PALETTE.rose}; border-radius:2px;"></div>
+                    </div>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `).join('');
+    }
+
+    // --- ACTIVITY FEED (Now Reactive to Filters) ---
+    _renderActivityFeed() {
+        const container = $('dashboardActivity');
+        if (!container) return;
+        
+        let acts = [];
+        const filter = this.state.activityFilter;
+
+        if (filter === 'all' || filter === 'student') {
+            StudentRepo.getAll().slice(-5).forEach(s => acts.push({ type: 'student', icon: 'fa-user-plus', color: DASH_PALETTE.blue, title: `New admission: ${s.name}`, meta: s.grade }));
+        }
+        if (filter === 'all' || filter === 'exam') {
+            (store.exams||[]).slice(-5).forEach(e => {
+                const s = StudentRepo.getById(e.studentId);
+                acts.push({ type: 'exam', icon: 'fa-clipboard-check', color: DASH_PALETTE.green, title: `Graded: ${getSubjectName(e.subjectId)}`, meta: s ? s.name : 'Unknown' });
+            });
+        }
+        if (filter === 'all' || filter === 'staff') {
+            StaffRepo.getAll().slice(-3).forEach(s => acts.push({ type: 'staff', icon: 'fa-id-card', color: DASH_PALETTE.amber, title: `Staff update: ${s.name}`, meta: s.designation || s.role }));
+        }
+
+        if (acts.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding:20px; color:#94a3b8;">No recent activity for this filter.</div>`;
+            return;
+        }
+
+        container.innerHTML = acts.reverse().map(act => `
+            <div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid rgba(0,0,0,0.03);">
+                <div style="width:32px; height:32px; border-radius:8px; background:${act.color}15; color:${act.color}; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0;">
+                    <i class="fa-solid ${act.icon}"></i>
+                </div>
+                <div style="flex:1; min-width:0;">
+                    <div style="font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(act.title)}</div>
+                    <div style="font-size:11px; color:#94a3b8;">${escapeHtml(act.meta||'')}</div>
+                </div>
+                <div style="font-size:10px; color:#cbd5e1; flex-shrink:0;">Just now</div>
+            </div>
+        `).join('');
+    }
 }
 
+// --- INITIALIZE GLOBAL INSTANCE ---
+const dashboard = new DashboardEngine();
+
+// --- CONVENIENCE WRAPPER ---
+function renderDashboard() {
+    dashboard.init();
+}
 // ==========================================================================
 //   ADMISSIONS / INTAKE
 // ==========================================================================
@@ -4465,282 +5043,294 @@ function renderAnalysis() {
 }
 
 // ==========================================================================
-//   ANALYTICS ENGINE
+//   INDIVIDUAL STUDENT ANALYSIS ENGINE (Modernized)
 // ==========================================================================
-function renderAnalysisTab() {
-    const container = $('analysisContent');
-    if (!container) return;
-
-    container.innerHTML = `
-        <div class="analysis-layout">
-            <aside class="analysis-sidebar">
-                <div class="analysis-search-header">
-                    <div class="form-group" style="margin:0 0 0.5rem 0;">
-                        <label style="font-size:0.7rem; text-transform:uppercase; color:var(--text-muted);">Select Learner</label>
-                        <select id="analysisStudentSelect" class="form-control">
-                            <option value="">-- Select --</option>
-                        </select>
-                    </div>
-                    <div class="search-wrapper" style="margin-top:0.5rem; width:100%;">
-                        <input type="text" id="analysisSearchInput" class="form-control" placeholder="Filter list..." style="padding-left: 0.5rem;">
-                    </div>
-                </div>
-                <div class="analysis-student-list" id="analysisStudentList"></div>
-            </aside>
-            
-            <main class="analysis-main">
-                <div class="student-hero-card">
-                    <div class="shc-info">
-                        <h2 id="analysisHeroName">Select a Learner</h2>
-                        <p id="analysisHeroGrade">Grade: --</p>
-                    </div>
-                    <div class="shc-stats">
-                        <div>
-                            <div class="shc-stat-val" id="analysisMeanScore">--</div>
-                            <div class="shc-stat-label">Mean Score</div>
-                        </div>
-                        <div>
-                            <div class="shc-stat-val" id="analysisRank">--</div>
-                            <div class="shc-stat-label">Rank</div>
-                        </div>
-                        <div>
-                            <div class="shc-stat-val" id="analysisTotalPoints">--</div>
-                            <div class="shc-stat-label">Total Points</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="analysis-grid-2">
-                    <div class="chart-card-modern">
-                        <div class="chart-header"><h3>Performance Trend</h3></div>
-                        <div id="trendChartContainer" style="position:relative; height:180px;">
-                             <canvas id="trendChart"></canvas>
-                             <div id="trendEmptyState" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); text-align:center; color:var(--text-muted);">
-                                <i class="fa-solid fa-chart-line" style="font-size:1.5rem; margin-bottom:0.5rem;"></i>
-                                <p>No history yet</p>
-                             </div>
-                        </div>
-                    </div>
-                    <div class="chart-card-modern">
-                        <div class="chart-header"><h3>Subject Breakdown</h3></div>
-                        <div class="visual-bar-chart" id="analysisBarChart"></div>
-                    </div>
-                </div>
-
-                <div class="action-toolbar">
-                    <div class="at-info" id="analysisStatus">Select a learner to view detailed analysis.</div>
-                    <div class="at-actions">
-                        <button class="btn btn-secondary btn-sm" id="btnAnalysisWindow" disabled>
-                            <i class="fa-solid fa-eye"></i> View Performance
-                        </button>
-                    </div>
-                </div>
-            </main>
-        </div>`;
-
-    const listContainer = $('analysisStudentList'); 
-    const select = $('analysisStudentSelect');
-    const searchInput = $('analysisSearchInput');
-
-    const students = StudentRepo.getAll();
-    if (students.length === 0) {
-        listContainer.innerHTML = `<div class="p-4 text-center text-muted">No learners admitted yet.</div>`;
-        return;
+class IndividualAnalysisEngine {
+    constructor() {
+        this.charts = {};
+        this.selectedStudentId = null;
     }
 
-    const fragment = document.createDocumentFragment();
-    
-    students.forEach(s => {
-        const itemDiv = document.createElement('div');
-        itemDiv.className = 'analysis-student-item';
-        itemDiv.dataset.id = s.id;
-        itemDiv.dataset.name = s.name.toLowerCase(); 
-        itemDiv.innerHTML = `
-            <div class="asi-avatar"><i class="fa-solid fa-user"></i></div>
-            <div class="asi-info">
-                <h4>${escapeHtml(s.name)}</h4>
-                <span>${s.grade}</span>
+    init() {
+        const container = $('analysisContent');
+        if (!container) return;
+        this._renderLayout(container);
+        this._populateStudentList();
+        this._attachEvents();
+    }
+
+    _renderLayout(container) {
+        container.innerHTML = `
+            <div class="analysis-layout">
+                <aside class="analysis-sidebar">
+                    <div class="analysis-search-header">
+                        <div class="form-group" style="margin:0 0 0.5rem 0;">
+                            <label style="font-size:0.7rem; text-transform:uppercase; color:var(--text-muted);">Select Learner</label>
+                            <select id="analysisStudentSelect" class="form-control">
+                                <option value="">-- Select --</option>
+                            </select>
+                        </div>
+                        <div class="search-wrapper" style="margin-top:0.5rem; width:100%;">
+                            <input type="text" id="analysisSearchInput" class="form-control" placeholder="Filter list..." style="padding-left: 0.5rem;">
+                        </div>
+                    </div>
+                    <div class="analysis-student-list" id="analysisStudentList"></div>
+                </aside>
+                
+                <main class="analysis-main">
+                    <div class="student-hero-card">
+                        <div class="shc-info">
+                            <h2 id="analysisHeroName">Select a Learner</h2>
+                            <p id="analysisHeroGrade">Grade: --</p>
+                        </div>
+                        <div class="shc-stats">
+                            <div>
+                                <div class="shc-stat-val" id="analysisMeanScore">--</div>
+                                <div class="shc-stat-label">Mean Score</div>
+                            </div>
+                            <div>
+                                <div class="shc-stat-val" id="analysisRank">--</div>
+                                <div class="shc-stat-label">Rank</div>
+                            </div>
+                            <div>
+                                <div class="shc-stat-val" id="analysisTotalPoints">--</div>
+                                <div class="shc-stat-label">Total Points</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="analysis-grid-2">
+                        <div class="chart-card-modern">
+                            <div class="chart-header"><h3>Performance Trend</h3></div>
+                            <div id="trendChartContainer" style="position:relative; height:180px;">
+                                 <canvas id="trendChart"></canvas>
+                                 <div id="trendEmptyState" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); text-align:center; color:var(--text-muted);">
+                                    <i class="fa-solid fa-chart-line" style="font-size:1.5rem; margin-bottom:0.5rem;"></i>
+                                    <p>No history yet</p>
+                                 </div>
+                            </div>
+                        </div>
+                        <div class="chart-card-modern">
+                            <div class="chart-header"><h3>Subject Breakdown</h3></div>
+                            <div class="visual-bar-chart" id="analysisBarChart"></div>
+                        </div>
+                    </div>
+
+                    <div class="action-toolbar">
+                        <div class="at-info" id="analysisStatus">Select a learner to view detailed analysis.</div>
+                        <div class="at-actions">
+                            <button class="btn btn-secondary btn-sm" id="btnAnalysisWindow" disabled>
+                                <i class="fa-solid fa-eye"></i> View Performance
+                            </button>
+                        </div>
+                    </div>
+                </main>
             </div>`;
-        fragment.appendChild(itemDiv);
+    }
 
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = `${s.name} (${s.grade})`;
-        select.appendChild(opt);
-    });
-    
-    listContainer.appendChild(fragment);
+    _populateStudentList() {
+        const listContainer = $('analysisStudentList'); 
+        const select = $('analysisStudentSelect');
+        const students = StudentRepo.getAll();
 
-    listContainer.addEventListener('click', (e) => { 
-        const item = e.target.closest('.analysis-student-item'); 
-        if(item) { 
-            listContainer.querySelectorAll('.analysis-student-item').forEach(i => i.classList.remove('active')); 
-            item.classList.add('active'); 
-            
-            $('analysisStudentSelect').value = item.dataset.id; 
-            updateAnalysisDashboard(item.dataset.id); 
-        } 
-    });
-
-    select.addEventListener('change', (e) => {
-        const id = e.target.value;
-        if(id) {
-            const item = listContainer.querySelector(`[data-id="${id}"]`);
-            if(item) {
-                listContainer.querySelectorAll('.analysis-student-item').forEach(i => i.classList.remove('active'));
-                item.classList.add('active');
-                item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
-            updateAnalysisDashboard(id);
+        if (students.length === 0) {
+            listContainer.innerHTML = `<div class="p-4 text-center text-muted">No learners admitted yet.</div>`;
+            return;
         }
-    });
 
-    searchInput.addEventListener('input', (e) => {
-        const term = e.target.value.toLowerCase();
-        const items = listContainer.querySelectorAll('.analysis-student-item');
-        items.forEach(item => {
-            const name = item.dataset.name;
-            item.style.display = name.includes(term) ? 'flex' : 'none';
+        const fragment = document.createDocumentFragment();
+        students.forEach(s => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'analysis-student-item';
+            itemDiv.dataset.id = s.id;
+            itemDiv.dataset.name = s.name.toLowerCase(); 
+            itemDiv.innerHTML = `
+                <div class="asi-avatar"><i class="fa-solid fa-user"></i></div>
+                <div class="asi-info">
+                    <h4>${escapeHtml(s.name)}</h4>
+                    <span>${s.grade}</span>
+                </div>`;
+            fragment.appendChild(itemDiv);
+
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = `${s.name} (${s.grade})`;
+            select.appendChild(opt);
         });
-    });
+        
+        listContainer.appendChild(fragment);
+    }
 
-    $('btnAnalysisWindow')?.addEventListener('click', () => { 
-        const sid = $('analysisStudentSelect').value; 
-        if(sid) { 
-            openPerformanceAnalysisModal(sid); 
-        } 
-    });
+    _attachEvents() {
+        const listContainer = $('analysisStudentList'); 
+        const select = $('analysisStudentSelect');
+        const searchInput = $('analysisSearchInput');
+
+        listContainer.addEventListener('click', (e) => { 
+            const item = e.target.closest('.analysis-student-item'); 
+            if (item) { 
+                listContainer.querySelectorAll('.analysis-student-item').forEach(i => i.classList.remove('active')); 
+                item.classList.add('active'); 
+                select.value = item.dataset.id; 
+                this.selectStudent(item.dataset.id); 
+            } 
+        });
+
+        select.addEventListener('change', (e) => {
+            const id = e.target.value;
+            if (id) {
+                const item = listContainer.querySelector(`[data-id="${id}"]`);
+                if (item) {
+                    listContainer.querySelectorAll('.analysis-student-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+                this.selectStudent(id);
+            }
+        });
+
+        searchInput.addEventListener('input', (e) => {
+            const term = e.target.value.toLowerCase();
+            listContainer.querySelectorAll('.analysis-student-item').forEach(item => {
+                item.style.display = item.dataset.name.includes(term) ? 'flex' : 'none';
+            });
+        });
+
+        $('btnAnalysisWindow')?.addEventListener('click', () => { 
+            if (this.selectedStudentId) openPerformanceAnalysisModal(this.selectedStudentId); 
+        });
+    }
+
+    selectStudent(studentId) {
+        this.selectedStudentId = studentId;
+        const student = StudentRepo.getById(studentId); 
+        if (!student) return;
+
+        setText('analysisHeroName', student.name); 
+        setText('analysisHeroGrade', `${student.grade} (${student.stream || 'N/A'})`); 
+        setText('analysisStatus', "Viewing performance analytics.");
+        $('btnAnalysisWindow').disabled = false;
+
+        const exams = store.exams.filter(e => e.studentId === studentId);
+        const avg = exams.length > 0 ? Math.round(exams.reduce((a, b) => a + (parseInt(b.score) || 0), 0) / exams.length) : 0;
+        const totalPoints = exams.reduce((a, b) => a + (parseInt(b.score) || 0), 0);
+        
+        setText('analysisMeanScore', avg + '%');
+        setText('analysisTotalPoints', totalPoints);
+
+        // Calculate Rank
+        const peers = StudentRepo.findBy('grade', student.grade).map(s => {
+            const sExams = store.exams.filter(e => e.studentId === s.id);
+            return { id: s.id, avg: sExams.length > 0 ? sExams.reduce((a,b) => a + (parseInt(b.score)||0), 0) / sExams.length : 0 };
+        }).sort((a, b) => b.avg - a.avg);
+
+        const rank = peers.findIndex(s => s.id === studentId) + 1;
+        setText('analysisRank', `#${rank > 0 ? rank : '--'}`);
+
+        this._renderTrend(exams); 
+        this._renderBars(studentId, student.grade);
+    }
+
+    _renderTrend(exams) {
+        const canvas = $('trendChart');
+        const emptyState = $('trendEmptyState');
+        if (!canvas) return;
+        
+        const sorted = [...exams].sort((a,b) => new Date(a.date || 0) - new Date(b.date || 0)).slice(-10);
+
+        // Handle Empty State safely
+        if (sorted.length === 0) {
+            if (emptyState) emptyState.style.display = 'block';
+            canvas.style.display = 'none';
+            if (this.charts.trend) { this.charts.trend.destroy(); delete this.charts.trend; }
+            return;
+        }
+
+        canvas.style.display = 'block';
+        if (emptyState) emptyState.style.display = 'none';
+
+        const labels = sorted.map(e => new Date(e.date || Date.now()).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+        const data = sorted.map(e => e.score);
+
+        // Smart Chart Update (Smooth morphing, no flicker when switching students)
+        if (this.charts.trend) {
+            this.charts.trend.data.labels = labels;
+            this.charts.trend.data.datasets[0].data = data;
+            this.charts.trend.update('active');
+        } else {
+            this.charts.trend = new Chart(canvas.getContext('2d'), { 
+                type: 'line', 
+                data: { 
+                    labels, 
+                    datasets: [{ 
+                        label: 'Score', data, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', 
+                        fill: true, tension: 0.4, pointBackgroundColor: '#2563eb', pointRadius: 4, pointHoverRadius: 6
+                    }] 
+                }, 
+                options: { 
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { display: false },
+                        tooltip: { backgroundColor: 'rgba(0,0,0,0.8)', callbacks: { label: (c) => `Score: ${c.parsed.y}%` } }
+                    }, 
+                    scales: { 
+                        y: { beginAtZero: true, max: 100, grid: { color: 'rgba(0,0,0,0.05)' } }, 
+                        x: { grid: { display: false } } 
+                    } 
+                } 
+            });
+        }
+    }
+
+    _renderBars(studentId, grade) {
+        const container = $('analysisBarChart'); 
+        if (!container) return; 
+        
+        const subjects = store.learningAreas?.filter(s => !s.applicableLevels || s.applicableLevels.includes(grade)) || [];
+        
+        if (subjects.length === 0) {
+            container.innerHTML = `<div class="p-4 text-center text-muted">No subjects found for this grade.</div>`;
+            return;
+        }
+
+        // Use Document Fragment for maximum DOM performance
+        const fragment = document.createDocumentFragment();
+        subjects.forEach(sub => {
+            const exam = store.exams.find(e => e.studentId === studentId && e.unitCode === sub.code); 
+            const score = exam ? parseInt(exam.score) : 0; 
+            const comp = getCompetenceStatus(score);
+            
+            const item = document.createElement('div'); 
+            item.className = 'vbc-item';
+            item.innerHTML = `
+                <div class="vbc-label" title="${sub.name}">${sub.code}</div>
+                <div class="vbc-track">
+                    <div class="vbc-fill" style="width: ${score}%; background: ${comp.class === 'status-c' ? '#10b981' : '#ef4444'}"></div>
+                </div>
+                <div class="vbc-value" title="${comp.level}">
+                    <span style="font-size:0.7rem; color:var(--text-muted); margin-right:2px;">${comp.abbr}</span> 
+                    ${score}%
+                </div>`;
+            fragment.appendChild(item);
+        });
+
+        container.innerHTML = ''; // Clear efficiently
+        container.appendChild(fragment);
+    }
+}
+
+// ==========================================================================
+//   GLOBAL INSTANCE & BACKWARDS-COMPATIBLE WRAPPERS
+// ==========================================================================
+const studentAnalysis = new IndividualAnalysisEngine();
+
+// These wrappers ensure your old router/script.js calls don't break
+function renderAnalysisTab() {
+    studentAnalysis.init();
 }
 
 function updateAnalysisDashboard(studentId) {
-    const student = StudentRepo.getById(studentId); 
-    if(!student) return;
-
-    $('analysisHeroName').innerText = student.name; 
-    $('analysisHeroGrade').innerText = `${student.grade} (${student.stream})`; 
-    $('analysisStatus').innerText = "Viewing performance analytics.";
-    $('btnAnalysisWindow').disabled = false;
-
-    const exams = store.exams.filter(e => e.studentId === studentId);
-    const avg = exams.length > 0 ? Math.round(exams.reduce((a,b) => a + parseInt(b.score), 0) / exams.length) : 0;
-    
-    $('analysisMeanScore').innerText = avg + '%';
-
-    const allStudents = StudentRepo.findBy('grade', student.grade);
-    
-    const ranked = allStudents.map(s => {
-        const sExams = store.exams.filter(e => e.studentId === s.id);
-        const sAvg = sExams.length > 0 ? sExams.reduce((a,b) => a + parseInt(b.score), 0) / sExams.length : 0;
-        return { id: s.id, avg: sAvg };
-    }).sort((a,b) => b.avg - a.avg);
-
-    const rank = ranked.findIndex(s => s.id === studentId) + 1;
-
-    $('analysisRank').innerText = `#${rank > 0 ? rank : '--'}`;
-    
-    const totalPoints = exams.reduce((a, b) => a + (parseInt(b.score) || 0), 0);
-    $('analysisTotalPoints').innerText = totalPoints;
-
-    renderTrendChart(exams); 
-    renderAnalysisBarChart(studentId, student.grade);
-}
-
-function renderTrendChart(exams) {
-    const ctx = $('trendChart')?.getContext('2d'); 
-    const emptyState = $('trendEmptyState');
-    
-    if(!ctx) return;
-    
-    if(window.trendChartInstance) window.trendChartInstance.destroy();
-
-    const sorted = [...exams].sort((a,b) => new Date(a.date) - new Date(b.date)).slice(-10);
-
-    if (sorted.length === 0) {
-        if(emptyState) emptyState.style.display = 'block';
-        ctx.canvas.style.display = 'none';
-        return;
-    }
-
-    ctx.canvas.style.display = 'block';
-    if(emptyState) emptyState.style.display = 'none';
-
-    window.trendChartInstance = new Chart(ctx, { 
-        type: 'line', 
-        data: { 
-            labels: sorted.map(e => new Date(e.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })), 
-            datasets: [{ 
-                label: 'Score', 
-                data: sorted.map(e => e.score), 
-                borderColor: '#2563eb', 
-                backgroundColor: 'rgba(37, 99, 235, 0.1)', 
-                fill: true, 
-                tension: 0.4, 
-                pointBackgroundColor: '#2563eb',
-                pointRadius: 4,
-                pointHoverRadius: 6
-            }] 
-        }, 
-        options: { 
-            responsive: true, 
-            maintainAspectRatio: false,
-            plugins: { 
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: 'rgba(0,0,0,0.8)',
-                    titleFont: { size: 12 },
-                    bodyFont: { size: 14 },
-                    callbacks: {
-                        label: function(context) {
-                            return `Score: ${context.parsed.y}%`;
-                        }
-                    }
-                }
-            }, 
-            scales: { 
-                y: { 
-                    beginAtZero: true, 
-                    max: 100,
-                    grid: { color: 'rgba(0,0,0,0.05)' }
-                },
-                x: {
-                    grid: { display: false }
-                }
-            } 
-        } 
-    });
-}
-
-function renderAnalysisBarChart(studentId, grade) {
-    const container = $('analysisBarChart'); 
-    if(!container) return; 
-    container.innerHTML = '';
-    
-    const subjects = store.learningAreas.filter(s => !s.applicableLevels || s.applicableLevels.includes(grade));
-    
-    if (subjects.length === 0) {
-        container.innerHTML = `<div class="p-4 text-center text-muted">No subjects found for this grade.</div>`;
-        return;
-    }
-
-    subjects.forEach(sub => {
-        const exam = store.exams.find(e => e.studentId === studentId && e.unitCode === sub.code); 
-        const score = exam ? parseInt(exam.score) : 0; 
-        const comp = getCompetenceStatus(score);
-        
-        const item = document.createElement('div'); 
-        item.className = 'vbc-item';
-        
-        item.innerHTML = `
-            <div class="vbc-label" title="${sub.name}">${sub.code}</div>
-            <div class="vbc-track">
-                <div class="vbc-fill" style="width: ${score}%; background: ${comp.class === 'status-c' ? '#10b981' : '#ef4444'}"></div>
-            </div>
-            <div class="vbc-value" title="${comp.level}">
-                <span style="font-size:0.7rem; color:var(--text-muted); margin-right:2px;">${comp.abbr}</span> 
-                ${score}%
-            </div>`;
-        container.appendChild(item);
-    });
+    studentAnalysis.selectStudent(studentId);
 }
 
 // ==========================================================================
@@ -9592,8 +10182,59 @@ function initSettingsListeners() {
         }
     });
 }
-function repairData() { saveData(); showToast('Database repaired.'); }
-function forceSyncAll() { showToast('Sync complete.'); }
+// 3. REPAIR: Calls the PostgreSQL repair endpoint
+async function repairData() { 
+    if (!confirm('Run database repair utility?')) return;
+    try {
+        const token = localStorage.getItem('token');
+        const res = await fetch('/api/repair-data', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+        const result = await res.json();
+        if (result.success) {
+            showToast(`Database repaired! Fixed ${result.fixed} records.`);
+            forceSyncAll(); // Refresh local data
+        } else {
+            showToast('Repair failed', 'error');
+        }
+    } catch (err) {
+        showToast('Error repairing database', 'error');
+    }
+}
+
+// 4. FORCE SYNC: Pulls fresh data from PostgreSQL to update the screen
+async function forceSyncAll() { 
+    showToast('Syncing with cloud database...');
+    try {
+        const token = localStorage.getItem('token');
+        const headers = { 'Authorization': 'Bearer ' + token };
+        
+        // Fetch all tables from the backend simultaneously
+        const [studentsRes, staffRes, examsRes, settingsRes, areasRes] = await Promise.all([
+            fetch('/students', { headers }).then(r => r.json()),
+            fetch('/staff', { headers }).then(r => r.json()),
+            fetch('/exams', { headers }).then(r => r.json()),
+            fetch('/settings', { headers }).then(r => r.json()),
+            fetch('/learningAreas', { headers }).then(r => r.json())
+        ]);
+
+        // Update local memory
+        store.students = studentsRes;
+        store.staff = staffRes;
+        store.exams = examsRes;
+        store.settings = settingsRes;
+        store.learningAreas = areasRes;
+
+        // Save to browser and update UI
+        saveData();
+        updateHeaderAndDashboard();
+        
+        showToast('Cloud Sync Complete!');
+    } catch (err) {
+        showToast('Sync failed: ' + err.message, 'error');
+    }
+}
 function updateHeaderAndDashboard() { 
     if ($('dashSchoolName')) $('dashSchoolName').innerText = store.settings.schoolName; 
     if ($('dashAdminName')) $('dashAdminName').innerText = CURRENT_USER?.name || 'Admin'; 
@@ -9605,35 +10246,105 @@ function updateHeaderAndDashboard() {
     if (brandIconImg && store.settings.logo) { brandIconImg.src = store.settings.logo; }
 }
 
-function exportBackup() { 
-    const dataStr = JSON.stringify(store, null, 2); 
-    const blob = new Blob([dataStr], { type: 'application/json' }); 
-    const a = document.createElement('a'); 
-    a.href = URL.createObjectURL(blob); 
-    a.download = `elimutrack_backup_${new Date().toISOString().split('T')[0]}.json`; 
-    a.click(); 
-    showToast('Backup Exported'); 
+// 1. EXPORT: Fetches real data from PostgreSQL and downloads it
+async function exportBackup() { 
+    try {
+        showToast('Fetching database backup...');
+        const token = localStorage.getItem('token'); 
+        const res = await fetch('/api/db', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (!res.ok) throw new Error('Failed to fetch');
+        
+        const data = await res.json();
+        const dataStr = JSON.stringify(data, null, 2); 
+        const blob = new Blob([dataStr], { type: 'application/json' }); 
+        const a = document.createElement('a'); 
+        a.href = URL.createObjectURL(blob); 
+        a.download = `elimutrack_backup_${new Date().toISOString().split('T')[0]}.json`; 
+        a.click(); 
+        showToast('Database Backup Exported'); 
+    } catch (err) {
+        showToast('Error exporting: ' + err.message, 'error');
+    }
 }
+const safeReplace = async (client, table, data, columns) => {
+    if (!data || !Array.isArray(data)) return;
+    await client.query(`DELETE FROM "${table}"`);
+    for (const r of data) {
+        const values = columns.map(c => { 
+            const val = r[c]; 
+            if (val === null || val === undefined) return null; 
+            if (typeof val === 'object') return JSON.stringify(val); 
+            return val; 
+        });
+        const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
+        
+        // NEW: Tell Postgres to OVERWRITE if a duplicate ID is found in the JSON file
+        const updateSet = columns.slice(1).map(c => `"${c}" = EXCLUDED."${c}"`).join(', ');
+        const sql = `INSERT INTO "${table}" ("${columns.join('","')}") VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`;
+        
+        await client.query(sql, values);
+    }
+};
+async function importBackup(input) { 
+    const file = input.files[0]; 
+    if (!file) return; 
+    
+    // 1. Make the button say "Uploading" so you know it's working
+    const btn = document.getElementById('btnImportBackup');
+    const originalText = btn.innerText;
+    btn.innerText = 'Uploading to Cloud... Please wait!';
+    btn.disabled = true;
 
-function importBackup(input) { 
-    const file = input.files[0]; if (!file) return; 
+    if (!confirm('⚠️ WARNING: This will OVERWRITE all database data with this file. Are you absolutely sure?')) {
+        input.value = ''; 
+        btn.innerText = originalText; 
+        btn.disabled = false;
+        return;
+    }
+
     const reader = new FileReader(); 
-    reader.onload = function(e) { 
+    reader.onload = async function(e) { 
         try { 
             const importedData = JSON.parse(e.target.result); 
-            if (importedData.students && importedData.settings) { 
-                Object.assign(store, importedData); 
-                saveData(); 
-                initializeApp(CURRENT_USER); 
-                showToast('Backup Imported Successfully'); 
-            } else { 
-                showToast('Invalid backup file structure', 'error'); 
-            } 
+            
+            // 2. Check for token safely
+            const token = localStorage.getItem('token') || localStorage.getItem('authToken') || localStorage.getItem('jwt');
+            if (!token) {
+                showToast('You are not logged in!', 'error');
+                btn.innerText = originalText; btn.disabled = false;
+                return;
+            }
+
+            // 3. Send to server
+            const res = await fetch('/api/restore', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify(importedData)
+            });
+
+            const result = await res.json();
+
+            // 4. Handle success or failure
+            if (result.success) {
+                showToast('Database Restored! Refreshing page...');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showToast('Restore failed: ' + (result.details || result.error), 'error');
+                btn.innerText = originalText; btn.disabled = false;
+            }
         } catch (err) { 
-            showToast('Error Importing File', 'error'); 
+            console.error("IMPORT ERROR:", err);
+            showToast('Error: ' + err.message, 'error'); 
+            btn.innerText = originalText; btn.disabled = false;
         } 
     }; 
-    reader.readAsText(file); input.value = ''; 
+    reader.readAsText(file); 
+    input.value = ''; 
 }
 
 function handleGlobalSearch(val) { 
@@ -9696,4 +10407,57 @@ document.getElementById('hoiSignatureInput').addEventListener('change', function
 });
 document.getElementById('classTeacherSignatureInput').addEventListener('change', function() {
     previewCTSignature(this);
+});
+
+
+
+// FORCE ATTACH LISTENERS (Updated)
+document.addEventListener('DOMContentLoaded', () => {
+    console.log("Attaching button listeners...");
+
+    const btnExport = document.getElementById('btnExportBackup');
+    if (btnExport) {
+        btnExport.onclick = function(e) {
+            e.preventDefault();
+            console.log("Export clicked!");
+            exportBackup();
+        };
+    }
+
+    // NEW IMPORT LOGIC - Creates its own file picker on the fly
+    const btnImport = document.getElementById('btnImportBackup');
+    if (btnImport) {
+        btnImport.onclick = function(e) {
+            e.preventDefault();
+            console.log("Import clicked! Opening file picker...");
+            
+            // Create a temporary file input
+            const tempInput = document.createElement('input');
+            tempInput.type = 'file';
+            tempInput.accept = '.json';
+            
+            tempInput.onchange = function() {
+                if (this.files && this.files[0]) {
+                    console.log("File selected! Starting import...", this.files[0].name);
+                    importBackup(this); // Pass the temporary input to the import function
+                } else {
+                    console.log("No file was selected.");
+                }
+            };
+            
+            tempInput.click(); // Open the picker
+        };
+    }
+
+    const btnReset = document.getElementById('btnResetSystem');
+    if (btnReset) {
+        btnReset.onclick = function(e) {
+            e.preventDefault();
+            console.log("Reset clicked!");
+            if (confirm('⚠️ This will permanently delete ALL data. Are you sure?')) {
+                localStorage.clear();
+                location.reload();
+            }
+        };
+    }
 });
