@@ -13,9 +13,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.0",
     "morgan": "^1.10.0",
-    "pg": "^8.22.0"
-  },
-  "devDependencies": {
-    "json-server": "^0.17.0"
+    "pg": "^8.22.0",
+    "qrcode-terminal": "^0.12.0"
   }
 }
