@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for my-schools-oai8lq on 2026-08-08T15:02:48Z
+# fly.toml app configuration file generated for my-schools-b527sq on 2026-08-10T17:30:29Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'my-schools-oai8lq'
+app = 'my-schools-b527sq'
 primary_region = 'ams'
 
 [build]
