@@ -2726,6 +2726,14 @@ function collectAssessmentColumns(grade, term, year) {
         const label = reportTypeLabel(e);
         if (!seen.has(label)) { seen.add(label); cols.push(label); }
     });
+    // FIXED: order columns by the standard assessment sequence
+    // (Opener → Mid Term → End Term → End Year); custom types follow alphabetically
+    cols.sort((a, b) => {
+        const oa = ASSESSMENT_TYPE_ORDER[a] || 99;
+        const ob = ASSESSMENT_TYPE_ORDER[b] || 99;
+        if (oa !== ob) return oa - ob;
+        return String(a).localeCompare(String(b));
+    });
     return cols;
 }
 
@@ -2892,20 +2900,21 @@ function renderModernReportCard(doc, data) {
     fields2.forEach((f, i) => drawField(f, M + 4 + i * colW, y + 15));
     y += infoH + 6;
 
-    // ── Subject performance table ──
+    // ── Subject performance table (with assigned Teacher column) ──
     const minColW = 13;
-    const typeColW = Math.max(minColW, Math.min(26, (contentW - 8 - 46 - 14 - 17) / data.columns.length));
-    const headers = ['#', 'Learning Area', ...data.columns, 'Avg', 'Rating'];
-    const colWidths = [8, 46, ...data.columns.map(() => typeColW), 14, 17];
+    const typeColW = Math.max(minColW, Math.min(26, (contentW - 8 - 40 - 26 - 13 - 15) / data.columns.length));
+    const headers = ['#', 'Learning Area', 'Teacher', ...data.columns, 'Avg', 'Rating'];
+    const colWidths = [8, 40, 26, ...data.columns.map(() => typeColW), 13, 15];
     const bodyWithSummary = data.rows.map(r => [
         r.num,
-        r.subjectName + (r.teacherName && r.teacherName !== '—' && r.teacherName !== '' ? '  ·  ' + r.teacherName : ''),
+        r.subjectName,
+        (r.teacherName && r.teacherName !== '—' && r.teacherName !== '') ? r.teacherName : '—',
         ...data.columns.map(c => (r.scores[c] > 0 ? r.scores[c] + '%' : '—')),
         r.avg > 0 ? r.avg + '%' : '—',
         r.rating ? r.rating.code : '—'
     ]);
     bodyWithSummary.push([
-        '', 'OVERALL', ...data.columns.map(() => ''),
+        '', 'OVERALL', '', ...data.columns.map(() => ''),
         data.overallAvg + '%', data.overallRating ? data.overallRating.code : '—'
     ]);
 
@@ -2920,6 +2929,7 @@ function renderModernReportCard(doc, data) {
         columnStyles: {
             0: { halign: 'center', cellWidth: colWidths[0] },
             1: { cellWidth: colWidths[1], fontStyle: 'bold' },
+            2: { cellWidth: colWidths[2], fontSize: 7.5, textColor: RPT_C.muted },
             [headers.length - 2]: { halign: 'center', cellWidth: colWidths[colWidths.length - 2], fontStyle: 'bold' },
             [headers.length - 1]: { halign: 'center', cellWidth: colWidths[colWidths.length - 1], fontStyle: 'bold' }
         },
@@ -2934,13 +2944,15 @@ function renderModernReportCard(doc, data) {
                 if (td.column.index === 0) td.styles.fillColor = [220, 252, 231];
                 return;
             }
-            // score cells (columns 2 .. 2+N-1) + avg + rating — tint by rating
+            // columns: 0=#, 1=Learning Area, 2=Teacher, 3..3+N-1=types, 3+N=Avg, 4+N=Rating
             const colIdx = td.column.index;
+            const N = data.columns.length;
             if (colIdx === 0) { td.styles.halign = 'center'; return; }
             if (colIdx === 1) return;
+            if (colIdx === 2) return; // teacher — styled via columnStyles
             const row = data.rows[rowIdx];
             const rating = row.rating;
-            if (colIdx >= 2 && colIdx < 2 + data.columns.length) {
+            if (colIdx >= 3 && colIdx < 3 + N) {
                 // raw may be '78%' or '—'
                 const raw = td.cell.raw;
                 if (typeof raw === 'string' && raw.endsWith('%')) {
@@ -2951,7 +2963,7 @@ function renderModernReportCard(doc, data) {
                 return;
             }
             td.styles.halign = 'center';
-            if (colIdx === 2 + data.columns.length) { // avg
+            if (colIdx === 3 + N) { // avg
                 td.styles.fontStyle = 'bold';
                 if (rating) { td.styles.textColor = rating.color; }
                 return;
@@ -12097,7 +12109,8 @@ function generateIndividualReport() {
             : '<span style="color:#cbd5e1">—</span>';
         return `<tr style="border-bottom:1px solid #e2e8f0">
             <td style="padding:7px 6px;text-align:center;color:#64748b;font-size:11px">${r.num}</td>
-            <td style="padding:7px 6px;font-weight:600;font-size:12px">${escapeHtml(r.subjectName)}${r.teacherName ? `<div style="font-size:10px;color:#94a3b8;font-weight:400">${escapeHtml(r.teacherName)}</div>` : ''}</td>
+            <td style="padding:7px 6px;font-weight:600;font-size:12px">${escapeHtml(r.subjectName)}</td>
+            <td style="padding:7px 6px;font-size:10.5px;color:#64748b">${r.teacherName ? escapeHtml(r.teacherName) : '—'}</td>
             ${cells}
             <td style="text-align:center;font-weight:700;font-size:12px">${r.avg}%</td>
             <td style="text-align:center">${ratingHtml}</td>
@@ -12153,6 +12166,7 @@ function generateIndividualReport() {
             <thead><tr>
                 <th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px;width:26px">#</th>
                 <th style="padding:7px 6px;background:#1e293b;color:#fff;font-size:10px;text-align:left">Learning Area</th>
+                <th style="padding:7px 6px;background:#1e293b;color:#fff;font-size:10px;text-align:left">Teacher</th>
                 ${thCells}
                 <th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px">Avg</th>
                 <th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px">Rating</th>
@@ -12162,6 +12176,7 @@ function generateIndividualReport() {
                 <tr style="background:#dcfce7;font-weight:800">
                     <td style="padding:8px 6px"></td>
                     <td style="padding:8px 6px;font-size:11px">OVERALL</td>
+                    <td style="padding:8px 6px"></td>
                     ${cols.map(() => '<td></td>').join('')}
                     <td style="text-align:center;font-size:13px">${data.overallAvg}%</td>
                     <td style="text-align:center"><span style="display:inline-block;padding:2px 10px;border-radius:14px;font-weight:700;font-size:10px;background:${ratingColor(data.overallRating ? data.overallRating.code : 'ME')}18;color:${ratingColor(data.overallRating ? data.overallRating.code : 'ME')}">${data.overallRating ? data.overallRating.code : '—'}</span></td>
