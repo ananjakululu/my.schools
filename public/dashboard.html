@@ -392,6 +392,7 @@
 </section>
 
 <!-- ANALYSIS SECTION -->
+
 <section id="analysis" class="view-section" aria-label="Academic Analytics Section">
 
     <div class="section-header-modern">
@@ -595,8 +596,8 @@
                         </div>
                     </div>
                     <div class="ph-actions">
-                        <button class="btn-pill btn-pill-ghost" onclick="alert('Edit Mode')"><i class="fa-solid fa-pen"></i> Edit</button>
-                        <button class="btn-pill btn-pill-primary" onclick="alert('Generating Report...')"><i class="fa-solid fa-print"></i> Report Card</button>
+                        <button class="btn-pill btn-pill-ghost" onclick="editProfileStudent()"><i class="fa-solid fa-pen"></i> Edit</button>
+                        <button class="btn-pill btn-pill-primary" onclick="profileReportCard()"><i class="fa-solid fa-print"></i> Report Card</button>
                     </div>
                 </div>
             </div>
@@ -2003,7 +2004,7 @@
     <div class="section-header-modern">
         <div class="header-info"><h2><i class="fa-solid fa-book-open"></i> Learning Areas</h2><p>Organize subjects by grade bands (CBC Structure).</p></div>
         <div class="header-actions">
-            <button class="btn btn-primary" data-modal="courseModal"><i class="fa-solid fa-plus"></i> Add Subject</button>
+            <button class="btn btn-primary" onclick="openCourseModal()"><i class="fa-solid fa-plus"></i> Add Subject</button>
         </div>
     </div>
 
@@ -2106,7 +2107,7 @@
     </div>
 </section>
 
-<!-- MISSING: ADD/EDIT SUBJECT MODAL (Updated for Checkboxes) -->
+<!-- ADD/EDIT SUBJECT MODAL (single source of truth; checkboxes populated by JS) -->
 <div class="modal-backdrop" id="courseModal">
     <div class="modal modal-lg">
         <div class="modal-header">
@@ -2115,7 +2116,7 @@
         </div>
         <div class="modal-body">
             <form id="courseForm">
-                <input type="hidden" id="editCourseId">
+                <input type="hidden" id="courseEditId">
                 <div class="form-group">
                     <label>Subject Name <span style="color:var(--danger)">*</span></label>
                     <input type="text" id="courseName" class="form-control" placeholder="e.g. Mathematics Activities" required>
@@ -2123,6 +2124,22 @@
                 <div class="form-group">
                     <label>Subject Code <span style="color:var(--danger)">*</span></label>
                     <input type="text" id="courseCode" class="form-control" placeholder="e.g. MS-MATH" required>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label>Subject Type</label>
+                        <select id="courseType" class="form-control">
+                            <option>Core Subject</option>
+                            <option>Sciences</option>
+                            <option>Humanities</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Subject Teacher</label>
+                        <select id="courseTeacher" class="form-control">
+                            <option value="">Select Teacher...</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Applicable Levels <span style="color:var(--danger)">*</span></label>
@@ -2320,7 +2337,7 @@
                 </div>
             </section>
 
-                     <!-- ═══════════════════════════════════════════════════════════
+                    <!-- ═══════════════════════════════════════════════════════════
      REPORTS CENTER
      ═══════════════════════════════════════════════════════════ -->
 <section id="reports" class="view-section" aria-label="Reports Section">
@@ -2332,8 +2349,9 @@
             <p>Generate, preview, and export CBC-aligned reports for learners, classes, and the institution.</p>
         </div>
         <div class="header-actions">
-            <button class="btn btn-secondary btn-sm" id="reportsPrintAllBtn">
-                <i class="fa-solid fa-print"></i> Print All
+            <!-- Scoped to grade report cards; disabled until a specific grade is selected -->
+            <button class="btn btn-secondary btn-sm" id="reportsPrintAllBtn" disabled title="Select a specific grade and term first, then use this to print all report cards for that grade.">
+                <i class="fa-solid fa-print"></i> Print All Report Cards
             </button>
         </div>
     </div>
@@ -2342,7 +2360,7 @@
     <div class="reports-controls-bar">
         <div class="reports-filters">
             <div class="filter-group">
-                <label>Grade</label>
+                <label for="reportGradeFilter">Grade</label>
                 <select id="reportGradeFilter" class="filter-select-modern">
                     <option value="all">All Grades</option>
                     <option value="PP1">PP1</option>
@@ -2359,7 +2377,14 @@
                 </select>
             </div>
             <div class="filter-group">
-                <label>Term</label>
+                <label for="reportStreamFilter">Stream</label>
+                <select id="reportStreamFilter" class="filter-select-modern">
+                    <option value="all">All Streams</option>
+                    <!-- Populated dynamically based on school data -->
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="reportTermFilter">Term</label>
                 <select id="reportTermFilter" class="filter-select-modern">
                     <option value="all">All Terms</option>
                     <option value="Term 1">Term 1</option>
@@ -2368,21 +2393,21 @@
                 </select>
             </div>
             <div class="filter-group">
-                <label>Assessment</label>
+                <label for="reportExamFilter">Assessment</label>
                 <select id="reportExamFilter" class="filter-select-modern">
                     <option value="all">All Assessments</option>
                 </select>
             </div>
             <div class="filter-group">
-                <label>Year</label>
+                <label for="reportYearFilter">Year</label>
                 <select id="reportYearFilter" class="filter-select-modern">
                 </select>
             </div>
         </div>
         <div class="reports-search">
             <div class="search-box-advanced">
-                <i class="fa-solid fa-search"></i>
-                <input type="text" id="reportStudentSearch" placeholder="Search learner by name or ADM..." class="search-input">
+                <i class="fa-solid fa-search" aria-hidden="true"></i>
+                <input type="text" id="reportStudentSearch" placeholder="Search learner by name or ADM..." class="search-input" aria-label="Search learner by name or admission number">
             </div>
         </div>
     </div>
@@ -2391,9 +2416,9 @@
     <div class="reports-type-grid">
 
         <!-- Individual Report Card -->
-        <div class="modern-card report-type-card" data-report-type="individual" tabindex="0">
+        <div class="modern-card report-type-card" data-report-type="individual" tabindex="0" role="button" aria-label="Generate Individual Report Card">
             <div class="rtc-icon" style="--rtc-bg: #EEF2FF; --rtc-fg: #4F46E5;">
-                <i class="fa-solid fa-id-card"></i>
+                <i class="fa-solid fa-id-card" aria-hidden="true"></i>
             </div>
             <div class="rtc-body">
                 <h4>Individual Report Card</h4>
@@ -2401,15 +2426,15 @@
             </div>
             <div class="rtc-action">
                 <button class="btn btn-sm btn-primary" onclick="buildReport('individual')">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate
                 </button>
             </div>
         </div>
 
         <!-- Class Performance Report -->
-        <div class="modern-card report-type-card" data-report-type="class" tabindex="0">
+        <div class="modern-card report-type-card" data-report-type="class" tabindex="0" role="button" aria-label="Generate Class Performance Report">
             <div class="rtc-icon" style="--rtc-bg: #F0FDF4; --rtc-fg: #16A34A;">
-                <i class="fa-solid fa-users-rectangle"></i>
+                <i class="fa-solid fa-users-rectangle" aria-hidden="true"></i>
             </div>
             <div class="rtc-body">
                 <h4>Class Performance Report</h4>
@@ -2417,15 +2442,15 @@
             </div>
             <div class="rtc-action">
                 <button class="btn btn-sm btn-primary" onclick="buildReport('class')">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate
                 </button>
             </div>
         </div>
 
         <!-- Subject Analysis Report -->
-        <div class="modern-card report-type-card" data-report-type="subject" tabindex="0">
+        <div class="modern-card report-type-card" data-report-type="subject" tabindex="0" role="button" aria-label="Generate Subject Analysis Report">
             <div class="rtc-icon" style="--rtc-bg: #FFF7ED; --rtc-fg: #EA580C;">
-                <i class="fa-solid fa-book-open-reader"></i>
+                <i class="fa-solid fa-book-open-reader" aria-hidden="true"></i>
             </div>
             <div class="rtc-body">
                 <h4>Subject Analysis Report</h4>
@@ -2433,15 +2458,15 @@
             </div>
             <div class="rtc-action">
                 <button class="btn btn-sm btn-primary" onclick="buildReport('subject')">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate
                 </button>
             </div>
         </div>
 
         <!-- Term Summary Report -->
-        <div class="modern-card report-type-card" data-report-type="term" tabindex="0">
+        <div class="modern-card report-type-card" data-report-type="term" tabindex="0" role="button" aria-label="Generate Term Summary Report">
             <div class="rtc-icon" style="--rtc-bg: #FEF2F2; --rtc-fg: #DC2626;">
-                <i class="fa-solid fa-file-lines"></i>
+                <i class="fa-solid fa-file-lines" aria-hidden="true"></i>
             </div>
             <div class="rtc-body">
                 <h4>Term Summary Report</h4>
@@ -2449,15 +2474,15 @@
             </div>
             <div class="rtc-action">
                 <button class="btn btn-sm btn-primary" onclick="buildReport('term')">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate
                 </button>
             </div>
         </div>
 
         <!-- Competency Progress Report -->
-        <div class="modern-card report-type-card" data-report-type="competency" tabindex="0">
+        <div class="modern-card report-type-card" data-report-type="competency" tabindex="0" role="button" aria-label="Generate Competency Progress Report">
             <div class="rtc-icon" style="--rtc-bg: #FAF5FF; --rtc-fg: #9333EA;">
-                <i class="fa-solid fa-chart-bar"></i>
+                <i class="fa-solid fa-chart-bar" aria-hidden="true"></i>
             </div>
             <div class="rtc-body">
                 <h4>Competency Progress Report</h4>
@@ -2465,15 +2490,15 @@
             </div>
             <div class="rtc-action">
                 <button class="btn btn-sm btn-primary" onclick="buildReport('competency')">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate
                 </button>
             </div>
         </div>
 
         <!-- Attendance Report -->
-        <div class="modern-card report-type-card" data-report-type="attendance" tabindex="0">
+        <div class="modern-card report-type-card" data-report-type="attendance" tabindex="0" role="button" aria-label="Generate Attendance Report">
             <div class="rtc-icon" style="--rtc-bg: #ECFDF5; --rtc-fg: #059669;">
-                <i class="fa-solid fa-calendar-check"></i>
+                <i class="fa-solid fa-calendar-check" aria-hidden="true"></i>
             </div>
             <div class="rtc-body">
                 <h4>Attendance Report</h4>
@@ -2481,7 +2506,7 @@
             </div>
             <div class="rtc-action">
                 <button class="btn btn-sm btn-primary" onclick="buildReport('attendance')">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate
                 </button>
             </div>
         </div>
@@ -2495,23 +2520,31 @@
          ═══════════════════════════════════════════════════════════ -->
     <div class="reports-preview-area" id="reportsPreviewArea" style="display: none;">
 
+        <!-- Loading State (shown while report is being generated) -->
+        <div class="report-loading-state" id="reportLoadingState" style="display: none;">
+            <div class="spinner" aria-hidden="true"></div>
+            <p>Generating report…</p>
+        </div>
+
         <!-- Preview Toolbar -->
         <div class="reports-preview-header">
             <div class="rph-left">
-                <button class="btn btn-ghost btn-sm" id="reportsBackBtn">
-                    <i class="fa-solid fa-arrow-left"></i> Back
+                <button class="btn btn-ghost btn-sm" id="reportsBackBtn" aria-label="Back to report type selection">
+                    <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back
                 </button>
                 <h3 id="reportsPreviewTitle">Report Preview</h3>
             </div>
             <div class="rph-right">
+                <!-- Excel export hidden for individual report cards (document, not tabular data);
+                     JS should toggle display:none on this button when report type is "individual" -->
                 <button class="btn btn-secondary btn-sm" id="reportsExportExcelBtn">
-                    <i class="fa-solid fa-file-excel"></i> Excel
+                    <i class="fa-solid fa-file-excel" aria-hidden="true"></i> Excel
                 </button>
                 <button class="btn btn-secondary btn-sm" id="reportsExportPdfBtn">
-                    <i class="fa-solid fa-file-pdf"></i> PDF
+                    <i class="fa-solid fa-file-pdf" aria-hidden="true"></i> PDF
                 </button>
                 <button class="btn btn-primary btn-sm" id="reportsPrintBtn">
-                    <i class="fa-solid fa-print"></i> Print
+                    <i class="fa-solid fa-print" aria-hidden="true"></i> Print
                 </button>
             </div>
         </div>
@@ -2521,41 +2554,41 @@
              ───────────────────────────────────────────────── -->
         <div class="report-preview-content" id="reportIndividualPreview" style="display: none;">
 
-            <!-- Student Selector Bar -->
+            <!-- Learner Selector Bar -->
             <div class="report-student-selector" id="reportStudentSelectorBar">
-    <div class="rss-left">
-        <div class="filter-group" style="margin-bottom:0;">
-            <label style="margin-bottom:0.25rem;">Select Learner</label>
-            <select id="reportLearnerSelect" class="filter-select-modern" style="min-width:260px;">
-                <option value="">-- Choose a learner --</option>
-            </select>
-        </div>
-        <button class="btn btn-primary btn-sm" id="btnGenerateIndividual" style="align-self:flex-end;">
-            <i class="fa-solid fa-wand-magic-sparkles"></i> Generate Report
-        </button>
-    </div>
-    <div class="rss-right">
-        <button class="btn btn-outline-primary btn-sm" id="btnDownloadIndividualPDF" title="Download this learner's report card as PDF" style="margin-right:8px;">
-            <i class="fa-solid fa-download"></i> Download Report
-        </button>
-        <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" title="Download all report cards for the selected grade as one PDF">
-            <i class="fa-solid fa-file-zipper"></i> Download Grade Reports
-        </button>
-    </div>
-</div>
+                <div class="rss-left">
+                    <div class="filter-group" style="margin-bottom:0;">
+                        <label for="reportLearnerSelect" style="margin-bottom:0.25rem;">Select Learner</label>
+                        <select id="reportLearnerSelect" class="filter-select-modern" style="min-width:260px;">
+                            <option value="">-- Choose a learner --</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="btnGenerateIndividual" style="align-self:flex-end;">
+                        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Generate Report
+                    </button>
+                </div>
+                <div class="rss-right">
+                    <button class="btn btn-outline-primary btn-sm" id="btnDownloadIndividualPDF" title="Download this learner's report card as PDF" style="margin-right:8px;">
+                        <i class="fa-solid fa-download" aria-hidden="true"></i> Download Report
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" title="Download all report cards for the selected grade as one PDF">
+                        <i class="fa-solid fa-file-zipper" aria-hidden="true"></i> Download Grade Reports
+                    </button>
+                </div>
+            </div>
 
-            <!-- The Actual Report Page (hidden until student selected) -->
+            <!-- The Actual Report Page (hidden until learner is selected and generated) -->
             <div class="report-page" id="individualReportPage" style="display:none;">
 
                 <!-- School Banner -->
                 <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <img id="reportSchoolLogo" src="" alt="School Logo" onerror="this.style.display='none'">
-                        <div class="rsh-logo-placeholder" id="rshLogoPlaceholder">
-                            <i class="fa-solid fa-graduation-cap"></i>
+                    <div class="report-school-logo">
+                        <img id="reportSchoolLogo" src="" alt="School Logo" onerror="this.style.display='none'; document.getElementById('reportLogoPlaceholder').style.display='flex';">
+                        <div class="report-logo-placeholder" id="reportLogoPlaceholder" style="display:none;">
+                            <i class="fa-solid fa-graduation-cap" aria-hidden="true"></i>
                         </div>
                     </div>
-                    <div class="rsh-info">
+                    <div class="report-school-info">
                         <h2 id="reportSchoolName">SCHOOL NAME</h2>
                         <p id="reportSchoolMotto">School Motto</p>
                         <p id="reportSchoolAddress">Address &middot; Phone &middot; Email</p>
@@ -2565,49 +2598,49 @@
                 <!-- Report Title Strip -->
                 <div class="report-title-block">
                     <h3 id="reportCardTitle">LEARNER REPORT CARD</h3>
-                    <div class="rtb-meta">
+                    <div class="report-title-meta">
                         <span id="reportTermLabel">Term 1</span>
-                        <span class="rtb-separator">&mdash;</span>
+                        <span class="report-title-separator" aria-hidden="true">&mdash;</span>
                         <span id="reportYearLabel">2025</span>
                     </div>
                 </div>
 
                 <!-- Learner Identity Block -->
                 <div class="report-learner-info">
-                    <div class="rli-row">
-                        <div class="rli-field">
+                    <div class="report-learner-row">
+                        <div class="report-learner-field">
                             <label>Full Name:</label>
-                            <span id="rptLearnerName">---</span>
+                            <span id="reportLearnerName">---</span>
                         </div>
-                        <div class="rli-field">
+                        <div class="report-learner-field">
                             <label>Admission No:</label>
-                            <span id="rptLearnerAdm">---</span>
+                            <span id="reportLearnerAdm">---</span>
                         </div>
-                        <div class="rli-field">
+                        <div class="report-learner-field">
                             <label>Grade:</label>
-                            <span id="rptLearnerGrade">---</span>
+                            <span id="reportLearnerGrade">---</span>
                         </div>
-                        <div class="rli-field">
+                        <div class="report-learner-field">
                             <label>Stream:</label>
-                            <span id="rptLearnerStream">---</span>
+                            <span id="reportLearnerStream">---</span>
                         </div>
                     </div>
-                    <div class="rli-row">
-                        <div class="rli-field">
+                    <div class="report-learner-row">
+                        <div class="report-learner-field">
                             <label>Gender:</label>
-                            <span id="rptLearnerGender">---</span>
+                            <span id="reportLearnerGender">---</span>
                         </div>
-                        <div class="rli-field">
+                        <div class="report-learner-field">
                             <label>Age:</label>
-                            <span id="rptLearnerAge">---</span>
+                            <span id="reportLearnerAge">---</span>
                         </div>
-                        <div class="rli-field">
+                        <div class="report-learner-field">
                             <label>Position:</label>
-                            <span id="rptLearnerPosition">---</span>
+                            <span id="reportLearnerPosition">---</span>
                         </div>
-                        <div class="rli-field">
+                        <div class="report-learner-field">
                             <label>Out of:</label>
-                            <span id="rptOutOf">---</span>
+                            <span id="reportLearnerOutOf">---</span>
                         </div>
                     </div>
                 </div>
@@ -2615,10 +2648,16 @@
                 <!-- Dynamic Subject Performance Table -->
                 <div class="report-table-block">
                     <table class="report-table report-table-dynamic" id="individualReportTable">
+                        <caption class="report-table-caption">Subject Performance</caption>
                         <thead id="individualReportHead">
                             <!-- Populated dynamically by JS based on available assessment types -->
                         </thead>
                         <tbody id="individualReportBody">
+                            <tr class="report-empty-row">
+                                <td colspan="10" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No assessment data found for the selected learner and filters.
+                                </td>
+                            </tr>
                         </tbody>
                         <tfoot id="individualReportFoot">
                         </tfoot>
@@ -2626,7 +2665,7 @@
                 </div>
 
                 <!-- Competency Legend -->
-                <div class="report-competency-legend">
+                <div class="report-competency-legend" aria-label="Competency level definitions">
                     <span><strong>EE</strong> = Exceeding Expectation (80–100)</span>
                     <span><strong>ME</strong> = Meeting Expectation (50–79)</span>
                     <span><strong>AE</strong> = Approaching Expectation (30–49)</span>
@@ -2635,53 +2674,59 @@
 
                 <!-- Performance Summary Strip -->
                 <div class="report-performance-strip" id="reportPerfStrip">
-                    <div class="rps-item">
-                        <span class="rps-label">Total Average</span>
-                        <strong class="rps-value" id="rptTotalAvg">0%</strong>
+                    <div class="report-perf-item">
+                        <span class="report-perf-label">Total Average</span>
+                        <strong class="report-perf-value" id="reportTotalAvg">0%</strong>
                     </div>
-                    <div class="rps-item">
-                        <span class="rps-label">Overall Rating</span>
-                        <strong class="rps-value" id="rptOverallRating">—</strong>
+                    <div class="report-perf-item">
+                        <span class="report-perf-label">Overall Rating</span>
+                        <strong class="report-perf-value" id="reportOverallRating">—</strong>
                     </div>
-                    <div class="rps-item">
-                        <span class="rps-label">Subjects Assessed</span>
-                        <strong class="rps-value" id="rptSubjectsAssessed">0</strong>
+                    <div class="report-perf-item">
+                        <span class="report-perf-label">Subjects Assessed</span>
+                        <strong class="report-perf-value" id="reportSubjectsAssessed">0</strong>
                     </div>
                 </div>
 
                 <!-- Remarks -->
                 <div class="report-remarks-section">
-                    <div class="rrs-block">
+                    <div class="report-remarks-block">
                         <label>Class Teacher's Remarks:</label>
-                        <p id="rptTeacherRemarks">---</p>
+                        <p id="reportTeacherRemarks">---</p>
                     </div>
-                    <div class="rrs-block">
+                    <div class="report-remarks-block">
                         <label>Head Teacher's Remarks:</label>
-                        <p id="rptHeadRemarks">---</p>
+                        <p id="reportHeadRemarks">---</p>
                     </div>
                 </div>
 
                 <!-- Signatures -->
                 <div class="report-signature-area">
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name" id="reportSigClassTeacher"></span>
                         <span>Class Teacher</span>
+                        <span class="report-sig-date" id="reportSigClassTeacherDate"></span>
                     </div>
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name" id="reportSigHeadTeacher"></span>
                         <span>Head Teacher</span>
+                        <span class="report-sig-date" id="reportSigHeadTeacherDate"></span>
                     </div>
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name">____________________</span>
                         <span>Parent / Guardian</span>
+                        <span class="report-sig-date">Date: __________</span>
                     </div>
                 </div>
 
                 <!-- Report Date Footer -->
-                <div class="report-next-term">
-                    <div class="rnt-item">
+                <div class="report-footer-date">
+                    <div class="report-footer-item">
                         <label>Date:</label>
-                        <span id="rptReportDate">---</span>
+                        <span id="reportDate">---</span>
                     </div>
                 </div>
 
@@ -2697,10 +2742,10 @@
             <div class="report-page" id="classReportPage">
 
                 <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <div class="rsh-logo-placeholder"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <div class="report-school-logo">
+                        <div class="report-logo-placeholder"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></div>
                     </div>
-                    <div class="rsh-info">
+                    <div class="report-school-info">
                         <h2 id="classReportSchoolName">SCHOOL NAME</h2>
                         <p id="classReportPeriodLabel">Term 1 &mdash; 2025</p>
                     </div>
@@ -2712,22 +2757,22 @@
                 </div>
 
                 <!-- Class Summary KPIs -->
-                <div class="report-class-summary" id="reportClassSummary">
-                    <div class="rcs-item">
-                        <span class="rcs-label">Total Learners</span>
-                        <span class="rcs-value" id="rcsTotal">0</span>
+                <div class="report-summary-kpis" id="reportClassSummary">
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Total Learners</span>
+                        <span class="report-kpi-value" id="reportClassTotal">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Class Mean</span>
-                        <span class="rcs-value" id="rcsMean">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Class Mean</span>
+                        <span class="report-kpi-value" id="reportClassMean">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Highest Mean</span>
-                        <span class="rcs-value" id="rcsHighest">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Highest Mean</span>
+                        <span class="report-kpi-value" id="reportClassHighest">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Lowest Mean</span>
-                        <span class="rcs-value" id="rcsLowest">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Lowest Mean</span>
+                        <span class="report-kpi-value" id="reportClassLowest">0</span>
                     </div>
                 </div>
 
@@ -2735,6 +2780,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Subject Performance Summary</h4>
                     <table class="report-table" id="classSubjectTable">
+                        <caption class="report-table-caption">Subject averages, highs, lows, and competency distribution</caption>
                         <thead>
                             <tr>
                                 <th>#</th>
@@ -2749,6 +2795,11 @@
                             </tr>
                         </thead>
                         <tbody id="classSubjectBody">
+                            <tr class="report-empty-row">
+                                <td colspan="9" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No assessment data found for the selected grade and filters.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -2757,6 +2808,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Learner Rankings</h4>
                     <table class="report-table" id="classRankingTable">
+                        <caption class="report-table-caption">Learners ranked by mean score</caption>
                         <thead>
                             <tr>
                                 <th>Rank</th>
@@ -2769,19 +2821,28 @@
                             </tr>
                         </thead>
                         <tbody id="classRankingBody">
+                            <tr class="report-empty-row">
+                                <td colspan="7" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No learner data found for the selected grade and filters.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
 
                 <!-- Signatures -->
                 <div class="report-signature-area">
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name" id="reportClassSigTeacher"></span>
                         <span>Class Teacher</span>
+                        <span class="report-sig-date" id="reportClassSigTeacherDate"></span>
                     </div>
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name" id="reportClassSigHead"></span>
                         <span>Head Teacher</span>
+                        <span class="report-sig-date" id="reportClassSigHeadDate"></span>
                     </div>
                 </div>
 
@@ -2797,11 +2858,10 @@
             <div class="report-page" id="subjectReportPage">
 
                 <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <div class="rsh-logo-placeholder"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <div class="report-school-logo">
+                        <div class="report-logo-placeholder"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></div>
                     </div>
-                    <!-- FIX: added id so JS can populate the school name -->
-                    <div class="rsh-info">
+                    <div class="report-school-info">
                         <h2 id="subjectReportSchoolName">SCHOOL NAME</h2>
                         <p>Subject Analysis Report</p>
                     </div>
@@ -2816,26 +2876,27 @@
                 <div class="report-inline-control">
                     <label for="reportSubjectSelect">Learning Area:</label>
                     <select id="reportSubjectSelect" class="filter-select-modern">
+                        <option value="">-- Select a learning area --</option>
                     </select>
                 </div>
 
                 <!-- Subject KPIs -->
-                <div class="report-class-summary" id="reportSubjectSummary">
-                    <div class="rcs-item">
-                        <span class="rcs-label">Overall Mean</span>
-                        <span class="rcs-value" id="rssOverallMean">0</span>
+                <div class="report-summary-kpis" id="reportSubjectSummary">
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Overall Mean</span>
+                        <span class="report-kpi-value" id="reportSubjectOverallMean">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Exceeding (EE)</span>
-                        <span class="rcs-value" id="rssEE">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Exceeding (EE)</span>
+                        <span class="report-kpi-value" id="reportSubjectEE">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Meeting (ME)</span>
-                        <span class="rcs-value" id="rssME">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Meeting (ME)</span>
+                        <span class="report-kpi-value" id="reportSubjectME">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Below (AE+BE)</span>
-                        <span class="rcs-value" id="rssBelow">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Below (AE+BE)</span>
+                        <span class="report-kpi-value" id="reportSubjectBelow">0</span>
                     </div>
                 </div>
 
@@ -2843,6 +2904,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Performance by Grade</h4>
                     <table class="report-table" id="subjectGradeTable">
+                        <caption class="report-table-caption">Subject performance broken down by grade</caption>
                         <thead>
                             <tr>
                                 <th>Grade</th>
@@ -2856,6 +2918,11 @@
                             </tr>
                         </thead>
                         <tbody id="subjectGradeBody">
+                            <tr class="report-empty-row">
+                                <td colspan="8" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    Select a learning area above to view performance by grade.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -2864,15 +2931,21 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Score Distribution</h4>
                     <table class="report-table" id="subjectDistTable">
+                        <caption class="report-table-caption">Learner count per score range</caption>
                         <thead>
                             <tr>
                                 <th>Range</th>
                                 <th>Count</th>
                                 <th>Percentage</th>
-                                <th class="col-visual">Visual</th>
+                                <th aria-hidden="true">Visual</th>
                             </tr>
                         </thead>
                         <tbody id="subjectDistBody">
+                            <tr class="report-empty-row">
+                                <td colspan="4" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    Select a learning area above to view score distribution.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -2889,11 +2962,10 @@
             <div class="report-page" id="termReportPage">
 
                 <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <div class="rsh-logo-placeholder"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <div class="report-school-logo">
+                        <div class="report-logo-placeholder"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></div>
                     </div>
-                    <!-- FIX: added id so JS can populate the school name -->
-                    <div class="rsh-info">
+                    <div class="report-school-info">
                         <h2 id="termReportSchoolName">SCHOOL NAME</h2>
                         <p id="termReportPeriod">Term 1 &mdash; 2025</p>
                     </div>
@@ -2907,6 +2979,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Enrollment Summary</h4>
                     <table class="report-table" id="termEnrollTable">
+                        <caption class="report-table-caption">Enrollment by level and grade</caption>
                         <thead>
                             <tr>
                                 <th>Level</th>
@@ -2917,6 +2990,11 @@
                             </tr>
                         </thead>
                         <tbody id="termEnrollBody">
+                            <tr class="report-empty-row">
+                                <td colspan="5" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No enrollment data found for the selected term.
+                                </td>
+                            </tr>
                         </tbody>
                         <tfoot>
                             <tr>
@@ -2933,6 +3011,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Academic Performance Summary</h4>
                     <table class="report-table" id="termAcademicTable">
+                        <caption class="report-table-caption">Academic performance by grade with competency distribution</caption>
                         <thead>
                             <tr>
                                 <th>Grade</th>
@@ -2945,6 +3024,11 @@
                             </tr>
                         </thead>
                         <tbody id="termAcademicBody">
+                            <tr class="report-empty-row">
+                                <td colspan="7" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No academic data found for the selected term.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -2953,6 +3037,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Attendance Overview</h4>
                     <table class="report-table" id="termAttendanceTable">
+                        <caption class="report-table-caption">Attendance rates by grade</caption>
                         <thead>
                             <tr>
                                 <th>Grade</th>
@@ -2962,6 +3047,11 @@
                             </tr>
                         </thead>
                         <tbody id="termAttendanceBody">
+                            <tr class="report-empty-row">
+                                <td colspan="4" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No attendance data found for the selected term.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -2976,13 +3066,17 @@
 
                 <!-- Signatures -->
                 <div class="report-signature-area">
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name" id="reportTermSigPrepared"></span>
                         <span>Prepared By</span>
+                        <span class="report-sig-date" id="reportTermSigPreparedDate"></span>
                     </div>
-                    <div class="rsa-block">
-                        <div class="rsa-line"></div>
+                    <div class="report-sig-block">
+                        <div class="report-sig-line"></div>
+                        <span class="report-sig-name" id="reportTermSigHead"></span>
                         <span>Head Teacher</span>
+                        <span class="report-sig-date" id="reportTermSigHeadDate"></span>
                     </div>
                 </div>
 
@@ -2998,11 +3092,10 @@
             <div class="report-page" id="competencyReportPage">
 
                 <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <div class="rsh-logo-placeholder"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <div class="report-school-logo">
+                        <div class="report-logo-placeholder"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></div>
                     </div>
-                    <!-- FIX: added id so JS can populate the school name -->
-                    <div class="rsh-info">
+                    <div class="report-school-info">
                         <h2 id="competencyReportSchoolName">SCHOOL NAME</h2>
                         <p>Competency Progress Report</p>
                     </div>
@@ -3010,13 +3103,32 @@
 
                 <div class="report-title-block">
                     <h3>COMPETENCY PROGRESS REPORT</h3>
-                    <p id="competencyReportSubtitle">Grade 7 &mdash; Term 1 to Term 3 Comparison</p>
+                    <p id="competencyReportSubtitle">Grade 7 &mdash; Term Comparison</p>
+                </div>
+
+                <!-- Term Comparison Selectors -->
+                <div class="report-inline-control">
+                    <label for="competencyBaselineTerm">Baseline Term:</label>
+                    <select id="competencyBaselineTerm" class="filter-select-modern">
+                        <option value="Term 1">Term 1</option>
+                        <option value="Term 2">Term 2</option>
+                        <option value="Term 3">Term 3</option>
+                    </select>
+                    <label for="competencyCompareTerm" style="margin-left:1rem;">Comparison Term:</label>
+                    <select id="competencyCompareTerm" class="filter-select-modern">
+                        <option value="Term 2">Term 2</option>
+                        <option value="Term 3">Term 3</option>
+                    </select>
+                    <button class="btn btn-sm btn-primary" id="btnRefreshCompetency" style="align-self:flex-end;">
+                        <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i> Compare
+                    </button>
                 </div>
 
                 <!-- Competency Movement Table -->
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Competency Level Movement</h4>
                     <table class="report-table" id="competencyMovementTable">
+                        <caption class="report-table-caption">Individual learner competency level changes between terms</caption>
                         <thead>
                             <tr>
                                 <th>Learner</th>
@@ -3028,6 +3140,11 @@
                             </tr>
                         </thead>
                         <tbody id="competencyMovementBody">
+                            <tr class="report-empty-row">
+                                <td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No competency data found for the selected grade and term comparison.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -3036,6 +3153,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Current Competency Distribution</h4>
                     <table class="report-table" id="competencyDistTable">
+                        <caption class="report-table-caption">Number and percentage of learners per competency level in the comparison term</caption>
                         <thead>
                             <tr>
                                 <th>Competency</th>
@@ -3044,6 +3162,11 @@
                             </tr>
                         </thead>
                         <tbody id="competencyDistBody">
+                            <tr class="report-empty-row">
+                                <td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No competency data found for the selected grade and term comparison.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -3060,11 +3183,10 @@
             <div class="report-page" id="attendanceReportPage">
 
                 <div class="report-school-header">
-                    <div class="rsh-logo">
-                        <div class="rsh-logo-placeholder"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <div class="report-school-logo">
+                        <div class="report-logo-placeholder"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></div>
                     </div>
-                    <!-- FIX: added id so JS can populate the school name -->
-                    <div class="rsh-info">
+                    <div class="report-school-info">
                         <h2 id="attendanceReportSchoolName">SCHOOL NAME</h2>
                         <p>Attendance Report</p>
                     </div>
@@ -3076,22 +3198,22 @@
                 </div>
 
                 <!-- Attendance KPIs -->
-                <div class="report-class-summary" id="reportAttendanceSummary">
-                    <div class="rcs-item">
-                        <span class="rcs-label">Total School Days</span>
-                        <span class="rcs-value" id="rasTotalDays">0</span>
+                <div class="report-summary-kpis" id="reportAttendanceSummary">
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Total School Days</span>
+                        <span class="report-kpi-value" id="reportAttendanceTotalDays">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Avg. Attendance</span>
-                        <span class="rcs-value" id="rasAvgAttendance">0%</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Avg. Attendance</span>
+                        <span class="report-kpi-value" id="reportAttendanceAvgRate">0%</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Chronic Absentees</span>
-                        <span class="rcs-value" id="rasChronic">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Chronic Absentees</span>
+                        <span class="report-kpi-value" id="reportAttendanceChronic">0</span>
                     </div>
-                    <div class="rcs-item">
-                        <span class="rcs-label">Perfect Attendance</span>
-                        <span class="rcs-value" id="rasPerfect">0</span>
+                    <div class="report-kpi-item">
+                        <span class="report-kpi-label">Perfect Attendance</span>
+                        <span class="report-kpi-value" id="reportAttendancePerfect">0</span>
                     </div>
                 </div>
 
@@ -3099,6 +3221,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Learner Attendance Details</h4>
                     <table class="report-table" id="attendanceDetailTable">
+                        <caption class="report-table-caption">Individual learner attendance for the selected period</caption>
                         <thead>
                             <tr>
                                 <th>Adm No</th>
@@ -3110,6 +3233,11 @@
                             </tr>
                         </thead>
                         <tbody id="attendanceDetailBody">
+                            <tr class="report-empty-row">
+                                <td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No attendance data found for the selected grade and term.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -3118,6 +3246,7 @@
                 <div class="report-table-block">
                     <h4 class="report-sub-heading">Attendance by Grade</h4>
                     <table class="report-table" id="attendanceGradeTable">
+                        <caption class="report-table-caption">Aggregated attendance rates by grade</caption>
                         <thead>
                             <tr>
                                 <th>Grade</th>
@@ -3128,6 +3257,11 @@
                             </tr>
                         </thead>
                         <tbody id="attendanceGradeBody">
+                            <tr class="report-empty-row">
+                                <td colspan="5" style="text-align:center; color:var(--text-muted); padding:2rem;">
+                                    No attendance data found for the selected term.
+                                </td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -3142,7 +3276,7 @@
 
     <!-- ── 5. EMPTY STATE (visible when no report is generated) ── -->
     <div class="reports-empty-state" id="reportsEmptyState">
-        <div class="res-icon"><i class="fa-solid fa-file-circle-plus"></i></div>
+        <div class="res-icon"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i></div>
         <h3>No Report Generated Yet</h3>
         <p>Select a report type above, configure your filters, then click <strong>Generate</strong> to create a report.</p>
     </div>
@@ -3150,136 +3284,6 @@
 </section>
 
 <!-- ═══ END REPORTS SECTION ═══ -->
-
-<!-- ══════════════════════════════════════════════════════════════════════
-     REPORT MODALS — Must exist in DOM for openModal() to find them
-     ══════════════════════════════════════════════════════════════════════ -->
-
-<!-- 1. INDIVIDUAL REPORT CARD / TRANSCRIPT MODAL -->
-<div class="modal-backdrop" id="individualReportModal">
-    <div class="modal modal-lg">
-        <div class="modal-header">
-            <h3><i class="fa-solid fa-id-card" style="color:var(--primary); margin-right:0.5rem;"></i> <span id="individualModalTitle">Individual Report Card</span></h3>
-            <button data-dismiss="modal">&times;</button>
-        </div>
-        <div class="modal-body">
-
-            <div id="reportFormContainer">
-                <div class="form-group">
-                    <label><i class="fa-solid fa-user-graduate"></i> Select Learner</label>
-                    <select id="reportStudentSelect" class="form-control" required>
-                        <option value="">Choose a learner...</option>
-                    </select>
-                    <small style="color:var(--text-muted); font-size:0.75rem; margin-top:0.25rem; display:block;">
-                        Learners with assessment data are listed first with score counts.
-                    </small>
-                </div>
-
-                <div style="margin-top:1.25rem; padding:1rem; background:var(--bg-body); border-radius:12px; border:1px solid var(--border);">
-                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
-                        <i class="fa-solid fa-circle-info" style="color:var(--info);"></i>
-                        <span style="font-size:0.82rem; font-weight:600; color:var(--text-main);">Report Preview</span>
-                    </div>
-                    <div id="reportPreviewInfo" style="font-size:0.78rem; color:var(--text-muted); line-height:1.6;">
-                        Select a learner above to see a summary of their assessment data before generating the PDF.
-                    </div>
-                </div>
-
-                <div class="modal-footer" style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border);">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="btnGenTranscriptReport">
-                        <i class="fa-solid fa-file-pdf"></i> Generate Report Card
-                    </button>
-                    <button type="button" class="btn btn-secondary" id="btnGenLeavingCert" style="display:none;">
-                        <i class="fa-solid fa-scroll"></i> Generate Leaving Cert
-                    </button>
-                </div>
-            </div>
-
-        </div>
-    </div>
-</div>
-
-<!-- 2. CLASS RANKING REPORT MODAL -->
-<div class="modal-backdrop" id="classReportModal">
-    <div class="modal modal-lg">
-        <div class="modal-header">
-            <h3><i class="fa-solid fa-list-ol" style="color:var(--accent); margin-right:0.5rem;"></i> Class Ranking Report</h3>
-            <button data-dismiss="modal">&times;</button>
-        </div>
-        <div class="modal-body">
-
-            <div class="form-group">
-                <label><i class="fa-solid fa-layer-group"></i> Select Grade</label>
-                <select id="classReportGrade" class="form-control" required>
-                    <option value="">Choose a grade...</option>
-                </select>
-                <small style="color:var(--text-muted); font-size:0.75rem; margin-top:0.25rem; display:block;">
-                    Only grades with assessment data will produce meaningful reports.
-                </small>
-            </div>
-
-            <div id="classReportPreview" style="margin-top:1rem; display:none;">
-                <div style="padding:1rem; background:var(--bg-body); border-radius:12px; border:1px solid var(--border);">
-                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:1rem; text-align:center;" id="classReportStats">
-                    </div>
-                </div>
-            </div>
-
-            <div class="modal-footer" style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border);">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="btnGenClassList" disabled>
-                    <i class="fa-solid fa-file-pdf"></i> Generate Class Report
-                </button>
-            </div>
-
-        </div>
-    </div>
-</div>
-
-<!-- 3. SUBJECT SCORE LIST MODAL -->
-<div class="modal-backdrop" id="subjectReportModal">
-    <div class="modal modal-lg">
-        <div class="modal-header">
-            <h3><i class="fa-solid fa-book-open" style="color:var(--warning); margin-right:0.5rem;"></i> Subject Score List</h3>
-            <button data-dismiss="modal">&times;</button>
-        </div>
-        <div class="modal-body">
-
-            <div class="form-row-2">
-                <div class="form-group">
-                    <label><i class="fa-solid fa-layer-group"></i> Select Grade</label>
-                    <select id="subjectReportGrade" class="form-control" required>
-                        <option value="">Choose a grade first...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label><i class="fa-solid fa-book"></i> Select Subject</label>
-                    <select id="subjectReportSubject" class="form-control" required disabled>
-                        <option value="">Select Grade First...</option>
-                    </select>
-                </div>
-            </div>
-
-            <div id="subjectReportPreview" style="margin-top:1rem; display:none;">
-                <div style="padding:1rem; background:var(--bg-body); border-radius:12px; border:1px solid var(--border);">
-                    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; text-align:center;" id="subjectReportStats">
-                    </div>
-                </div>
-            </div>
-
-            <div class="modal-footer" style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border);">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="btnGenSubjectList" disabled>
-                    <i class="fa-solid fa-file-pdf"></i> Generate Subject Report
-                </button>
-            </div>
-
-        </div>
-    </div>
-</div>
-
-
             <!-- 8. SETTINGS -->
 <style>
 /* === SETTINGS STYLES (embedded for guaranteed loading) === */
@@ -3595,7 +3599,7 @@
             <div class="s-card-head">
                 <div class="s-card-icon blue"><i class="fa-solid fa-book-open"></i></div>
                 <div><h3>Learning Areas Setup</h3><p>Define subjects and assign them to grade levels.</p></div>
-                <button class="s-btn s-btn-primary" data-modal="courseModal"><i class="fa-solid fa-plus"></i> Add Subject</button>
+                <button class="s-btn s-btn-primary" onclick="openCourseModal()"><i class="fa-solid fa-plus"></i> Add Subject</button>
             </div>
             <div class="s-table-wrap">
                 <table class="s-table">
@@ -3694,7 +3698,6 @@
         
     </div>
 </section>
-
 
     <!-- MODALS -->
     <div class="modal-backdrop" id="batchAdmissionModal">
@@ -3840,7 +3843,6 @@
         </div>
     </div>
     <div class="modal-backdrop" id="batchAssessmentModal"><div class="modal" style="max-width: 900px;"><div class="modal-header"><h3><i class="fa-solid fa-clipboard-list"></i> Batch Assessment Entry</h3><button data-dismiss="modal">&times;</button></div><div class="modal-body p-0"><div class="batch-header-bar"><div>Subject: <strong id="batchSubjectName">-</strong></div><div>Grade: <strong id="batchGradeName">-</strong></div></div><div class="table-responsive"><table class="data-table" id="batchAssessmentTable"><thead><tr><th>Adm No</th><th>Learner Name</th><th>Score</th><th>Level</th><th>Decision</th></tr></thead><tbody id="batchAssessmentBody"></tbody></table></div></div><div class="modal-footer"><button class="btn btn-secondary" data-dismiss="modal">Cancel</button><button class="btn btn-success" id="btnSaveBatchAssessment"><i class="fa-solid fa-save"></i> Save All</button></div></div></div>
-    <div class="modal-backdrop" id="courseModal"><div class="modal"><div class="modal-header"><h3 id="courseModalTitle">Add New Subject</h3><button data-dismiss="modal">&times;</button></div><form id="courseForm"><input type="hidden" id="courseEditId"><div class="form-group"><label>Subject Name *</label><input type="text" id="courseName" class="form-control" required placeholder="e.g. Mathematics"></div><div class="form-row-2"><div class="form-group"><label>Subject Code *</label><input type="text" id="courseCode" class="form-control" required placeholder="e.g. MATH"></div><div class="form-group"><label>Type</label><select id="courseType" class="form-control"><option>Core Subject</option><option>Sciences</option><option>Humanities</option></select></div></div><div class="form-group"><label>Subject Teacher</label><select id="courseTeacher" class="form-control"><option value="">Select Teacher...</option></select></div><div class="form-group"><label>Applicable Grades *</label><div class="grades-checkbox-grid"><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="PP1"> PP1</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="PP2"> PP2</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 1"> G1</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 2"> G2</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 3"> G3</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 4"> G4</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 5"> G5</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 6"> G6</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 7"> G7</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 8"> G8</label><label class="checkbox-card"><input type="checkbox" name="courseGrade" value="Grade 9"> G9</label></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button><button type="submit" class="btn btn-primary">Save Subject</button></div></form></div></div>
     <div class="modal-backdrop" id="assessmentModal"><div class="modal modal-lg"><div class="modal-header"><h3 id="assessUnitTitle">CBC Assessment</h3><button data-dismiss="modal">&times;</button></div><div class="modal-body p-0"><input type="hidden" id="assessUnitId"><div class="assessment-grading" style="padding: 1.5rem;"><div class="form-group"><label>Score (0-100) *</label><input type="number" id="assessScore" class="form-control input-lg" min="0" max="100"></div><div class="form-group"><label>Performance Level</label><div id="assessLevelDisplay" class="status-display-box">Pending</div></div><div class="form-group"><label>Decision</label><div id="assessDecisionDisplay" class="status-display-box">Pending</div></div><div class="form-group"><label>Feedback</label><textarea id="assessFeedback" class="form-control" rows="3"></textarea></div></div></div><div class="modal-footer"><button class="btn btn-secondary" data-dismiss="modal">Cancel</button><button class="btn btn-primary" id="btnSaveAssessment"><i class="fa-solid fa-save"></i> Save</button></div></div></div>
     <div class="modal-backdrop" id="staffModal"><div class="modal modal-lg"><div class="modal-header"><h3 id="staffModalTitle">Add New Staff</h3><button data-dismiss="modal">&times;</button></div><form id="staffForm"><input type="hidden" id="staffEditId"><div class="form-step active" id="staff-form-step-1"><div class="section-title"><i class="fa-solid fa-user"></i> Personal Details</div><div class="staff-photo-uploader"><img id="staffPhotoPreview" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23e2e8f0' width='150' height='150'/%3E%3Ctext fill='%2394a3b8' font-family='sans-serif' font-size='14' x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle'%3ENo Photo%3C/text%3E%3C/svg%3E" class="staff-photo-preview" alt="Staff Photo"><label style="cursor:pointer; font-size: 0.8rem; color: var(--primary); text-decoration: underline;">Upload Photo<input type="file" id="staffPhotoInput" accept="image/*" hidden></label></div><div class="form-row-3"><div class="form-group"><label>Surname *</label><input type="text" id="staffSurname" class="form-control" required placeholder="Doe"></div><div class="form-group"><label>First Name *</label><input type="text" id="staffFirstName" class="form-control" required placeholder="John"></div><div class="form-group"><label>Other Names</label><input type="text" id="staffOtherNames" class="form-control" placeholder="Smith"></div></div><div class="form-row-3"><div class="form-group"><label>Gender *</label><select id="staffGender" class="form-control"><option>Male</option><option>Female</option></select></div><div class="form-group"><label>Date of Birth</label><input type="date" id="staffDob" class="form-control"></div><div class="form-group"><label>ID Number *</label><input type="text" id="staffIdNo" class="form-control" required placeholder="National ID"></div></div><div class="form-row-2"><div class="form-group"><label>Phone Number *</label><input type="tel" id="staffPhone" class="form-control" required placeholder="07xx..."></div><div class="form-group"><label>Email Address</label><input type="email" id="staffEmail" class="form-control" placeholder="email@school.com"></div></div><div class="form-nav"><button type="button" class="btn btn-primary" data-staff-step="next" data-current="1">Next <i class="fa-solid fa-arrow-right"></i></button></div></div><div class="form-step" id="staff-form-step-2"><div class="section-title"><i class="fa-solid fa-briefcase"></i> Employment Details</div><div class="form-row-2"><div class="form-group"><label>Designation *</label><select id="staffDesignation" class="form-control" required><option value="">Select...</option><option>Head of Institution</option><option>Deputy Head</option><option>Senior Teacher</option><option>Teacher</option><option>Support Staff</option></select></div><div class="form-group"><label>Department *</label><select id="staffDept" class="form-control"><option>Administration</option><option>Lower Primary</option><option>Upper Primary</option><option>JSS</option><option>Support</option></select></div></div><div class="form-row-2"><div class="form-group"><label>TSC Number</label><input type="text" id="staffTsc" class="form-control" placeholder="TSC Employment No"></div><div class="form-group"><label>Employment Type</label><select id="staffEmploymentType" class="form-control"><option>TSC</option><option>BOM</option><option>Intern</option><option>Support</option></select></div></div><div class="form-row-2"><div class="form-group"><label>Date of Appointment</label><input type="date" id="staffAppointmentDate" class="form-control"></div><div class="form-group"><label>Subjects/Role</label><input type="text" id="staffSubjects" class="form-control" placeholder="e.g. Math / Science"></div></div><div class="form-nav"><button type="button" class="btn btn-secondary" data-staff-step="prev" data-current="2"><i class="fa-solid fa-arrow-left"></i> Back</button><button type="submit" formnovalidate class="btn btn-success btn-lg"><i class="fa-solid fa-check"></i> Save Staff</button></div></div></form></div></div>
     
@@ -4067,7 +4069,6 @@
 
 
     <div id="toast" class="toast" role="alert"></div>
-    <div class="ai-fab" data-modal="aiAssistantModal" title="AI Assistant"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
 
     <!-- Sidebar Toggle Logic -->
     <script src="script.js?v=4"></script>
