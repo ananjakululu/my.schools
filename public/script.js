@@ -2112,31 +2112,67 @@ function getStudentReportData(studentId, term, year) {
     if (!student) return null;
 
     const grade = student.grade;
-    term = term || store.settings.currentTerm;
-    year = year || store.settings.academicYear;
+    const requestedTerm = term || store.settings.currentTerm;
+    const requestedYear = year || store.settings.academicYear;
 
     // Applicable learning areas for this grade
     const subjects = (store.learningAreas || []).filter(la =>
         la.applicableLevels && la.applicableLevels.includes(grade)
     );
 
-    // All exams for this student
-    const studentExams = (store.exams || []).filter(e => e.studentId === studentId);
+    // FIXED: use flattenExams() — unpacks nested/virtual score records
+    // (wrapper records with a scores map) that the old raw-store lookup
+    // missed, which caused "No assessment data found" for valid records.
+    const allStudentExams = flattenExams().filter(e => e.studentId === studentId);
+    const scored = allStudentExams.filter(e => e.score != null && parseFloat(e.score) > 0);
 
-    // Detect which assessment types exist for this term/year
-    const typeSet = new Set();
-    studentExams.forEach(e => {
-        if (e.type && VALID_ASSESSMENT_TYPES.includes(e.type) &&
-            e.term === term && String(e.year) === String(year)) {
-            typeSet.add(e.type);
+    if (scored.length === 0) return null; // genuinely no scores for this learner
+
+    // Resolve the effective term/year. Preference:
+    //   1. the requested term/year, if it has scores
+    //   2. the learner's most recent term/year that has scores
+    //   3. any scores at all (records without term/year are always included)
+    const TERM_ORDER = { 'Term 1': 1, 'Term 2': 2, 'Term 3': 3 };
+    const byRecent = (a, b) =>
+        String(b.year || '').localeCompare(String(a.year || '')) ||
+        (TERM_ORDER[b.term] || 99) - (TERM_ORDER[a.term] || 99);
+
+    const inRequested = scored.filter(e =>
+        e.term === requestedTerm && String(e.year) === String(requestedYear));
+    const undated = scored.filter(e => !e.term && !e.year);
+    let effectiveTerm, effectiveYear, inScope;
+
+    if (inRequested.length > 0) {
+        effectiveTerm = requestedTerm; effectiveYear = requestedYear;
+        inScope = [...inRequested, ...undated];
+    } else {
+        const dated = scored.filter(e => e.term && e.year).sort(byRecent);
+        if (dated.length > 0) {
+            effectiveTerm = dated[0].term; effectiveYear = dated[0].year;
+            inScope = scored.filter(e =>
+                (e.term === effectiveTerm && String(e.year) === String(effectiveYear)) || (!e.term && !e.year));
+        } else {
+            effectiveTerm = requestedTerm; effectiveYear = requestedYear;
+            inScope = scored; // nothing dated — accept whatever exists
         }
-    });
+    }
 
+    // Detect assessment types present in the resolved scope.
+    // FIXED: score records saved by the Assessment Centre carry NO type field —
+    // the type lives on the wrapper record as assessType/name (flattenExams
+    // copies those onto each unpacked record). Fall back through
+    // type → assessType → assessName → a neutral label so valid records
+    // are never rejected for lacking a type.
+    const recType = (e) => (e.type && String(e.type).trim()) ||
+        (e.assessType && String(e.assessType).trim()) ||
+        (e.assessName && String(e.assessName).trim()) ||
+        'Assessment';
+    const typeSet = new Set();
+    inScope.forEach(e => typeSet.add(recType(e)));
     const sortedTypes = [...typeSet].sort((a, b) =>
         (ASSESSMENT_TYPE_ORDER[a] || 99) - (ASSESSMENT_TYPE_ORDER[b] || 99)
     );
-
-    if (sortedTypes.length === 0) return null; // No data
+    if (sortedTypes.length === 0) return null;
 
     // Build rows
     const rows = subjects.map((subj, idx) => {
@@ -2147,9 +2183,8 @@ function getStudentReportData(studentId, term, year) {
         };
 
         sortedTypes.forEach(type => {
-            const exam = studentExams.find(e =>
-                e.subjectId === subj.id && e.type === type &&
-                e.term === term && String(e.year) === String(year)
+            const exam = inScope.find(e =>
+                e.subjectId === subj.id && recType(e) === type
             );
             const score = exam ? parseInt(exam.score) || 0 : 0;
             row.scores[type] = score;
@@ -2167,12 +2202,12 @@ function getStudentReportData(studentId, term, year) {
         ? Math.round(scoredRows.reduce((s, r) => s + r.avg, 0) / scoredRows.length)
         : 0;
 
-    // Class rank calculation
+    // Class rank calculation (same scope as this learner, via flattenExams too)
     const gradeStudents = StudentRepo.findBy('grade', grade);
     const gradeAvgs = gradeStudents.map(s => {
-        const sExams = (store.exams || []).filter(e =>
-            e.studentId === s.id && e.term === term &&
-            String(e.year) === String(year) && e.type && parseInt(e.score) > 0
+        const sExams = flattenExams().filter(e =>
+            e.studentId === s.id && e.score != null && parseFloat(e.score) > 0 &&
+            ((e.term === effectiveTerm && String(e.year) === String(effectiveYear)) || (!e.term && !e.year))
         );
         if (sExams.length === 0) return -1;
         const subjMap = {};
@@ -2192,7 +2227,7 @@ function getStudentReportData(studentId, term, year) {
     }
 
     return {
-        student, term, year, sortedTypes, rows,
+        student, term: effectiveTerm, year: effectiveYear, sortedTypes, rows,
         overallAvg, overallRating: overallAvg > 0 ? cbcRating(overallAvg) : null,
         rank, totalInGrade: gradeStudents.length,
         remarks: generateRemarks(rows, overallAvg, student)
@@ -2248,10 +2283,18 @@ function renderReportCardToDoc(doc, data, startY) {
 
     // --- START PAGE 1 HEADER ---
     // 18. Logo support (Assumes s.logo is a base64 string or data URL)
+    // FIXED: forced 'PNG' threw for JPEG/SVG logos, silently killing the whole
+    // PDF. Detect the real format and skip gracefully if it can't be drawn.
     if (s.logo) {
         try {
-            doc.addImage(s.logo, 'PNG', margin, y - 1, 12, 12);
-        } catch (e) { /* Fail silently if no valid image */ }
+            const m = String(s.logo).match(/^data:image\/(\w+)/);
+            let fmt = m ? m[1].toUpperCase() : 'PNG';
+            if (fmt === 'JPG') fmt = 'JPEG';
+            if (fmt === 'SVG' || fmt === 'SVG+XML') throw new Error('SVG logo not supported by jsPDF');
+            doc.addImage(s.logo, fmt, margin, y - 1, 12, 12);
+        } catch (e) {
+            console.warn('[REPORT] Logo skipped:', e.message);
+        }
     }
 
     // 3. School name overflow protection & 21. Visual hierarchy (16pt)
@@ -2402,7 +2445,7 @@ function renderReportCardToDoc(doc, data, startY) {
         // 16. Page continuation support
         didAddPage: function (data) {
             drawMiniHeader();
-            data.settings.startY = y; // Tell autoTable where to resume
+            data.settings.startY = 14; // Resume below the mini header (FIXED: was the original y)
         },
         didDrawPage: function () {
             drawFooter();
@@ -2574,50 +2617,534 @@ function hexToRgb(hex) {
     const b = parseInt(hex.slice(5, 7), 16);
     return [r, g, b];
 }
+// --- Ensure jsPDF + autoTable are loaded (retries the CDN on demand) ---
+const loadScriptTag = (src) => new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+});
+async function ensureJsPdfLoaded() {
+    if (typeof jspdf !== 'undefined' && typeof jspdf.jsPDF === 'function') return true;
+    console.warn('[PDF] jsPDF missing — trying local vendor files first');
+    const l1 = await loadScriptTag('vendor/jspdf.umd.min.js');
+    const l2 = await loadScriptTag('vendor/jspdf.plugin.autotable.min.js');
+    await new Promise(r => setTimeout(r, 200));
+    if (typeof jspdf !== 'undefined' && typeof jspdf.jsPDF === 'function') return true;
+    // Try multiple CDNs (school networks often block some of them)
+    const sources = [
+        'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+        'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js',
+        'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'
+    ];
+    for (const src of sources) {
+        console.warn('[PDF] trying jsPDF CDN:', src);
+        await loadScriptTag(src);
+        await loadScriptTag('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js');
+        await new Promise(r => setTimeout(r, 300));
+        if (typeof jspdf !== 'undefined' && typeof jspdf.jsPDF === 'function') return true;
+    }
+    return false;
+}
+
+// --- Fallback when jsPDF cannot be loaded at all: print the MODERN preview ---
+// (browser-native print → "Save as PDF". No html2canvas, so no clipping.)
+function downloadReportCardViaPrint(studentId) {
+    const student = StudentRepo.getById(studentId);
+    if (!student) { showToast('Learner not found.', 'error'); return; }
+    try {
+        // Ensure the modern preview exists for this learner
+        const sel = $('reportLearnerSelect');
+        if (sel) sel.value = studentId;
+        generateIndividualReport();
+        const page = $('individualReportPage');
+        if (!page || !page.innerHTML.trim()) { showToast('Could not build the report preview.', 'error'); return; }
+
+        const printWin = window.open('', '_blank', 'width=920,height=720');
+        if (!printWin) { showToast('Pop-up blocked. Allow pop-ups for this site.', 'error'); return; }
+        printWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report Card — ${escapeHtml(student.name)}</title>
+        <style>
+            * { margin:0; padding:0; box-sizing:border-box }
+            body { font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; background:#fff; color:#0f172a }
+            @page { size: A4; margin: 10mm }
+            .rpt-sheet { width: 190mm; margin: 0 auto }
+            /* override the inline A4 sheet so it flows in the print window */
+            .rpt-sheet > div { width: 190mm !important; min-height: auto !important; padding: 0 !important; box-shadow: none !important; }
+            table { page-break-inside: auto }
+            tr { page-break-inside: avoid }
+        </style></head><body>
+        <div class="rpt-sheet">${page.innerHTML}</div>
+        <script>setTimeout(function(){ window.print(); }, 500);<\/script>
+        </body></html>`);
+        printWin.document.close();
+        showToast('Choose "Save as PDF" in the print dialog', 'info');
+    } catch (err) {
+        console.error('[REPORT PRINT FALLBACK]', err);
+        showToast('Could not open the print window: ' + err.message, 'error');
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//   MODERN A4 REPORT CARD (overhaul)
+//   • One column per assessment type done in the Assessments section
+//     (Opener, Mid Term, End Term, ...) — dynamic, in assessment order
+//   • Only learning areas that actually have scores appear on the card
+//   • Pure vector jsPDF — no screenshots, no clipping
+// ═══════════════════════════════════════════════════════════════════════
+const RPT_C = {
+    green: [22, 163, 74],      // #16a34a school green
+    slate: [30, 41, 59],       // #1e293b
+    light: [241, 245, 249],    // #f1f5f9
+    border: [226, 232, 240],   // #e2e8f0
+    white: [255, 255, 255],
+    muted: [100, 116, 139],    // #64748b
+    ee: [34, 197, 94],         // #22c55e
+    me: [59, 130, 246],        // #3b82f6
+    ae: [245, 158, 11],        // #f59e0b
+    be: [239, 68, 68],         // #ef4444
+    dark: [15, 23, 42]         // #0f172a
+};
+const RPT_BAND_CODES = { EE: 'EE', ME: 'ME', AE: 'AE', BE: 'BE' };
+const RPT_RATING_COLOR = (code) => code === 'EE' ? RPT_C.ee : code === 'ME' ? RPT_C.me : code === 'AE' ? RPT_C.ae : RPT_C.be;
+
+function reportTypeLabel(e) {
+    if (e && e.type && e.type !== 'assessment' && String(e.type).trim()) return String(e.type).trim();
+    if (e && e.assessType && String(e.assessType).trim()) return String(e.assessType).trim();
+    if (e && e.assessName && String(e.assessName).trim()) return String(e.assessName).replace(/\s*[—–-]\s*.*$/, '').trim();
+    return 'Assessment';
+}
+
+// Distinct assessment types present for the grade in the term/year scope
+function collectAssessmentColumns(grade, term, year) {
+    const cols = [], seen = new Set();
+    (store.exams || []).forEach(e => {
+        if (!e || !(e.scores && typeof e.scores === 'object' && Object.keys(e.scores).length > 0)) return;
+        if (e.grade && e.grade !== grade) return;
+        const inScope = (!term || !e.term || e.term === term) && (!year || !e.year || String(e.year) === String(year));
+        if (!inScope) return;
+        const label = reportTypeLabel(e);
+        if (!seen.has(label)) { seen.add(label); cols.push(label); }
+    });
+    return cols;
+}
+
+function getModernReportData(studentId, term, year) {
+    const student = StudentRepo.getById(studentId);
+    if (!student) return null;
+    const grade = student.grade;
+    const reqTerm = term || store.settings.currentTerm;
+    const reqYear = year || store.settings.academicYear;
+
+    const all = flattenExams().filter(e => e.studentId === studentId && e.score != null && parseFloat(e.score) > 0);
+    if (all.length === 0) return null;
+
+    // Resolve effective term/year: requested → most recent with data → undated
+    const TERM_ORDER = { 'Term 1': 1, 'Term 2': 2, 'Term 3': 3 };
+    const byRecent = (a, b) => String(b.year || '').localeCompare(String(a.year || '')) ||
+        (TERM_ORDER[b.term] || 99) - (TERM_ORDER[a.term] || 99);
+    const inRequested = all.filter(e => e.term === reqTerm && String(e.year) === String(reqYear));
+    const undated = all.filter(e => !e.term && !e.year);
+    let effectiveTerm, effectiveYear, inScope;
+    if (inRequested.length > 0) {
+        effectiveTerm = reqTerm; effectiveYear = reqYear;
+        inScope = [...inRequested, ...undated];
+    } else {
+        const dated = all.filter(e => e.term && e.year).sort(byRecent);
+        if (dated.length > 0) {
+            effectiveTerm = dated[0].term; effectiveYear = dated[0].year;
+            inScope = all.filter(e => (e.term === effectiveTerm && String(e.year) === String(effectiveYear)) || (!e.term && !e.year));
+        } else {
+            effectiveTerm = reqTerm; effectiveYear = reqYear;
+            inScope = all;
+        }
+    }
+
+    const columns = collectAssessmentColumns(grade, effectiveTerm, effectiveYear);
+    if (columns.length === 0) columns.push('Assessment');
+
+    // ONLY subjects/learning areas that have scores in scope
+    const subjects = (store.learningAreas || []).filter(la => la.applicableLevels && la.applicableLevels.includes(grade));
+    const rows = [];
+    subjects.forEach((subj) => {
+        const scores = {};
+        let total = 0, count = 0;
+        columns.forEach(c => {
+            const rec = inScope.find(e => e.subjectId === subj.id && reportTypeLabel(e) === c);
+            const sc = rec ? parseInt(rec.score) || 0 : 0;
+            scores[c] = sc;
+            if (sc > 0) { total += sc; count++; }
+        });
+        if (count === 0) return; // skip learning areas absent from assessments
+        const avg = Math.round(total / count);
+        rows.push({
+            num: rows.length + 1, subjectName: subj.name, subjectId: subj.id,
+            teacherName: getSubjectTeacherName(subj.id, grade),
+            scores, avg, rating: cbcRating(avg)
+        });
+    });
+    if (rows.length === 0) return null;
+
+    const overallAvg = Math.round(rows.reduce((s, r) => s + r.avg, 0) / rows.length);
+
+    // Rank within grade, same scope
+    const gradeStudents = StudentRepo.findBy('grade', grade);
+    const gradeAvgs = gradeStudents.map(s => {
+        const sExams = flattenExams().filter(e =>
+            e.studentId === s.id && e.score != null && parseFloat(e.score) > 0 &&
+            ((e.term === effectiveTerm && String(e.year) === String(effectiveYear)) || (!e.term && !e.year)));
+        if (sExams.length === 0) return -1;
+        const subjMap = {};
+        sExams.forEach(e => {
+            if (!subjMap[e.subjectId]) subjMap[e.subjectId] = [];
+            subjMap[e.subjectId].push(parseInt(e.score) || 0);
+        });
+        const avgs = Object.values(subjMap).map(sc => Math.round(sc.reduce((a, b) => a + b, 0) / sc.length));
+        return avgs.reduce((a, b) => a + b, 0) / avgs.length;
+    }).filter(a => a >= 0).sort((a, b) => b - a);
+    let rank = '-';
+    for (let i = 0; i < gradeAvgs.length; i++) {
+        if (Math.abs(gradeAvgs[i] - overallAvg) < 0.5) { rank = i + 1; break; }
+    }
+
+    return {
+        student, term: effectiveTerm, year: effectiveYear, columns, rows,
+        overallAvg, overallRating: cbcRating(overallAvg),
+        rank, totalInGrade: gradeStudents.length,
+        remarks: generateRemarks(rows, overallAvg, student)
+    };
+}
+
+function renderModernReportCard(doc, data) {
+    const pageW = doc.internal.pageSize.getWidth();   // 210
+    const pageH = doc.internal.pageSize.getHeight();  // 297
+    const M = 14;
+    const contentW = pageW - M * 2;
+    const s = store.settings || {};
+    let y = 14;
+
+    // ── Letterhead ──
+    let logoW = 0;
+    if (s.logo) {
+        try {
+            const m = String(s.logo).match(/^data:image\/(\w+)/);
+            let fmt = m ? m[1].toUpperCase() : 'PNG';
+            if (fmt === 'JPG') fmt = 'JPEG';
+            if (fmt !== 'SVG' && fmt !== 'SVG+XML') {
+                doc.addImage(s.logo, fmt, M, y, 20, 20);
+                logoW = 26;
+            }
+        } catch (_) { /* skip logo */ }
+    }
+    const tx = M + logoW;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...RPT_C.slate);
+    doc.text(String(s.schoolName || 'SCHOOL NAME'), tx, y + 7);
+    doc.setFont('helvetica', 'italic'); doc.setFontSize(8.5); doc.setTextColor(...RPT_C.muted);
+    if (s.motto) doc.text(String(s.motto), tx, y + 12);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+    const contact = [s.address, s.phone, s.email].filter(Boolean).join('  ·  ');
+    if (contact) doc.text(contact, tx, y + 16);
+    // right-side meta
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+    doc.setTextColor(...RPT_C.muted);
+    doc.text(`CODE: ${s.schoolCode || '—'}`, pageW - M, y + 7, { align: 'right' });
+    doc.text(`LEVEL: ${s.level || '—'}`, pageW - M, y + 12, { align: 'right' });
+    doc.text(`CATEGORY: ${s.category || '—'}`, pageW - M, y + 16, { align: 'right' });
+    y += 21;
+    // accent bar
+    doc.setFillColor(...RPT_C.green); doc.roundedRect(M, y, contentW, 1.6, 0.8, 0.8, 'F');
+    y += 5;
+
+    // ── Title band ──
+    doc.setFillColor(...RPT_C.slate); doc.roundedRect(M, y, contentW, 10, 1.6, 1.6, 'F');
+    doc.setTextColor(...RPT_C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5);
+    doc.text('LEARNER ACADEMIC REPORT CARD', pageW / 2, y + 6.6, { align: 'center' });
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+    doc.text(`${data.term} — ${data.year}`, pageW - M - 4, y + 6.6, { align: 'right' });
+    y += 14;
+
+    // ── Learner info card ──
+    const st = data.student;
+    const age = st.dob ? Math.floor((Date.now() - new Date(st.dob).getTime()) / 31557600000) : null;
+    const fields1 = [
+        ['Full Name', st.name || '—'],
+        ['Admission No', st.reg || '—'],
+        ['Grade', st.grade || '—'],
+        ['Stream', st.stream || '—']
+    ];
+    const fields2 = [
+        ['Gender', st.gender || '—'],
+        ['Age', age && age > 0 ? age + ' yrs' : '—'],
+        ['Position', String(data.rank)],
+        ['Out of', String(data.totalInGrade)]
+    ];
+    const infoH = 22;
+    doc.setFillColor(...RPT_C.light); doc.setDrawColor(...RPT_C.border);
+    doc.roundedRect(M, y, contentW, infoH, 2, 2, 'FD');
+    const colW = contentW / 4;
+    const drawField = (f, x, yy) => {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...RPT_C.muted);
+        doc.text(f[0].toUpperCase(), x, yy);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(...RPT_C.dark);
+        doc.text(String(f[1]).slice(0, 28), x, yy + 4.8);
+    };
+    fields1.forEach((f, i) => drawField(f, M + 4 + i * colW, y + 6));
+    fields2.forEach((f, i) => drawField(f, M + 4 + i * colW, y + 15));
+    y += infoH + 6;
+
+    // ── Subject performance table ──
+    const minColW = 13;
+    const typeColW = Math.max(minColW, Math.min(26, (contentW - 8 - 46 - 14 - 17) / data.columns.length));
+    const headers = ['#', 'Learning Area', ...data.columns, 'Avg', 'Rating'];
+    const colWidths = [8, 46, ...data.columns.map(() => typeColW), 14, 17];
+    const bodyWithSummary = data.rows.map(r => [
+        r.num,
+        r.subjectName + (r.teacherName && r.teacherName !== '—' && r.teacherName !== '' ? '  ·  ' + r.teacherName : ''),
+        ...data.columns.map(c => (r.scores[c] > 0 ? r.scores[c] + '%' : '—')),
+        r.avg > 0 ? r.avg + '%' : '—',
+        r.rating ? r.rating.code : '—'
+    ]);
+    bodyWithSummary.push([
+        '', 'OVERALL', ...data.columns.map(() => ''),
+        data.overallAvg + '%', data.overallRating ? data.overallRating.code : '—'
+    ]);
+
+    doc.autoTable({
+        startY: y,
+        head: [headers],
+        body: bodyWithSummary,
+        margin: { left: M, right: M, bottom: 20 },
+        tableWidth: contentW,
+        styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.8, textColor: RPT_C.dark, lineColor: RPT_C.border, lineWidth: 0.2 },
+        headStyles: { fillColor: RPT_C.slate, textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', fontSize: 8 },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: colWidths[0] },
+            1: { cellWidth: colWidths[1], fontStyle: 'bold' },
+            [headers.length - 2]: { halign: 'center', cellWidth: colWidths[colWidths.length - 2], fontStyle: 'bold' },
+            [headers.length - 1]: { halign: 'center', cellWidth: colWidths[colWidths.length - 1], fontStyle: 'bold' }
+        },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        didParseCell: (td) => {
+            if (!td.styles) return; // width-calculation pass — no styles yet
+            if (td.section !== 'body') return;
+            const rowIdx = td.row.index;
+            if (rowIdx >= data.rows.length) { // OVERALL row
+                if (td.column.index >= 1) td.styles.fillColor = [220, 252, 231];
+                td.styles.fontStyle = 'bold';
+                if (td.column.index === 0) td.styles.fillColor = [220, 252, 231];
+                return;
+            }
+            // score cells (columns 2 .. 2+N-1) + avg + rating — tint by rating
+            const colIdx = td.column.index;
+            if (colIdx === 0) { td.styles.halign = 'center'; return; }
+            if (colIdx === 1) return;
+            const row = data.rows[rowIdx];
+            const rating = row.rating;
+            if (colIdx >= 2 && colIdx < 2 + data.columns.length) {
+                // raw may be '78%' or '—'
+                const raw = td.cell.raw;
+                if (typeof raw === 'string' && raw.endsWith('%')) {
+                    const sc = parseInt(raw, 10) || 0;
+                    const r = cbcRating(sc);
+                    if (r) { td.styles.textColor = r.color ? r.color : RPT_C.dark; td.styles.fontStyle = 'bold'; td.styles.halign = 'center'; }
+                } else td.styles.halign = 'center';
+                return;
+            }
+            td.styles.halign = 'center';
+            if (colIdx === 2 + data.columns.length) { // avg
+                td.styles.fontStyle = 'bold';
+                if (rating) { td.styles.textColor = rating.color; }
+                return;
+            }
+            // rating col
+            if (rating) {
+                td.styles.fillColor = RPT_RATING_COLOR(rating.code);
+                td.styles.textColor = [255, 255, 255];
+                td.styles.fontStyle = 'bold';
+            }
+        },
+        didAddPage: (td) => {
+            doc.setFillColor(...RPT_C.slate);
+            doc.roundedRect(M, 6, contentW, 5, 1.2, 1.2, 'F');
+            doc.setTextColor(...RPT_C.white); doc.setFont('helvetica', 'bold'); doc.setFontSize(7);
+            doc.text('LEARNER ACADEMIC REPORT CARD — CONTINUED', pageW / 2, 9.4, { align: 'center' });
+            td.settings.startY = 14;
+        }
+    });
+
+    y = doc.lastAutoTable.finalY + 7;
+
+    // ── Summary strip (3 boxes) ──
+    const boxW = (contentW - 8) / 3;
+    const boxItems = [
+        ['MEAN SCORE', data.overallAvg + '%'],
+        ['OVERALL RATING', data.overallRating ? data.overallRating.code : '—'],
+        ['CLASS POSITION', String(data.rank) + ' of ' + String(data.totalInGrade)]
+    ];
+    const ensure = (need) => { if (y + need > pageH - 16) { doc.addPage(); y = 14; } };
+    ensure(16);
+    boxItems.forEach((b, i) => {
+        const bx = M + i * (boxW + 4);
+        doc.setFillColor(...(i === 1 ? RPT_C.green : RPT_C.light));
+        doc.setDrawColor(...RPT_C.border);
+        doc.roundedRect(bx, y, boxW, 13, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
+        doc.setTextColor(...(i === 1 ? RPT_C.white : RPT_C.muted));
+        doc.text(b[0], bx + 4, y + 4.4);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+        doc.setTextColor(...(i === 1 ? RPT_C.white : RPT_C.dark));
+        doc.text(b[1], bx + 4, y + 10.4);
+    });
+    y += 19;
+
+    // ── Remarks ──
+    ensure(30);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...RPT_C.dark);
+    doc.text('CLASS TEACHER’S REMARKS', M, y);
+    doc.setDrawColor(...RPT_C.green); doc.setLineWidth(0.5);
+    doc.line(M, y + 1.2, M + 46, y + 1.2);
+    y += 4;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...RPT_C.slate);
+    const remarkLines = doc.splitTextToSize(String(data.remarks || ''), contentW - 4);
+    doc.text(remarkLines, M + 2, y + 3);
+    y += remarkLines.length * 4.2 + 4;
+
+    // ── Signatures ──
+    ensure(26);
+    const sigW = (contentW - 16) / 3;
+    const sigLabels = ['CLASS TEACHER', s.hoiTitle || 'HEAD OF INSTITUTION', 'DATE'];
+    sigLabels.forEach((lab, i) => {
+        const sx = M + i * (sigW + 8);
+        doc.setDrawColor(...RPT_C.border); doc.setLineWidth(0.4);
+        doc.line(sx, y + 8, sx + sigW, y + 8);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(...RPT_C.muted);
+        doc.text(lab, sx, y + 12);
+    });
+    y += 17;
+
+    // ── Legend ──
+    ensure(12);
+    const legendItems = [['EE', 'Exceeding (80–100)', RPT_C.ee], ['ME', 'Meeting (50–79)', RPT_C.me], ['AE', 'Approaching (30–49)', RPT_C.ae], ['BE', 'Below (0–29)', RPT_C.be]];
+    const chipW = contentW / 4;
+    legendItems.forEach((li, i) => {
+        const lx = M + i * chipW;
+        doc.setFillColor(...li[2]); doc.roundedRect(lx, y, 4.5, 4.5, 1, 1, 'F');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...RPT_C.dark);
+        doc.text(li[0], lx + 6.5, y + 3.4);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...RPT_C.muted);
+        doc.text(li[1], lx + 6.5, y + 6.8);
+    });
+    y += 10;
+
+    // ── Footer with page numbers ──
+    const pages = doc.internal.getNumberOfPages();
+    for (let p = 1; p <= pages; p++) {
+        doc.setPage(p);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...RPT_C.muted);
+        doc.text(`${s.schoolName || 'School'} — Learner Report Card`, M, pageH - 6);
+        doc.text(`Page ${p} of ${pages}`, pageW - M, pageH - 6, { align: 'right' });
+        doc.setDrawColor(...RPT_C.border); doc.setLineWidth(0.3);
+        doc.line(M, pageH - 9, pageW - M, pageH - 9);
+    }
+    return y;
+}
+
 // --- Download Single Student Report Card ---
-function downloadStudentReportCard(studentId) {
-    const data = getStudentReportData(studentId);
+async function downloadStudentReportCard(studentId) {
+    // Honor the Reports-section term/year filters when they are set to a
+    // specific value (FIXED: previously always used settings defaults)
+    const termFilter = $('reportTermFilter')?.value;
+    const yearFilter = $('reportYearFilter')?.value;
+    const data = getModernReportData(studentId,
+        (termFilter && termFilter !== 'all') ? termFilter : undefined,
+        (yearFilter && yearFilter !== 'all') ? yearFilter : undefined);
     if (!data) {
+        // Diagnostic: helps identify why no data resolved for this learner
+        try {
+            const flat = flattenExams().filter(e => e.studentId === studentId);
+            const scored = flat.filter(e => e.score != null && parseFloat(e.score) > 0);
+            console.warn(`[REPORT] No report data for ${studentId}: flat=${flat.length} scored=${scored.length} exams=${(store.exams || []).length}`);
+        } catch (_) { /* ignore */ }
         showToast('No assessment data found for this student this term.', 'error');
         return;
     }
-    const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
-    renderReportCardToDoc(doc, data, 12);
-    const fname = `Report_${data.student.name.replace(/\s+/g, '_')}_${data.term}_${data.year}.pdf`;
-    doc.save(fname);
-    showToast(`Downloaded: ${fname}`);
+    // Pre-flight: the primary renderer depends on two CDN libraries. Try to
+    // reload them on demand first; only fall back if the network still fails.
+    if (!(await ensureJsPdfLoaded())) {
+        console.warn('[REPORT] jsPDF still unavailable — using backup renderer');
+        downloadReportCardViaPrint(studentId);
+        return;
+    }
+    try {
+        const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
+        if (typeof doc.autoTable !== 'function') {
+            console.warn('[REPORT] autoTable plugin not loaded — using backup renderer');
+            downloadReportCardViaPrint(studentId);
+            return;
+        }
+        renderModernReportCard(doc, data);
+        const fname = `Report_${data.student.name.replace(/\s+/g, '_')}_${data.term}_${data.year}.pdf`;
+        doc.save(fname);
+        showToast(`Downloaded: ${fname}`);
+    } catch (err) {
+        console.error('[REPORT PDF]', err);
+        // Backup attempt before giving up
+        try {
+            downloadReportCardViaPrint(studentId);
+        } catch (err2) {
+            console.error('[REPORT PDF FALLBACK FAILED]', err2);
+            showToast('PDF generation failed: ' + (err.message || err), 'error');
+        }
+    }
 }
 // --- Download Full Grade Report (all students, one PDF) ---
-function downloadGradeReport(grade) {
+async function downloadGradeReport(grade) {
     const students = StudentRepo.findBy('grade', grade);
     if (students.length === 0) {
         showToast(`No learners found in ${grade}.`, 'error');
         return;
     }
 
-    const term = $('reportTermSelect')?.value || store.settings.currentTerm;
-    const year = $('reportYearSelect')?.value || store.settings.academicYear;
-    const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
-    let first = true;
-    let count = 0;
+    const termF = $('reportTermFilter')?.value;
+    const yearF = $('reportYearFilter')?.value;
+    const term = (termF && termF !== 'all') ? termF : store.settings.currentTerm;
+    const year = (yearF && yearF !== 'all') ? yearF : store.settings.academicYear;
 
-    students.forEach(student => {
-        const data = getStudentReportData(student.id, term, year);
-        if (!data) return; // Skip students with no data
-        if (!first) doc.addPage();
-        first = false;
-        renderReportCardToDoc(doc, data, 12);
-        count++;
-    });
-
-    if (count === 0) {
-        showToast(`No assessment data found for ${grade} this term.`, 'error');
+    // FIXED: wrapped in try/catch — silent failures looked like dead buttons.
+    if (!(await ensureJsPdfLoaded())) {
+        showToast('PDF library failed to load. Use "Print All Report Cards" instead, then refresh.', 'error');
         return;
     }
+    try {
+        const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
+        if (typeof doc.autoTable !== 'function') {
+            showToast('Table library failed to load. Use "Print All Report Cards" instead, then refresh.', 'error');
+            return;
+        }
+        let first = true;
+        let count = 0;
 
-    const fname = `Grade_Report_${grade.replace(/\s+/g, '_')}_${term}_${year}.pdf`;
-    doc.save(fname);
-    showToast(`Downloaded ${count} report cards for ${grade}`);
+        students.forEach(student => {
+            const data = getModernReportData(student.id, term, year);
+            if (!data) return; // Skip students with no data
+            if (!first) doc.addPage();
+            first = false;
+            renderModernReportCard(doc, data);
+            count++;
+        });
+
+        if (count === 0) {
+            showToast(`No assessment data found for ${grade} this term.`, 'error');
+            return;
+        }
+
+        const fname = `Grade_Report_${grade.replace(/\s+/g, '_')}_${term}_${year}.pdf`;
+        doc.save(fname);
+        showToast(`Downloaded ${count} report cards for ${grade}`);
+    } catch (err) {
+        console.error('[GRADE REPORT PDF]', err);
+        showToast('Grade report failed: ' + err.message, 'error');
+    }
 }
 
 // --- Preview Student Report in Modal ---
@@ -11238,9 +11765,14 @@ function flattenExams() {
             flat.push(e);
             return;
         }
-        // If it's a wrapper record with a nested scores map, unpack it
-        if (e.scores && typeof e.scores === 'object' && Object.keys(e.scores).length > 0) {
-            Object.values(e.scores).forEach(s => {
+        // If it's a wrapper record with a nested scores map, unpack it.
+        // FIXED: scores can arrive as a JSON string (raw /exams sync) — parse it.
+        let nestedScores = e.scores;
+        if (typeof nestedScores === 'string') {
+            try { nestedScores = JSON.parse(nestedScores); } catch (_) { nestedScores = null; }
+        }
+        if (nestedScores && typeof nestedScores === 'object' && Object.keys(nestedScores).length > 0) {
+            Object.values(nestedScores).forEach(s => {
                 if (s && s.score != null && parseFloat(s.score) > 0) {
                     flat.push({
                         ...s,
@@ -11454,7 +11986,7 @@ function buildReport(type) {
 
     switch (type) {
         case 'individual':
-            fillSchoolBanner('reportSchoolLogo', 'rshLogoPlaceholder', 'reportSchoolName', 'reportSchoolMotto', 'reportSchoolAddress');
+            fillSchoolBanner('reportSchoolLogo', 'reportLogoPlaceholder', 'reportSchoolName', 'reportSchoolMotto', 'reportSchoolAddress');
             setText('reportTermLabel', ($('reportTermFilter')?.value || 'all') === 'all' ? 'All Terms' : $('reportTermFilter').value);
             setText('reportYearLabel', ($('reportYearFilter')?.value || 'all') === 'all' ? 'All Years' : $('reportYearFilter').value);
             populateReportLearnerSelect();
@@ -11522,109 +12054,151 @@ function generateIndividualReport() {
     const student = StudentRepo.getById(sel.value);
     if (!student) { showToast('Learner not found.', 'error'); return; }
 
+    const termFilter = $('reportTermFilter')?.value;
+    const yearFilter = $('reportYearFilter')?.value;
+    const data = getModernReportData(student.id,
+        (termFilter && termFilter !== 'all') ? termFilter : undefined,
+        (yearFilter && yearFilter !== 'all') ? yearFilter : undefined);
+
     const page = $('individualReportPage');
-    if (page) page.style.display = '';
+    if (!page) return;
+    page.style.display = '';
 
-    const areas = getApplicableLearningAreas(student.grade);
-
-    // Use direct fetcher — bypasses strict dropdowns, tolerates missing grade fields
-    const scores = getStudentScoresDirect(student.id, student.grade);
-
-    const types = [...new Set(scores.map(e => e.assessType || e.examType || 'Assessment'))].sort();
-    const multiCol = types.length > 1;
-
-    // Build lookup using the universal subject resolver
-    const lookup = {};
-    scores.forEach(sc => {
-        const laId = resolveLaId(sc, areas);
-        if (!laId) return; 
-        const tk = sc.assessType || sc.examType || 'Assessment';
-        if (!lookup[laId]) lookup[laId] = {};
-        if (!lookup[laId][tk] || parseFloat(sc.score) > parseFloat(lookup[laId][tk].score)) {
-            lookup[laId][tk] = sc;
-        }
-    });
-
-    const head = $('individualReportHead');
-    if (head) {
-        let h = '<tr><th style="width:30px">#</th><th>Learning Area</th><th style="width:55px">Code</th>';
-        if (multiCol) types.forEach(t => { h += `<th style="text-align:center;min-width:65px">${escapeHtml(t)}</th>`; });
-        h += '<th style="text-align:center;min-width:65px">Score</th><th style="text-align:center;min-width:75px">Rating</th></tr>';
-        head.innerHTML = h;
+    if (!data) {
+        page.innerHTML = `<div style="padding:40px;text-align:center;color:#64748b;font-size:14px">
+            No assessment data found for <b>${escapeHtml(student.name)}</b>.
+            Record scores in the <b>Assessment</b> section first.</div>`;
+        return;
     }
 
-    const body = $('individualReportBody');
-    let totalSc = 0, assessedN = 0;
+    const s = store.settings;
+    const cols = data.columns;
+    const ratingColor = (code) => code === 'EE' ? '#22c55e' : code === 'ME' ? '#3b82f6' : code === 'AE' ? '#f59e0b' : '#ef4444';
+    const age = student.dob ? Math.floor((Date.now() - new Date(student.dob).getTime()) / 31557600000) : null;
 
-    if (body) {
-        body.innerHTML = areas.map((la, i) => {
-            const em = lookup[la.id] || {};
-            let best = 0;
-            if (multiCol) {
-                types.forEach(t => { if (em[t]) { const sc = parseFloat(em[t].score); if (sc > best) best = sc; } });
-            } else {
-                const k = types[0] || 'Assessment';
-                if (em[k]) best = parseFloat(em[k].score);
-            }
-            const r = best > 0 ? cbcRating(best) : null;
-            if (best > 0) { totalSc += best; assessedN++; }
+    const logoHtml = s.logo
+        ? `<img src="${escapeHtml(s.logo)}" style="width:52px;height:52px;border-radius:8px;object-fit:cover" alt="logo">`
+        : `<div style="width:52px;height:52px;border-radius:8px;background:#f0fdf4;display:flex;align-items:center;justify-content:center;color:#16a34a;font-size:22px;font-weight:800">${escapeHtml((s.schoolName || 'S').charAt(0))}</div>`;
 
-            let cells = `<td>${i + 1}</td><td>${escapeHtml(la.name)}</td><td style="font-size:11px;color:#64748b">${escapeHtml(la.code)}</td>`;
-            if (multiCol) {
-                types.forEach(t => {
-                    const e = em[t]; const sc = e ? parseFloat(e.score) : 0;
-                    const rr = sc > 0 ? cbcRating(sc) : null;
-                    cells += `<td style="text-align:center">${rr ? `<span style="color:${rr.color};font-weight:600;font-size:12px">${sc}%</span>` : '<span style="color:#cbd5e1">—</span>'}</td>`;
-                });
+    const thCells = cols.map(c =>
+        `<th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px;white-space:nowrap">${escapeHtml(c)}</th>`).join('');
+
+    const rowsHtml = data.rows.map(r => {
+        const cells = cols.map(c => {
+            const sc = r.scores[c];
+            if (sc > 0) {
+                const rc = ratingColor(r.rating ? r.rating.code : 'ME');
+                return `<td style="text-align:center;font-weight:700;color:${rc};font-size:12px">${sc}%</td>`;
             }
-            cells += `<td style="text-align:center;font-weight:600">${best > 0 ? best + '%' : '<span style="color:#cbd5e1">—</span>'}</td>`;
-            cells += `<td style="text-align:center">${r ? `<span style="display:inline-block;padding:2px 12px;border-radius:20px;font-weight:700;font-size:11px;background:${r.color}15;color:${r.color}">${r.code}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>`;
-            return `<tr>${cells}</tr>`;
+            return `<td style="text-align:center;color:#cbd5e1">—</td>`;
         }).join('');
-    }
-
-    const foot = $('individualReportFoot');
-    if (foot) {
-        const avg = assessedN > 0 ? Math.round(totalSc / assessedN) : 0;
-        const or = avg > 0 ? cbcRating(avg) : null;
-        const cs = 3 + (multiCol ? types.length : 0);
-        foot.innerHTML = `<tr style="background:#f8fafc;font-weight:700">
-            <td colspan="${cs}" style="text-align:right;padding-right:14px">Overall Average</td>
-            <td style="text-align:center;color:${or ? or.color : '#94a3b8'};font-size:15px">${avg > 0 ? avg + '%' : '—'}</td>
-            <td style="text-align:center">${or ? `<span style="display:inline-block;padding:2px 12px;border-radius:20px;font-weight:700;font-size:11px;background:${or.color}15;color:${or.color}">${or.code}</span>` : '—'}</td>
+        const ratingHtml = r.rating
+            ? `<span style="display:inline-block;padding:2px 10px;border-radius:14px;font-weight:700;font-size:10px;background:${ratingColor(r.rating.code)}18;color:${ratingColor(r.rating.code)}">${r.rating.code}</span>`
+            : '<span style="color:#cbd5e1">—</span>';
+        return `<tr style="border-bottom:1px solid #e2e8f0">
+            <td style="padding:7px 6px;text-align:center;color:#64748b;font-size:11px">${r.num}</td>
+            <td style="padding:7px 6px;font-weight:600;font-size:12px">${escapeHtml(r.subjectName)}${r.teacherName ? `<div style="font-size:10px;color:#94a3b8;font-weight:400">${escapeHtml(r.teacherName)}</div>` : ''}</td>
+            ${cells}
+            <td style="text-align:center;font-weight:700;font-size:12px">${r.avg}%</td>
+            <td style="text-align:center">${ratingHtml}</td>
         </tr>`;
-    }
+    }).join('');
 
-    setText('rptLearnerName', student.name || '---');
-    setText('rptLearnerAdm', student.reg || 'N/A');
-    setText('rptLearnerGrade', student.grade || '---');
-    setText('rptLearnerStream', student.stream || 'N/A');
-    setText('rptLearnerGender', student.gender || '---');
+    const summaryHtml = `
+        <div style="display:flex;gap:12px;margin:14px 0">
+            <div style="flex:1;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px">
+                <div style="font-size:9px;font-weight:700;color:#64748b;letter-spacing:.5px">MEAN SCORE</div>
+                <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:2px">${data.overallAvg}%</div>
+            </div>
+            <div style="flex:1;background:#16a34a;border-radius:10px;padding:10px 14px">
+                <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,.85);letter-spacing:.5px">OVERALL RATING</div>
+                <div style="font-size:20px;font-weight:800;color:#fff;margin-top:2px">${data.overallRating ? data.overallRating.code : '—'}</div>
+            </div>
+            <div style="flex:1;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px">
+                <div style="font-size:9px;font-weight:700;color:#64748b;letter-spacing:.5px">CLASS POSITION</div>
+                <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:2px">${data.rank} of ${data.totalInGrade}</div>
+            </div>
+        </div>`;
 
-    if (student.dob) {
-        const age = Math.floor((Date.now() - new Date(student.dob).getTime()) / 31557600000);
-        setText('rptLearnerAge', age > 0 ? age + ' yrs' : '---');
-    } else { setText('rptLearnerAge', '---'); }
+    const legendHtml = [['EE', 'Exceeding (80–100)', '#22c55e'], ['ME', 'Meeting (50–79)', '#3b82f6'], ['AE', 'Approaching (30–49)', '#f59e0b'], ['BE', 'Below (0–29)', '#ef4444']]
+        .map(l => `<span style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-size:10px;color:#64748b"><span style="width:10px;height:10px;border-radius:3px;background:${l[2]};display:inline-block"></span><b>${l[0]}</b>&nbsp;${l[1]}</span>`).join('');
 
-    const rank = computeRank(student);
-    setText('rptLearnerPosition', rank.pos);
-    setText('rptOutOf', rank.total);
+    const infoFields = [
+        ['Full Name', student.name], ['Admission No', student.reg], ['Grade', student.grade], ['Stream', student.stream],
+        ['Gender', student.gender], ['Age', age && age > 0 ? age + ' yrs' : '—'], ['Position', data.rank], ['Out of', data.totalInGrade]
+    ].map(f => `<div><div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:.4px">${f[0].toUpperCase()}</div>
+        <div style="font-size:12px;font-weight:700;color:#0f172a;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(f[1] == null ? '—' : f[1]))}</div></div>`).join('');
 
-    const areasAssessed = areas.filter(la => lookup[la.id]).length;
-    const allBest = areas.map(la => {
-        const em = lookup[la.id] || {}; let b = 0;
-        Object.values(em).forEach(e => { const sc = parseFloat(e.score); if (sc > b) b = sc; });
-        return b;
-    }).filter(v => v > 0);
-    const avg2 = allBest.length > 0 ? Math.round(allBest.reduce((a, b) => a + b, 0) / allBest.length) : 0;
-    const or2 = avg2 > 0 ? cbcRating(avg2) : null;
-    setText('rptTotalAvg', avg2 > 0 ? avg2 + '%' : '0%');
-    setText('rptOverallRating', or2 ? or2.code : '—');
-    setText('rptSubjectsAssessed', `${areasAssessed}/${areas.length}`);
+    page.innerHTML = `
+    <div style="background:#fff;width:210mm;min-height:297mm;padding:12mm 14mm;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;color:#0f172a;box-shadow:0 2px 18px rgba(15,23,42,.08)">
+        <div style="display:flex;align-items:flex-start;border-bottom:3px solid #16a34a;padding-bottom:10px;margin-bottom:10px">
+            <div style="margin-right:14px;flex-shrink:0">${logoHtml}</div>
+            <div style="flex:1">
+                <div style="font-size:19px;font-weight:800;color:#0f172a">${escapeHtml(s.schoolName || 'SCHOOL NAME')}</div>
+                ${s.motto ? `<div style="font-size:11px;font-style:italic;color:#64748b;margin-top:1px">${escapeHtml(s.motto)}</div>` : ''}
+                <div style="font-size:10px;color:#64748b;margin-top:2px">${escapeHtml([s.address, s.phone, s.email].filter(Boolean).join('  ·  '))}</div>
+            </div>
+            <div style="text-align:right;font-size:9px;color:#64748b;line-height:1.7">
+                <div><b>CODE:</b> ${escapeHtml(s.schoolCode || '—')}</div>
+                <div><b>LEVEL:</b> ${escapeHtml(s.level || '—')}</div>
+                <div><b>CATEGORY:</b> ${escapeHtml(s.category || '—')}</div>
+            </div>
+        </div>
+        <div style="background:#1e293b;border-radius:10px;padding:9px 16px;display:flex;justify-content:center;align-items:center;position:relative;margin-bottom:12px">
+            <span style="color:#fff;font-size:15px;font-weight:800;letter-spacing:.3px">LEARNER ACADEMIC REPORT CARD</span>
+            <span style="color:#fff;font-size:11px;font-weight:700;position:absolute;right:16px">${escapeHtml(data.term)} — ${escapeHtml(data.year)}</span>
+        </div>
+        <div style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;display:grid;grid-template-columns:repeat(4,1fr);gap:6px 10px;margin-bottom:14px">${infoFields}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead><tr>
+                <th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px;width:26px">#</th>
+                <th style="padding:7px 6px;background:#1e293b;color:#fff;font-size:10px;text-align:left">Learning Area</th>
+                ${thCells}
+                <th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px">Avg</th>
+                <th style="padding:7px 6px;text-align:center;background:#1e293b;color:#fff;font-size:10px">Rating</th>
+            </tr></thead>
+            <tbody>
+                ${rowsHtml}
+                <tr style="background:#dcfce7;font-weight:800">
+                    <td style="padding:8px 6px"></td>
+                    <td style="padding:8px 6px;font-size:11px">OVERALL</td>
+                    ${cols.map(() => '<td></td>').join('')}
+                    <td style="text-align:center;font-size:13px">${data.overallAvg}%</td>
+                    <td style="text-align:center"><span style="display:inline-block;padding:2px 10px;border-radius:14px;font-weight:700;font-size:10px;background:${ratingColor(data.overallRating ? data.overallRating.code : 'ME')}18;color:${ratingColor(data.overallRating ? data.overallRating.code : 'ME')}">${data.overallRating ? data.overallRating.code : '—'}</span></td>
+                </tr>
+            </tbody>
+        </table>
+        ${summaryHtml}
+        <div style="margin-bottom:14px">
+            <div style="font-size:11px;font-weight:800;color:#0f172a">CLASS TEACHER'S REMARKS</div>
+            <div style="height:2px;width:56px;background:#16a34a;margin:3px 0 8px"></div>
+            <div style="font-size:11px;color:#334155;line-height:1.55;padding:0 4px">${escapeHtml(data.remarks || '')}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin:28px 0 22px">
+            ${['CLASS TEACHER', s.hoiTitle || 'HEAD OF INSTITUTION', 'DATE'].map(l => `
+            <div style="text-align:center">
+                <div style="border-top:1px solid #94a3b8;margin-bottom:5px"></div>
+                <div style="font-size:9px;font-weight:700;color:#64748b">${escapeHtml(l)}</div>
+            </div>`).join('')}
+        </div>
+        <div style="border-top:1px solid #e2e8f0;padding-top:9px;display:flex;flex-wrap:wrap;gap:6px 0">${legendHtml}</div>
+    </div>`;
 
-    setText('rptTeacherRemarks', autoRemark(or2 ? or2.code : null));
-    setText('rptHeadRemarks', headRemark(or2 ? or2.code : null));
-    setText('rptReportDate', new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' }));
+    // Keep the legacy info fields in sync (harmless)
+    setText('reportLearnerName', student.name || '---');
+    setText('reportLearnerAdm', student.reg || 'N/A');
+    setText('reportLearnerGrade', student.grade || '---');
+    setText('reportLearnerStream', student.stream || 'N/A');
+    setText('reportLearnerGender', student.gender || '---');
+    setText('reportLearnerAge', age && age > 0 ? age + ' yrs' : '---');
+    setText('reportLearnerPosition', String(data.rank));
+    setText('reportLearnerOutOf', String(data.totalInGrade));
+    setText('reportTotalAvg', data.overallAvg + '%');
+    setText('reportOverallRating', data.overallRating ? data.overallRating.code : '—');
+    setText('reportSubjectsAssessed', data.rows.length + '/' + getApplicableLearningAreas(student.grade).length);
+    setText('reportTeacherRemarks', data.remarks || '');
+    setText('reportHeadRemarks', headRemark(data.overallRating ? data.overallRating.code : null));
+    setText('reportReportDate', new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' }));
 }
 
 function computeRank(student) {
@@ -12159,8 +12733,47 @@ function printCurrentReport() {
 }
 
 function exportReportPDF() {
-    // Delegates to print — browser's "Save as PDF" in print dialog
-    printCurrentReport();
+    // FIXED: was printCurrentReport() — printed the OLD preview layout.
+    // Now downloads the modern vector PDF (same design as the preview).
+    downloadIndividualReportPDF();
+}
+
+// Print ALL report cards for the filtered grade/stream (FIXED: button used
+// to only show an info toast — now builds every learner's card and prints)
+function printAllReportCards() {
+    const grade = $('reportGradeFilter')?.value;
+    if (!grade || grade === 'all') { showToast('Select a specific grade first.', 'error'); return; }
+    const stream = $('reportStreamFilter')?.value || 'all';
+    let students = StudentRepo.getAll().filter(s => s.grade === grade);
+    if (stream !== 'all') students = students.filter(s => s.stream === stream);
+    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (students.length === 0) { showToast('No learners in ' + grade, 'error'); return; }
+
+    const parts = [];
+    let rendered = 0;
+    students.forEach(st => {
+        try {
+            const html = buildIndividualReportHTML(st.id);
+            const match = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+            if (match && match[1].trim()) { parts.push(match[1]); rendered++; }
+        } catch (e) { console.warn('[PRINT ALL] skipped', st.name, e.message); }
+    });
+    if (rendered === 0) { showToast('No report data to print for this grade.', 'error'); return; }
+
+    const s = store.settings;
+    const printWin = window.open('', '_blank', 'width=900,height=700');
+    if (!printWin) { showToast('Pop-up blocked. Allow pop-ups for this site.', 'error'); return; }
+    printWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(s.schoolName || 'School')} — ${escapeHtml(grade)} Report Cards</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;color:#1e293b;font-size:13px}
+        @page{size:A4;margin:10mm}
+        .report-page-break{page-break-after:always;clear:both;height:0}
+        .a4-page{width:auto;min-height:auto;padding:0;overflow:visible}
+    </style></head><body>${parts.join('<div class="report-page-break"></div>')}</body></html>`);
+    printWin.document.close();
+    setTimeout(() => { printWin.print(); }, 500);
+    showToast(`Printing ${rendered} report card${rendered === 1 ? '' : 's'}`);
 }
 
 function exportReportExcel() {
@@ -12349,10 +12962,8 @@ function initReportListeners() {
     $('reportsExportPdfBtn')?.addEventListener('click', exportReportPDF);
     $('reportsExportExcelBtn')?.addEventListener('click', exportReportExcel);
 
-    // Print All (from section header)
-    $('reportsPrintAllBtn')?.addEventListener('click', () => {
-        showToast('Select a specific report type first, then use Print.', 'info');
-    });
+    // Print All (from section header) — FIXED: prints every card in the grade
+    $('reportsPrintAllBtn')?.addEventListener('click', printAllReportCards);
 
     // Individual report: learner select + generate
     $('reportLearnerSelect')?.addEventListener('change', () => {
@@ -12564,11 +13175,15 @@ function buildIndividualReportHTML(studentId, logoBase64) {
         body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .a4-page {
             width: 210mm;
-            height: 297mm;
+            /* FIXED: was height:297mm + overflow:hidden, which CLIPPED everything
+               below the first page — reports showed only the top half. Height now
+               grows with content and html2pdf slices it into multiple A4 pages. */
+            height: auto;
+            min-height: 297mm;
             padding: 12mm 15mm 10mm 15mm;
             background: #fff;
             color: #1e293b;
-            overflow: hidden;
+            overflow: visible;
             position: relative;
             display: flex;
             flex-direction: column;
@@ -12705,19 +13320,42 @@ async function renderHtmlToPdfBlob(htmlString, filename) {
 
     const element = doc.body || doc.documentElement;
 
+    // FIXED (v2): html2canvas crops when its virtual window is smaller than the
+    // element or offset from it — that produced PDFs chopped on the left/right/
+    // bottom. Measure the element's REAL rendered box and pin width/height/
+    // windowWidth/windowHeight to it, so the capture exactly matches content
+    // with zero offset. pagebreak then slices the full-height canvas into A4.
+    const realW = element.scrollWidth || element.offsetWidth || 794;
+    const realH = element.scrollHeight || element.offsetHeight || 1123;
+    console.log(`[PDF] Capturing ${realW}x${realH}px element`);
     const opt = {
-        margin: 0,
+        margin: [8, 8, 8, 8],
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { 
-            scale: 2, 
-            useCORS: true, 
-            logging: false, 
-            width: 794,   // 210mm at 96dpi
-            height: 1123, // 297mm at 96dpi
-            windowWidth: 794,
-            windowHeight: 1123
+        html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            scrollX: 0,
+            scrollY: 0,
+            width: realW,
+            height: realH,
+            windowWidth: realW,
+            windowHeight: realH,
+            removeContainer: true,
+            backgroundColor: '#ffffff',
+            // Normalize the cloned document so no default margins/scrollbars
+            // shift the content (that offset caused left-side chopping).
+            onclone: (clonedDoc) => {
+                try {
+                    const cb = clonedDoc.body;
+                    if (cb) { cb.style.margin = '0'; cb.style.padding = '0'; cb.style.width = '794px'; }
+                    const de = clonedDoc.documentElement;
+                    if (de) { de.style.margin = '0'; de.style.padding = '0'; }
+                } catch (_) { /* ignore */ }
+            }
         },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
     };
 
     const blob = await html2pdf().set(opt).from(element).outputPdf('blob');
@@ -12743,29 +13381,18 @@ async function downloadIndividualReportPDF() {
     const student = StudentRepo.getById(sel.value);
     if (!student) { showToast('Learner not found.', 'error'); return; }
 
-    // Auto-generate if not yet done
+    // Auto-generate the on-screen preview if not yet done
     const page = $('individualReportPage');
     if (page && page.style.display === 'none') {
         generateIndividualReport();
         await new Promise(r => setTimeout(r, 150));
     }
 
-    const cleanName = (student.name || 'Student').replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_').substring(0, 30);
-    const cleanGrade = (student.grade || '').replace(/\s/g, '_');
-
-    showPdfOverlay('Generating report card...');
-
-    try {
-        const logoB64 = await logoToBase64(store.settings?.logo);
-        const html = buildIndividualReportHTML(student.id, logoB64);
-        await renderHtmlToPdfBlob(html, `Report_Card_${cleanName}_${cleanGrade}.pdf`);
-        hidePdfOverlay();
-        showToast('Report card downloaded!', 'success');
-    } catch (err) {
-        hidePdfOverlay();
-        console.error('[PDF] Individual download failed:', err);
-        showToast('Download failed: ' + err.message, 'error');
-    }
+    // FIXED: previously routed through the html2canvas pipeline, which clipped
+    // the left side of the page and emitted blank trailing pages. Now uses the
+    // proven vector jsPDF renderer (renderReportCardToDoc) — no clipping, no
+    // blank pages, proper multi-page pagination.
+    downloadStudentReportCard(student.id);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -12778,76 +13405,10 @@ async function downloadGradeReportsPDF() {
         return; 
     }
 
-    // Get ALL students in this grade — do NOT filter by scores
-    let students = StudentRepo.getAll().filter(s => s.grade === grade);
-    if (!students.length) { 
-        showToast('No students enrolled in ' + grade, 'error'); 
-        return; 
-    }
-
-    // Sort by name for clean ordering
-    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-    showPdfOverlay(`Preparing ${students.length} report cards...`);
-
-    try {
-        await ensureHtml2Pdf();
-        const logoB64 = await logoToBase64(store.settings?.logo);
-
-        // First, do a quick diagnostic check
-        const allScores = (store.exams || []).filter(e => parseFloat(e.score) > 0);
-        const gradeScores = allScores.filter(e => e.grade === grade);
-        const studentsWithScores = new Set(gradeScores.map(e => e.studentId));
-        const scoredCount = students.filter(s => studentsWithScores.has(s.id)).length;
-
-        console.log('[PDF] Grade:', grade, '| Students:', students.length, '| With scores:', scoredCount, '| Total score records for grade:', gradeScores.length);
-
-        // If NO scores at all, warn but continue (reports will show "—")
-        if (scoredCount === 0) {
-            console.log('[PDF] No scores found for this grade. Checking all scores structure...');
-            if (allScores.length > 0) {
-                // Debug: show what grades exist in the data
-                const gradesInData = [...new Set(allScores.map(e => e.grade))];
-                console.log('[PDF] Grades found in score data:', gradesInData);
-                console.log('[PDF] Sample score record:', allScores[0]);
-            }
-            hidePdfOverlay();
-            showToast(`No assessment data found for ${grade}. Reports will be blank. Check that scores exist for this grade.`, 'error');
-            return;
-        }
-
-        // Build combined HTML — each student gets a full report page
-        const parts = [];
-        for (let i = 0; i < students.length; i++) {
-            updatePdfOverlay(`Building card ${i + 1} of ${students.length}...`);
-            const html = buildIndividualReportHTML(students[i].id, logoB64);
-            // Extract just the inner content (skip DOCTYPE/html/body wrapper)
-            const match = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-            parts.push(match ? match[1] : html);
-        }
-
-        // Combine with page breaks
-        const combinedHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-            <style>
-                .report-page-break { page-break-after: always; clear: both; height: 0; border: none; margin: 0; }
-                @page { size: A4; margin: 0; }
-            </style></head><body style="margin:0;padding:0;">
-            ${parts.join('<div class="report-page-break"></div>')}
-            </body></html>`;
-
-        updatePdfOverlay('Rendering PDF...');
-        const cleanGrade = grade.replace(/\s/g, '_');
-        const dateStr = new Date().toISOString().slice(0, 10);
-        await renderHtmlToPdfBlob(combinedHtml, `Grade_Reports_${cleanGrade}_${dateStr}.pdf`);
-
-        hidePdfOverlay();
-        showToast(`${students.length} report cards downloaded!`, 'success');
-
-    } catch (err) {
-        hidePdfOverlay();
-        console.error('[PDF] Grade download failed:', err);
-        showToast('Download failed: ' + err.message, 'error');
-    }
+    // FIXED: previously rendered via html2canvas (left-side clipping, blank
+    // trailing pages). Now uses the vector jsPDF renderer — each learner gets
+    // their own page in one clean, paginated PDF.
+    downloadGradeReport(grade);
 }
 // ═══════════════════════════════════════════════════════════════
 //   WIRE ALL BUTTONS
