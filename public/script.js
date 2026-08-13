@@ -14001,9 +14001,15 @@ async function pushToCloud() {
         if (!localRes.ok) throw new Error('Failed to fetch local data');
         const data = await localRes.json();
 
-        showToast('Uploading to live site... Please wait.');
-        // 3. Upload data to your FLY.DEV server
-        const cloudRes = await fetch(`${API_URL}/api/restore`, {
+        // FIXED: the upload must target the LIVE website, not the local server.
+        // (An earlier URL "fix" pointed it at API_URL, so pushing became a
+        // local no-op.) Target fly.dev by default; override with
+        // localStorage.setItem('elimutrack_cloud_url', 'https://your-site.com')
+        const CLOUD_URL = (localStorage.getItem('elimutrack_cloud_url') || 'https://my-schools.fly.dev').replace(/\/+$/, '');
+
+        showToast(`Uploading to ${CLOUD_URL}... Please wait.`);
+        // 3. Upload data to your LIVE website
+        const cloudRes = await fetch(`${CLOUD_URL}/api/restore`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
@@ -14012,13 +14018,16 @@ async function pushToCloud() {
             body: JSON.stringify(data)
         });
 
+        if (!cloudRes.ok && cloudRes.status === 401) {
+            throw new Error('The live site rejected your login. Open your live site in a new tab, log in once, then try again.');
+        }
         const result = await cloudRes.json();
 
         if (result.success) {
             showToast('✅ Successfully pushed to the cloud!');
         } else {
-            if (result.error === 'User not found.') {
-                throw new Error('Cloud needs to know who you are. Please open fly.dev in a new tab, log in once, then try pushing again.');
+            if (result.error === 'User not found.' || result.error === 'Invalid or expired token.') {
+                throw new Error('The live site needs your login. Open your live site in a new tab, log in once, then try pushing again.');
             }
             throw new Error(result.details || result.error || 'Push failed');
         }
