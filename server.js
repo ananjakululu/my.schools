@@ -110,6 +110,9 @@ const initDatabase = async () => {
         [`ALTER TABLE timetable ADD COLUMN room TEXT;`, 'timetable.room'],
         [`ALTER TABLE timetable ADD COLUMN notes TEXT;`, 'timetable.notes'],
         [`ALTER TABLE timetable ADD COLUMN "createdAt" TEXT;`, 'timetable.createdAt'],
+        // FIXED: teacherId column — curricula teacher assignments were dropped
+        // on every server sync/restore, silently wiping them.
+        [`ALTER TABLE "learningAreas" ADD COLUMN "teacherId" TEXT;`, 'learningAreas.teacherId'],
     ];
 
     console.log('[DB] Running migrations...');
@@ -152,7 +155,7 @@ const initDatabase = async () => {
             "hoiPhone" TEXT, "hoiEmail" TEXT, logo TEXT, stamp TEXT, "hoiSignature" TEXT, "ctSignature" TEXT
         )`],
         [`learningAreas`, `CREATE TABLE IF NOT EXISTS "learningAreas" (
-            id TEXT PRIMARY KEY, name TEXT, code TEXT, "applicableLevels" TEXT
+            id TEXT PRIMARY KEY, name TEXT, code TEXT, "applicableLevels" TEXT, "teacherId" TEXT
         )`],
         [`notes`, `CREATE TABLE IF NOT EXISTS notes (
             id TEXT PRIMARY KEY, title TEXT, content TEXT, "createdAt" TEXT, "createdBy" TEXT,
@@ -601,7 +604,7 @@ app.post('/learningAreas', authenticateToken, requireRole('hoi', 'admin'), expec
         await client.query('BEGIN');
         await client.query('DELETE FROM "learningAreas"');
         for (const i of req.body) {
-            await client.query('INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ($1,$2,$3,$4)', [i.id, i.name, i.code, JSON.stringify(i.applicableLevels)]);
+            await client.query('INSERT INTO "learningAreas" (id, name, code, "applicableLevels", "teacherId") VALUES ($1,$2,$3,$4,$5)', [i.id, i.name, i.code, JSON.stringify(i.applicableLevels), i.teacherId || null]);
         }
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'UPDATE_LEARNING_AREAS', 'Curriculum updated');
@@ -903,11 +906,11 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi'), async (
             const laValues = [];
             let laIdx = 1;
             for (const i of learningAreas) {
-                laValues.push(i.id, i.name, i.code, JSON.stringify(i.applicableLevels));
-                laPlaceholders.push(`($${laIdx++}, $${laIdx++}, $${laIdx++}, $${laIdx++})`);
+                laValues.push(i.id, i.name, i.code, JSON.stringify(i.applicableLevels), i.teacherId || null);
+                laPlaceholders.push(`($${laIdx++}, $${laIdx++}, $${laIdx++}, $${laIdx++}, $${laIdx++})`);
             }
             await client.query(
-                `INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ${laPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, code=EXCLUDED.code, "applicableLevels"=EXCLUDED."applicableLevels"`,
+                `INSERT INTO "learningAreas" (id, name, code, "applicableLevels", "teacherId") VALUES ${laPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, code=EXCLUDED.code, "applicableLevels"=EXCLUDED."applicableLevels", "teacherId"=EXCLUDED."teacherId"`,
                 laValues
             );
         }
