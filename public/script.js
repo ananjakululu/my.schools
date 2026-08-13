@@ -3088,7 +3088,10 @@ async function downloadStudentReportCard(studentId) {
         return;
     }
     try {
-        const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
+        // FIXED (root cause): jsPDF instances have no `.doc` property — destructuring
+                    // produced `undefined` and every PDF silently fell back to
+                    // the backup renderer. Use the instance directly.
+                    const doc = new jspdf.jsPDF('p', 'mm', 'a4');
         if (typeof doc.autoTable !== 'function') {
             console.warn('[REPORT] autoTable plugin not loaded — using backup renderer');
             downloadReportCardViaPrint(studentId);
@@ -3109,13 +3112,41 @@ async function downloadStudentReportCard(studentId) {
         }
     }
 }
+// --- Compact card for learners with no assessment data (so EVERY learner
+//     in the grade appears in the bulk PDF) ---
+function renderNoDataCard(doc, student, term, year) {
+    const pageW = doc.internal.pageSize.getWidth();
+    const s = store.settings || {};
+    const M = 14;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(30, 41, 59);
+    doc.text(String(s.schoolName || 'SCHOOL NAME'), pageW / 2, 30, { align: 'center' });
+    doc.setFont('helvetica', 'italic'); doc.setFontSize(9); doc.setTextColor(100, 116, 139);
+    doc.text(String(s.motto || ''), pageW / 2, 36, { align: 'center' });
+    doc.setDrawColor(22, 163, 74); doc.setLineWidth(1);
+    doc.line(M, 41, pageW - M, 41);
+    doc.setFillColor(30, 41, 59); doc.roundedRect(M, 50, pageW - 2 * M, 10, 1.6, 1.6, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
+    doc.text('LEARNER ACADEMIC REPORT CARD', pageW / 2, 57.4, { align: 'center' });
+    doc.setFontSize(9);
+    doc.text(`${term || ''} — ${year || ''}`, pageW / 2, 63, { align: 'center' });
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(30, 41, 59);
+    doc.text(`No assessment data recorded for ${student.name} (${student.reg || ''}) this term.`, pageW / 2, 90, { align: 'center' });
+    doc.setFontSize(9); doc.setTextColor(100, 116, 139);
+    doc.text('Record scores in the Assessment section, then regenerate this report.', pageW / 2, 97, { align: 'center' });
+}
+
 // --- Download Full Grade Report (all students, one PDF) ---
 async function downloadGradeReport(grade) {
-    const students = StudentRepo.findBy('grade', grade);
+    let students = StudentRepo.findBy('grade', grade);
     if (students.length === 0) {
         showToast(`No learners found in ${grade}.`, 'error');
         return;
     }
+
+    // FIXED: respect the Stream filter and sort by name for clean ordering
+    const stream = $('reportStreamFilter')?.value;
+    if (stream && stream !== 'all') students = students.filter(s => s.stream === stream);
+    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     const termF = $('reportTermFilter')?.value;
     const yearF = $('reportYearFilter')?.value;
@@ -3128,32 +3159,39 @@ async function downloadGradeReport(grade) {
         return;
     }
     try {
-        const { doc } = new jspdf.jsPDF('p', 'mm', 'a4');
+        // FIXED (root cause): jsPDF instances have no `.doc` property — destructuring
+                    // produced `undefined` and every PDF silently fell back to
+                    // the backup renderer. Use the instance directly.
+                    const doc = new jspdf.jsPDF('p', 'mm', 'a4');
         if (typeof doc.autoTable !== 'function') {
             showToast('Table library failed to load. Use "Print All Report Cards" instead, then refresh.', 'error');
             return;
         }
+        showPdfOverlay(`Preparing ${students.length} report cards...`);
         let first = true;
         let count = 0;
+        const noData = [];
 
-        students.forEach(student => {
-            const data = getModernReportData(student.id, term, year);
-            if (!data) return; // Skip students with no data
+        for (let i = 0; i < students.length; i++) {
+            const student = students[i];
+            updatePdfOverlay(`Building card ${i + 1} of ${students.length} — ${student.name}...`);
             if (!first) doc.addPage();
             first = false;
-            renderModernReportCard(doc, data);
-            count++;
-        });
-
-        if (count === 0) {
-            showToast(`No assessment data found for ${grade} this term.`, 'error');
-            return;
+            const data = getModernReportData(student.id, term, year);
+            if (data) { renderModernReportCard(doc, data); count++; }
+            else { renderNoDataCard(doc, student, term, year); noData.push(student.name); }
+            // let the UI repaint between cards
+            if (i % 5 === 4) await new Promise(r => setTimeout(r, 0));
         }
+
+        hidePdfOverlay();
 
         const fname = `Grade_Report_${grade.replace(/\s+/g, '_')}_${term}_${year}.pdf`;
         doc.save(fname);
-        showToast(`Downloaded ${count} report cards for ${grade}`);
+        showToast(`Downloaded ${students.length} report cards for ${grade}${noData.length ? ` (${noData.length} without scores)` : ''}`);
+        if (noData.length) console.warn('[GRADE REPORTS] No assessment data for:', noData.join(', '));
     } catch (err) {
+        hidePdfOverlay();
         console.error('[GRADE REPORT PDF]', err);
         showToast('Grade report failed: ' + err.message, 'error');
     }
