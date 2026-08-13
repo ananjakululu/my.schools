@@ -675,10 +675,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 function initializeApp(user) {
     applyRoleRestrictions(user.role);
     initTheme();
+    initSidebarState();
     initGlobalListeners();
     initSettingsListeners();
     initReportListeners(); 
     initBatchAdmission();
+    initRealtimeSync();
     startClock();
     patchAssessmentIntegrity();
     router('dashboard');
@@ -854,7 +856,11 @@ function initGlobalListeners() {
         if (!btn) return;
         document.querySelectorAll('#activityFilter button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        renderRecentActivityFeed(btn.dataset.filter);
+        // FIXED: was calling a no-op shim — route through the live engine feed
+        if (dashboard && typeof dashboard._renderActivityFeed === 'function') {
+            dashboard.state.activityFilter = btn.dataset.filter || 'all';
+            dashboard._renderActivityFeed();
+        }
     });
 
     $('analysisGradeSelect')?.addEventListener('change', renderAnalysis);
@@ -1656,9 +1662,13 @@ class DashboardEngine {
             StudentRepo.getAll().slice(-5).forEach(s => acts.push({ type: 'student', icon: 'fa-user-plus', color: DASH_PALETTE.blue, title: `New admission: ${s.name}`, meta: s.grade }));
         }
         if (filter === 'all' || filter === 'exam') {
-            (store.exams||[]).slice(-5).forEach(e => {
-                const s = StudentRepo.getById(e.studentId);
-                acts.push({ type: 'exam', icon: 'fa-clipboard-check', color: DASH_PALETTE.green, title: `Graded: ${getSubjectName(e.subjectId)}`, meta: s ? s.name : 'Unknown' });
+            (store.exams||[]).filter(e => e.name || e.assessType).slice(-5).reverse().forEach(e => {
+                acts.push({
+                    type: 'exam', icon: 'fa-clipboard-check', color: DASH_PALETTE.green,
+                    title: `${e.name || e.assessType || 'Assessment'} recorded`,
+                    meta: e.grade || 'Learners',
+                    ts: e.createdAt ? new Date(e.createdAt).getTime() : 0
+                });
             });
         }
         if (filter === 'all' || filter === 'staff') {
@@ -1670,7 +1680,18 @@ class DashboardEngine {
             return;
         }
 
-        container.innerHTML = acts.reverse().map(act => `
+        const timeAgo = (ts) => {
+            if (!ts) return '';
+            const mins = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+            if (mins < 1) return 'Just now';
+            if (mins < 60) return mins + 'm ago';
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return hrs + 'h ago';
+            const days = Math.floor(hrs / 24);
+            return days + 'd ago';
+        };
+
+        container.innerHTML = acts.sort((a, b) => (b.ts || 0) - (a.ts || 0)).map(act => `
             <div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid rgba(0,0,0,0.03);">
                 <div style="width:32px; height:32px; border-radius:8px; background:${act.color}15; color:${act.color}; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0;">
                     <i class="fa-solid ${act.icon}"></i>
@@ -1679,7 +1700,7 @@ class DashboardEngine {
                     <div style="font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(act.title)}</div>
                     <div style="font-size:11px; color:#94a3b8;">${escapeHtml(act.meta||'')}</div>
                 </div>
-                <div style="font-size:10px; color:#cbd5e1; flex-shrink:0;">Just now</div>
+                <div style="font-size:10px; color:#cbd5e1; flex-shrink:0;">${timeAgo(act.ts) || 'Just now'}</div>
             </div>
         `).join('');
     }
@@ -5986,7 +6007,60 @@ function seedStaffData() {
 
 function toggleSidebar() {
     const sidebar = $('sidebar');
-    if (sidebar) sidebar.classList.toggle('open');
+    if (!sidebar) return;
+    // Mobile: slide the drawer in/out; Desktop: collapse to an icon rail
+    if (window.innerWidth <= 768) {
+        sidebar.classList.toggle('open');
+        return;
+    }
+    sidebar.classList.toggle('collapsed');
+    localStorage.setItem('elimutrack_sidebar_collapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
+}
+
+// Restore the persisted sidebar state on load
+function initSidebarState() {
+    try {
+        const sb = $('sidebar');
+        if (sb && window.innerWidth > 768 && localStorage.getItem('elimutrack_sidebar_collapsed') === '1') {
+            sb.classList.add('collapsed');
+        }
+    } catch (_) { /* ignore */ }
+}
+
+// ── REAL-TIME DASHBOARD SYNC ──
+// Re-render the visible section when another tab saves (localStorage event)
+// and auto-refresh the dashboard while it is on screen.
+function initRealtimeSync() {
+    try {
+        window.addEventListener('storage', (e) => {
+            if (!e.newValue || (e.key !== 'elimutrack_backup' && e.key !== 'elimutrack_data')) return;
+            try {
+                const backup = JSON.parse(e.newValue);
+                if (backup && Array.isArray(backup.students)) {
+                    Object.assign(store, {
+                        students: backup.students || [], staff: backup.staff || [], exams: backup.exams || [],
+                        notes: backup.notes || [], messages: backup.messages || [], timetable: backup.timetable || [],
+                        settings: backup.settings || store.settings, learningAreas: backup.learningAreas || store.learningAreas,
+                        examSchedules: backup.examSchedules || []
+                    });
+                }
+            } catch (_) { /* invalid backup — ignore */ }
+            const active = document.querySelector('.view-section.active');
+            if (!active) return;
+            const id = active.id;
+            if (id === 'dashboard') renderDashboard();
+            else if (id === 'students') renderLearnerSection();
+            else if (id === 'staff') renderStaff();
+            else if (id === 'curricula') { renderCurricula(); renderCourseSettings(); }
+            else if (id === 'reports') renderReportsAnalytics();
+        });
+
+        // Auto-refresh the dashboard every 60s while it is the active section
+        setInterval(() => {
+            const active = document.querySelector('.view-section.active');
+            if (active && active.id === 'dashboard') renderDashboard();
+        }, 60000);
+    } catch (_) { /* realtime sync unavailable */ }
 }
 
 function handleGlobalSearch(q) {
