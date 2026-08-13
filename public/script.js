@@ -532,6 +532,19 @@ async function loadData() {
             DEFAULT_LEARNING_AREAS.forEach(def => {
                 if (!existingAreas.some(area => area.code === def.code)) existingAreas.push(def);
             });
+            // FIXED: heal teacher assignments the server may not carry yet
+            // (older DBs have no teacherId column until the migration runs)
+            try {
+                const lb = JSON.parse(localStorage.getItem('elimutrack_backup') || 'null');
+                if (lb && Array.isArray(lb.learningAreas)) {
+                    existingAreas.forEach(a => {
+                        if (!a.teacherId) {
+                            const local = lb.learningAreas.find(x => x.id === a.id);
+                            if (local && local.teacherId) a.teacherId = local.teacherId;
+                        }
+                    });
+                }
+            } catch (_) { /* keep server state */ }
             store.learningAreas = existingAreas;
 
             // Inbox messages: prefer the server copy when it has data; otherwise
@@ -2039,6 +2052,13 @@ const ASSESSMENT_TYPE_CSS = {
 
 // --- Subject → Teacher Mapping ---
 function getSubjectTeacherName(subjectId, grade) {
+    // FIXED: the Curricula assignment (learningArea.teacherId) is authoritative —
+    // it's what the user sets in the subject modal. Fall back to staff.subjects.
+    const area = (store.learningAreas || []).find(la => la.id === subjectId || la.code === subjectId);
+    if (area && area.teacherId) {
+        const t = StaffRepo.getById(area.teacherId);
+        if (t && t.name) return t.name;
+    }
     const staffList = StaffRepo.getAll();
     for (const s of staffList) {
         if (!s.subjects) continue;
@@ -13719,7 +13739,13 @@ async function forceSyncAll() {
         if (settingsRes && !Array.isArray(settingsRes) && typeof settingsRes === 'object') {
             store.settings = { ...store.settings, ...settingsRes };
         }
+        // FIXED: keep local teacher assignments before the server replaces the list
+        const localTeacherMap = {};
+        (store.learningAreas || []).forEach(a => { if (a.teacherId) localTeacherMap[a.id] = a.teacherId; });
         store.learningAreas = Array.isArray(areasRes) && areasRes.length > 0 ? areasRes : store.learningAreas;
+        if (Array.isArray(areasRes)) {
+            store.learningAreas.forEach(a => { if (!a.teacherId && localTeacherMap[a.id]) a.teacherId = localTeacherMap[a.id]; });
+        }
         if (Array.isArray(notesRes)) store.notes = notesRes;
         if (Array.isArray(messagesRes)) store.messages = messagesRes;
 
