@@ -253,6 +253,7 @@ let CURRENT_USER = null;
 let currentView = { students: 'grid', staff: 'grid' };
 let virtualAssessments = [];
 let currentExamContext = { assessId: null, tradeId: null, subjectId: null, studentId: null };
+let selectedReportStudentId = null;
 
 const LearnerState = {
     search: '', grade: 'all', stream: 'all', gender: 'all', sort: 'name-asc', perPage: 24, page: 1, view: 'grid', selected: new Set()
@@ -294,7 +295,6 @@ function openModal(id) {
     if (modal) {
         modal.classList.add('active');
         document.body.style.overflow = 'hidden';
-        if (id === 'courseModal') openCourseModal();
     }
 }
 
@@ -317,9 +317,11 @@ function cbcRating(score) {
     const CACHE_VERSION = 'v1.0.6';
     const cachedVersion = localStorage.getItem('elimutrack_cache_ver');
     if (cachedVersion !== CACHE_VERSION) {
-        localStorage.removeItem('elimutrack_backup');
+        // FIXED: previously this REMOVED elimutrack_backup, silently wiping all
+        // locally cached records on every version bump (offline data loss).
+        // Backup parsing is defensive (see loadData catch), so keep the data.
         localStorage.setItem('elimutrack_cache_ver', CACHE_VERSION);
-        console.log('Cache version mismatch — cleared stale backup.');
+        console.log('Cache version updated — local backup preserved.');
     }
 })();
 
@@ -356,7 +358,9 @@ class ApiClient {
      * Retrieves the secure token from storage
      */
     _getAuthToken() {
-        return localStorage.getItem('token'); // Change 'token' if you use a different key
+        // FIXED: login stores 'authToken'; check it first, then legacy keys
+        return localStorage.getItem('authToken') || sessionStorage.getItem('authToken') ||
+               localStorage.getItem('token') || localStorage.getItem('jwt');
     }
 
     /**
@@ -530,6 +534,22 @@ async function loadData() {
             });
             store.learningAreas = existingAreas;
 
+            // Inbox messages: prefer the server copy when it has data; otherwise
+            // merge from the local backup (offline-sent messages must survive).
+            if (Array.isArray(db.messages) && db.messages.length > 0) {
+                store.messages = db.messages;
+            } else {
+                try {
+                    const localBackup = localStorage.getItem('elimutrack_backup');
+                    if (localBackup) {
+                        const lb = JSON.parse(localBackup);
+                        if (Array.isArray(lb.messages) && lb.messages.length > 0) {
+                            store.messages = lb.messages;
+                        }
+                    }
+                } catch (e) { /* corrupt backup — keep server state */ }
+            }
+
             _backupToLocalStorage();
             seedStaffData();
             initVirtualAssessments();
@@ -584,7 +604,8 @@ async function saveData() {
     const endpoints = [
         ['/students', store.students], ['/staff', store.staff], ['/settings', store.settings],
         ['/exams', store.exams], ['/learningAreas', store.learningAreas], ['/notes', store.notes || []],
-        ['/timetable', store.timetable || []], ['/examSchedules', store.examSchedules || []]
+        ['/timetable', store.timetable || []], ['/examSchedules', store.examSchedules || []],
+        ['/messages', store.messages || []]
     ];
 
     try {
@@ -642,7 +663,9 @@ function initializeApp(user) {
     applyRoleRestrictions(user.role);
     initTheme();
     initGlobalListeners();
+    initSettingsListeners();
     initReportListeners(); 
+    initBatchAdmission();
     startClock();
     patchAssessmentIntegrity();
     router('dashboard');
@@ -688,6 +711,7 @@ function initGlobalListeners() {
             if (action === 'view') return viewStudent(id);
             if (action === 'openStaffModal') return openStaffModal();
             if (action === 'edit-curriculum' || action === 'edit-subject') return openCourseModal(id);
+            if (action === 'delete-course') return deleteCourse(id);
         }
 
         const viewBtn = target.closest('[data-view]');
@@ -706,25 +730,103 @@ function initGlobalListeners() {
         const bandBtn = target.closest('.band-btn');
         if (bandBtn) return filterCurricula(bandBtn.dataset.band);
 
+        // Curricula band accordion: clicking a header toggles its band
+        const accHeader = target.closest('.accordion-header');
+        if (accHeader) {
+            const accItem = accHeader.closest('.accordion-item');
+            if (accItem) accItem.classList.toggle('open');
+            return;
+        }
+
         const dashNavItem = target.closest('.dash-nav-item');
         if (dashNavItem) return openDashTab(e, dashNavItem.dataset.tab || dashNavItem.textContent.trim());
     });
 
     $('globalSearch')?.addEventListener('input', debounce(e => handleGlobalSearch(e.target.value), 300));
-    $('studentSearch')?.addEventListener('input', debounce(e => { LearnerState.search = e.target.value; LearnerState.page = 1; renderLearnerSection(); }, 300));
+    $('studentSearch')?.addEventListener('input', debounce(e => {
+        LearnerState.search = e.target.value; LearnerState.page = 1; renderLearnerSection();
+        const clearBtn = $('learnerSearchClear');
+        if (clearBtn) clearBtn.style.display = e.target.value ? 'inline-flex' : 'none';
+    }, 300));
+
+    // Learners toolbar: clear search / clear all filters / export CSV (FIXED: were dead)
+    $('learnerSearchClear')?.addEventListener('click', () => {
+        LearnerState.search = ''; LearnerState.page = 1;
+        setVal('studentSearch', '');
+        $('learnerSearchClear').style.display = 'none';
+        renderLearnerSection();
+    });
+    $('learnerClearAll')?.addEventListener('click', () => {
+        LearnerState.search = ''; LearnerState.grade = 'all'; LearnerState.stream = 'all';
+        LearnerState.gender = 'all'; LearnerState.sort = 'name-asc'; LearnerState.perPage = 24; LearnerState.page = 1;
+        setVal('studentSearch', '');
+        const clearBtn = $('learnerSearchClear'); if (clearBtn) clearBtn.style.display = 'none';
+        ['learnerGradeFilter', 'streamFilter', 'learnerGenderFilter', 'learnerSortSelect', 'learnerPerPageSelect']
+            .forEach(id => setVal(id, 'all') || true);
+        if ($('learnerSortSelect')) $('learnerSortSelect').value = 'name-asc';
+        if ($('learnerPerPageSelect')) $('learnerPerPageSelect').value = '24';
+        renderLearnerSection();
+        showToast('All filters cleared');
+    });
+    $('btnExportCSV')?.addEventListener('click', exportLearnersCSV);
+
+    // Admissions toolbar (FIXED: were dead)
+    $('admResetBtn')?.addEventListener('click', () => { resetIntakeForm(); showToast('Form reset'); });
+    $('admTemplateBtn')?.addEventListener('click', downloadAdmissionTemplate);
     $('learnerSortSelect')?.addEventListener('change', e => { LearnerState.sort = e.target.value; renderLearnerSection(); });
     $('learnerPerPageSelect')?.addEventListener('change', e => { LearnerState.perPage = e.target.value === 'all' ? 'all' : parseInt(e.target.value); LearnerState.page = 1; renderLearnerSection(); });
     $('streamFilter')?.addEventListener('change', e => { LearnerState.stream = e.target.value; LearnerState.page = 1; renderLearnerSection(); });
     $('staffSearch')?.addEventListener('input', debounce(renderStaff, 300));
     $('staffDeptFilter')?.addEventListener('change', renderStaff);
 
+    // Batch score entry: live row filter (FIXED: input existed but was never bound)
+    $('batchSearch')?.addEventListener('input', filterBatchRows);
+
     $('newStudentForm')?.addEventListener('submit', submitRegistration);
     $('institutionForm')?.addEventListener('submit', saveInstitutionDetails);
     $('hoiForm')?.addEventListener('submit', saveHOIDetails);
     $('courseForm')?.addEventListener('submit', saveCourseSettings);
     $('staffForm')?.addEventListener('submit', submitStaff);
-    $('noteForm')?.addEventListener('submit', e => { e.preventDefault(); saveNote(); });
+    
     $('composeForm')?.addEventListener('submit', e => { e.preventDefault(); sendMessage(); });
+
+    // Inbox: folder tabs + search
+    document.querySelectorAll('[data-folder]').forEach(btn => {
+        btn.addEventListener('click', () => { inboxCurrentFolder = btn.dataset.folder; renderInboxTab(); });
+    });
+    $('inboxSearch')?.addEventListener('input', debounce(() => renderInboxTab(), 250));
+
+    // Staff modal: multi-step navigation
+    document.querySelectorAll('[data-staff-step]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const dir = btn.dataset.staffStep;
+            const cur = parseInt(btn.dataset.current || '1', 10);
+            switchStaffStep(dir === 'next' ? cur + 1 : cur - 1);
+        });
+    });
+
+    // Staff photo upload → preview + stash data URL for submitStaff
+    const staffPhotoInput = $('staffPhotoInput');
+    if (staffPhotoInput) {
+        staffPhotoInput.addEventListener('change', function() {
+            const file = this.files && this.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = e => {
+                window._staffPhotoDataUrl = e.target.result;
+                const img = $('staffPhotoPreview');
+                if (img) img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // Legacy exam form (examFormModal) — prevent accidental page reload
+    $('examForm')?.addEventListener('submit', e => {
+        e.preventDefault();
+        showToast('Use the Assessment Centre to create assessments.', 'info');
+    });
 
     $('enrollmentChartToggle')?.addEventListener('click', e => {
         const btn = e.target.closest('button');
@@ -792,8 +894,8 @@ function router(viewId, navEl) {
             case 'exams': switchExamTab('assessments'); break;
             case 'intake': resetIntakeForm(); break;
             case 'settings': updateSettingsForm(); break;
-            case 'curricula': renderCurricula(); break;
-            case 'timetable': renderTimetable(); break;
+            case 'curricula': renderCurricula(); renderCourseSettings(); break;
+            case 'timetable': initTimetableSection(); break;
             case 'reports': renderReportsAnalytics(); break;
             case 'analysis': renderAnalysis(); break;
             case 'profile': populateProfileList(); break;
@@ -807,6 +909,164 @@ function router(viewId, navEl) {
     }
 
     if (window.innerWidth < 768) $('sidebar')?.classList.remove('open');
+}
+
+// ==========================================================================
+//   INBOX / MESSAGES (rewritten to match index.html: #inboxMessageList,
+//   #inboxDetailView, #composeRecipient, folder tabs, trash)
+// ==========================================================================
+let inboxCurrentFolder = 'inbox';
+
+function renderInboxTab() {
+    const listEl = $('inboxMessageList');
+    const all = store.messages || [];
+
+    let folderMsgs = all;
+    if (inboxCurrentFolder === 'inbox') folderMsgs = all.filter(m => !m.folder || m.folder === 'inbox');
+    else if (inboxCurrentFolder === 'sent') folderMsgs = all.filter(m => m.folder === 'sent');
+    else if (inboxCurrentFolder === 'trash') folderMsgs = all.filter(m => m.folder === 'trash');
+
+    const q = (getVal('inboxSearch') || '').toLowerCase();
+    if (q) {
+        folderMsgs = folderMsgs.filter(m => [m.subject, m.body, m.message, m.to, m.from]
+            .filter(Boolean).join(' ').toLowerCase().includes(q));
+    }
+    folderMsgs = [...folderMsgs].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    // Unread badge + folder tab active state
+    const unread = all.filter(m => !m.read && (!m.folder || m.folder === 'inbox')).length;
+    const badge = $('inboxCountBadge');
+    if (badge) badge.textContent = unread;
+    document.querySelectorAll('.folder-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.folder === inboxCurrentFolder);
+    });
+
+    if (!listEl) return;
+
+    if (folderMsgs.length === 0) {
+        const msgs = {
+            inbox: 'No messages in your inbox.',
+            sent: 'No sent messages yet.',
+            trash: 'Trash is empty.'
+        };
+        listEl.innerHTML = `<div style="text-align:center; padding:3rem 1rem; color:var(--text-muted);">
+            <i class="fa-regular fa-envelope-open" style="font-size:2.5rem; color:var(--border); display:block; margin-bottom:0.75rem;"></i>
+            <p style="margin:0; font-size:0.9rem;">${msgs[inboxCurrentFolder] || 'No messages.'}</p>
+        </div>`;
+        return;
+    }
+
+    listEl.innerHTML = folderMsgs.map(m => `
+        <div class="message-item ${m.read ? '' : 'unread'}" data-message-id="${m.id}" onclick="openMessage('${m.id}')"
+             style="display:flex; gap:10px; padding:12px 14px; border-bottom:1px solid var(--border); cursor:pointer; ${m.read ? '' : 'background:var(--primary-light);'}">
+            <div style="flex:1; min-width:0;">
+                <div style="display:flex; justify-content:space-between; gap:8px;">
+                    <strong style="font-size:0.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(m.subject || '(No subject)')}</strong>
+                    <span style="font-size:0.7rem; color:var(--text-muted); white-space:nowrap;">${m.date ? new Date(m.date).toLocaleDateString() : ''}</span>
+                </div>
+                <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(m.body || m.message || '')}</div>
+                <div style="font-size:0.7rem; color:#94a3b8; margin-top:3px;">
+                    ${m.from ? 'From: ' + escapeHtml(m.from) : ''}${m.to ? ' · To: ' + escapeHtml(m.to) : ''}
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function openMessage(id) {
+    const m = (store.messages || []).find(x => x.id === id);
+    const view = $('inboxDetailView');
+    if (!m || !view) return;
+    if (!m.read && (!m.folder || m.folder === 'inbox')) { m.read = true; saveData(); }
+    const inTrash = m.folder === 'trash';
+    view.innerHTML = `
+        <div style="padding:1.5rem;">
+            <h3 style="margin:0 0 0.25rem; font-size:1.1rem;">${escapeHtml(m.subject || '(No subject)')}</h3>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:1.25rem;">
+                ${m.from ? 'From: <strong>' + escapeHtml(m.from) + '</strong>' : ''}
+                ${m.to ? ' To: <strong>' + escapeHtml(m.to) + '</strong>' : ''}
+                · ${m.date ? new Date(m.date).toLocaleString() : ''}
+            </div>
+            <div style="white-space:pre-wrap; line-height:1.6; font-size:0.9rem;">${escapeHtml(m.body || m.message || '')}</div>
+            <div style="margin-top:1.5rem; display:flex; gap:0.5rem;">
+                <button class="btn btn-sm btn-secondary" onclick="deleteMessage('${m.id}')">
+                    <i class="fa-solid fa-trash"></i> ${inTrash ? 'Delete Permanently' : 'Move to Trash'}
+                </button>
+                ${inTrash ? `<button class="btn btn-sm btn-primary" onclick="restoreMessage('${m.id}')"><i class="fa-solid fa-rotate-left"></i> Restore</button>` : ''}
+            </div>
+        </div>`;
+    renderInboxTab();
+}
+
+function deleteMessage(id) {
+    const m = (store.messages || []).find(x => x.id === id);
+    if (!m) return;
+    if (m.folder === 'trash') {
+        store.messages = (store.messages || []).filter(x => x.id !== id);
+        showToast('Message deleted permanently.');
+    } else {
+        m.folder = 'trash';
+        showToast('Message moved to trash.');
+    }
+    saveData();
+    const view = $('inboxDetailView');
+    if (view) view.innerHTML = '<div class="inbox-empty-state"><i class="fa-regular fa-envelope-open" style="font-size:4rem; color:var(--border); margin-bottom:1rem;"></i><h3>Select a message to read</h3><p>Choose a conversation from the list to view details.</p></div>';
+    renderInboxTab();
+}
+
+function restoreMessage(id) {
+    const m = (store.messages || []).find(x => x.id === id);
+    if (!m) return;
+    m.folder = 'inbox';
+    m.read = false;
+    saveData();
+    renderInboxTab();
+    showToast('Message restored to inbox.');
+}
+
+function openComposeModal() {
+    const sel = $('composeRecipient');
+    if (sel) {
+        sel.innerHTML = '<option value="">Select Guardian...</option>';
+        (store.students || []).forEach(st => {
+            const label = [st.guardianName, st.guardianPhone].filter(Boolean).join(' · ');
+            sel.innerHTML += `<option value="${escapeHtml(st.guardianName || st.guardianPhone || st.id)}">${escapeHtml(st.name || st.id)}${label ? ' — ' + escapeHtml(label) : ''}</option>`;
+        });
+    }
+    if ($('composeSubject')) $('composeSubject').value = '';
+    if ($('composeBody')) $('composeBody').value = '';
+    openModal('composeModal');
+}
+
+function sendMessage() {
+    const to = getVal('composeRecipient');
+    const subject = getVal('composeSubject');
+    const body = getVal('composeBody');
+
+    if (!subject || !body) {
+        showToast('Subject and message are required.', 'error');
+        return;
+    }
+
+    store.messages = store.messages || [];
+    store.messages.push({
+        id: generateId(),
+        to: to,
+        from: (CURRENT_USER && CURRENT_USER.name) || 'Admin',
+        subject: subject,
+        body: body,
+        date: new Date().toISOString(),
+        read: true,
+        folder: 'sent'
+    });
+
+    saveData();
+    const form = $('composeForm');
+    if (form) form.reset();
+    closeModal('composeModal');
+    inboxCurrentFolder = 'sent';
+    renderInboxTab();
+    showToast('Message sent');
 }
 
 // ==========================================================================
@@ -849,7 +1109,8 @@ class DashboardEngine {
         this.state = {
             chartType: 'bar',
             levelFilter: 'all',
-            activityFilter: 'all'
+            activityFilter: 'all',
+            range: 'term'          // matches the default active "Term" pill
         };
         this.cachedStats = null;
     }
@@ -957,11 +1218,72 @@ class DashboardEngine {
             });
         }
 
+        // 5. Range pills (Week / Term / Year) — FIXED: were dead buttons
+        const rangeBtns = document.querySelectorAll('.range-btn[data-range]');
+        if (rangeBtns.length > 0) {
+            rangeBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    rangeBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
+                    btn.classList.add('active');
+                    btn.setAttribute('aria-selected', 'true');
+                    this.state.range = btn.dataset.range;
+                    this.cachedStats = this._aggregateStats();
+                    this._renderAll();
+                });
+            });
+        }
+
+        // 6. Export snapshot — FIXED: was a dead button
+        const exportBtn = document.getElementById('dashExportBtn');
+        if (exportBtn) {
+            const newExportBtn = exportBtn.cloneNode(true);
+            exportBtn.parentNode.replaceChild(newExportBtn, exportBtn);
+            newExportBtn.addEventListener('click', () => {
+                try {
+                    const stats = this._aggregateStats();
+                    const snapshot = {
+                        exportedAt: new Date().toISOString(),
+                        school: store.settings.schoolName,
+                        academicYear: store.settings.academicYear,
+                        currentTerm: store.settings.currentTerm,
+                        range: this.state.range,
+                        students: StudentRepo.getAll().length,
+                        staff: StaffRepo.getAll().length,
+                        exams: (store.exams || []).length,
+                        learningAreas: (store.learningAreas || []).length,
+                        competency: stats.competency,
+                        gender: stats.gender,
+                        averageScore: stats.avgPerf,
+                        notes: (store.notes || []).length,
+                        messages: (store.messages || []).length
+                    };
+                    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `dashboard_snapshot_${new Date().toISOString().split('T')[0]}.json`;
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                    showToast('Dashboard snapshot exported');
+                } catch (e) { console.error('[EXPORT ERROR]', e); showToast('Export failed', 'error'); }
+            });
+        }
+
     }
     // --- DATA AGGREGATION (Enhanced for new KPIs) ---
     _aggregateStats() {
         const students = StudentRepo.getAll();
-        const exams = store.exams || [];
+        // FIXED: respect the Week/Term/Year range pills when aggregating exam data
+        let exams = store.exams || [];
+        if (this.state.range === 'week') {
+            const cutoff = Date.now() - 7 * 86400000;
+            exams = exams.filter(e => (e.createdAt ? new Date(e.createdAt).getTime() : 0) >= cutoff);
+        } else if (this.state.range === 'term') {
+            const t = store.settings.currentTerm;
+            exams = exams.filter(e => !e.term || e.term === t);
+        } else if (this.state.range === 'year') {
+            const y = String(store.settings.academicYear || new Date().getFullYear());
+            exams = exams.filter(e => !e.year || String(e.year) === y);
+        }
         
         const gender = { male: 0, female: 0 };
         const gradeCounts = {};
@@ -1217,10 +1539,12 @@ class DashboardEngine {
     // --- PERFORMANCE TREND (Now updates Trend Pill) ---
     _renderPerformanceTrend(exams) {
         const subjAvgs = {};
-        exams.filter(e => e.score > 0).forEach(e => {
+        exams.forEach(e => {
+            const sc = parseFloat(e.score) || 0;
+            if (sc <= 0) return;
             const name = getSubjectName(e.subjectId) || 'General';
             if (!subjAvgs[name]) subjAvgs[name] = { total: 0, count: 0 };
-            subjAvgs[name].total += e.score;
+            subjAvgs[name].total += sc;
             subjAvgs[name].count++;
         });
 
@@ -1255,9 +1579,10 @@ class DashboardEngine {
     _renderSubjectRadar(exams) {
         const subjGroups = {};
         exams.forEach(e => {
+            const sc = parseFloat(e.score) || 0;
             const name = getSubjectName(e.subjectId) || 'General';
             if (!subjGroups[name]) subjGroups[name] = [];
-            if (e.score > 0) subjGroups[name].push(e.score);
+            if (sc > 0) subjGroups[name].push(sc);
         });
 
         const labels = Object.keys(subjGroups).slice(0, 6);
@@ -1277,8 +1602,8 @@ class DashboardEngine {
         if (!container) return;
 
         const stats = students.map(s => {
-            const sExams = exams.filter(e => e.studentId === s.id && e.score > 0);
-            const avg = sExams.length ? Math.round(sExams.reduce((a,b)=>a+b.score,0)/sExams.length) : 0;
+            const sExams = exams.filter(e => e.studentId === s.id && parseFloat(e.score) > 0);
+            const avg = sExams.length ? Math.round(sExams.reduce((a,b)=>a+parseFloat(b.score),0)/sExams.length) : 0;
             return { ...s, avg };
         }).filter(s => s.avg > 0).sort((a,b) => b.avg - a.avg).slice(0, 5);
 
@@ -1680,6 +2005,25 @@ function renderLearnerPagination(total) {
 }
 
 function changeLearnerPage(p) { LearnerState.page = p; renderLearnerSection(); }
+
+// Export the current learner list to CSV (FIXED: button existed, no handler)
+function exportLearnersCSV() {
+    const students = StudentRepo.getAll();
+    if (students.length === 0) { showToast('No learners to export.', 'error'); return; }
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const headers = ['Name', 'Gender', 'DOB', 'Grade', 'Stream', 'Adm No', 'UPI', 'Guardian', 'Guardian Phone'];
+    const lines = [headers.join(',')];
+    students.forEach(s => {
+        lines.push([s.name, s.gender, s.dob, s.grade, s.stream, s.reg, s.upiNumber, s.guardianName, s.guardianPhone].map(esc).join(','));
+    });
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `learners_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    showToast(`Exported ${students.length} learners to CSV`);
+}
 
 // ==========================================================================
 //   COMPLETE ASSESSMENT CENTER ENGINE (CBC Aligned)
@@ -2407,6 +2751,13 @@ function _assessBackup() {
     } catch (_) {}
 }
 
+// Immediate local backup + debounced server sync (used by legacy batch handlers)
+function _flushNow() {
+    _assessBackup();
+    clearTimeout(window._scoreSaveTimeout);
+    window._scoreSaveTimeout = setTimeout(() => saveData(), 500);
+}
+
 // ==========================================================================
 //   MASTER REPORTS OVERRIDE (Bypasses Broken Modals)
 // ==========================================================================
@@ -2427,8 +2778,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             // Call the direct generator (No modals!)
-            if (typeof generateStudentReport === 'function') {
-                generateStudentReport(id);
+            // (generateStudentReport never existed — use the real generators)
+            if (typeof generateIndividualReport === 'function') {
+                generateIndividualReport();
+            } else if (typeof downloadStudentReportCard === 'function') {
+                downloadStudentReportCard(id);
+            } else {
+                showToast('Report generator not available.', 'error');
             }
         });
     }
@@ -2537,6 +2893,8 @@ function _assessRecover() {
             if (!store.exams.some(x => x.id === score.id)) store.exams.push(score);
         });
         console.log(`Recovered ${data.s.length} assessment(s) from safety backup.`);
+        // FIXED: persist recovered records so they survive the next reload too
+        saveData();
     } catch (_) {}
 }
 
@@ -5067,15 +5425,187 @@ function saveInstitutionDetails(e) { e.preventDefault(); Object.assign(store.set
 function saveHOIDetails(e) { e.preventDefault(); Object.assign(store.settings, { hoiName: getVal('hoiName'), hoiTitle: getVal('hoiTitle'), hoiTsc: getVal('hoiTsc'), hoiPhone: getVal('hoiPhone'), hoiEmail: getVal('hoiEmail') }); saveData(); showToast('HOI details saved!'); }
 
 
-function renderStaff() { const c = $('staffGrid') || $('staffListContainer'); if (c) c.innerHTML = '<div class="empty-state">Staff section — paste your original renderStaff code here.</div>'; }
-function editStaff(id) { showToast('Edit staff: paste your original code.', 'info'); }
-function deleteStaff(id) { if (confirm('Delete staff?')) { StaffRepo.delete(id); renderStaff(); showToast('Staff deleted.'); } }
-function openStaffModal() { openModal('staffModal'); }
-function submitStaff(e) { e.preventDefault(); showToast('Staff saved (stub).'); closeModal('staffModal'); }
+function renderStaff() {
+    const all = StaffRepo.getAll();
+
+    // --- Filters (bound in initGlobalListeners) ---
+    const search = (getVal('staffSearch') || '').toLowerCase();
+    const deptFilter = getVal('staffDeptFilter') || 'all';
+    const filtered = all.filter(s => {
+        if (deptFilter !== 'all') {
+            const dept = (s.department || s.dept || '').toLowerCase();
+            const desig = (s.designation || '').toLowerCase();
+            if (!dept.includes(deptFilter.toLowerCase()) && !desig.includes(deptFilter.toLowerCase())) return false;
+        }
+        if (search) {
+            const hay = [s.name, s.tsc, s.idNo, s.phone, s.designation, s.department, s.dept, s.email]
+                .filter(Boolean).join(' ').toLowerCase();
+            if (!hay.includes(search)) return false;
+        }
+        return true;
+    });
+
+    // --- Role buckets for the staff analytics dashboard ---
+    const buckets = { teachers: [], admin: [], support: [] };
+    all.forEach(s => {
+        const d = (s.department || s.dept || '').toLowerCase();
+        const desig = (s.designation || '').toLowerCase();
+        if (d.includes('admin') || desig.includes('head') || desig.includes('principal') || desig.includes('deputy')) buckets.admin.push(s);
+        else if (d.includes('support') || desig.includes('support') || desig.includes('cleaner') || desig.includes('driver')) buckets.support.push(s);
+        else buckets.teachers.push(s);
+    });
+
+    // --- Render grid (default) or table view into #staffContainer ---
+    const container = $('staffContainer');
+    const tableView = currentView.staff === 'list';
+
+    if (container) {
+        if (tableView) renderStaffTable(filtered, container);
+        else renderStaffGrid(filtered, container);
+    }
+
+    // --- Analytics (KPIs, doughnuts, workload, performance) ---
+    if (typeof renderStaffAnalytics === 'function') renderStaffAnalytics(all, buckets);
+}
+
+function editStaff(id) {
+    const s = StaffRepo.getById(id);
+    if (!s) return;
+    const form = $('staffForm');
+    if (form) form.reset();
+    if ($('staffEditId')) $('staffEditId').value = id;
+    if ($('staffModalTitle')) $('staffModalTitle').innerText = 'Edit Staff Member';
+
+    // Name → Surname / First Name / Other Names
+    const parts = (s.name || '').split(/\s+/).filter(Boolean);
+    if ($('staffSurname')) $('staffSurname').value = parts[0] || '';
+    if ($('staffFirstName')) $('staffFirstName').value = parts[1] || '';
+    if ($('staffOtherNames')) $('staffOtherNames').value = parts.slice(2).join(' ');
+
+    const idMap = { staffTsc: 'tsc', staffIdNo: 'idNo', staffPhone: 'phone', staffEmail: 'email',
+        staffDesignation: 'designation', staffGender: 'gender', staffDob: 'dob',
+        staffEmploymentType: 'employmentType', staffSubjects: 'subjects', staffAppointmentDate: 'appointmentDate' };
+    Object.entries(idMap).forEach(([fieldId, key]) => {
+        if ($(fieldId) && s[key] !== undefined) $(fieldId).value = s[key];
+    });
+    const deptEl = $('staffDept');
+    if (deptEl && (s.dept || s.department)) deptEl.value = s.dept || s.department;
+
+    // Photo
+    window._staffPhotoDataUrl = s.photo || null;
+    if (s.photo && $('staffPhotoPreview')) $('staffPhotoPreview').src = s.photo;
+
+    // Also fill any name-attribute fields that match staff keys
+    if (form) {
+        form.querySelectorAll('[name]').forEach(f => {
+            if (s[f.name] === undefined) return;
+            if (f.type === 'checkbox') f.checked = !!s[f.name];
+            else f.value = s[f.name];
+        });
+    }
+    openModal('staffModal');
+}
+
+function deleteStaff(id) {
+    if (!confirm('Delete this staff member?')) return;
+    StaffRepo.delete(id);
+    renderStaff();
+    renderDashboard();
+    showToast('Staff deleted.');
+}
+
+function openStaffModal() {
+    const form = $('staffForm');
+    if (form) form.reset();
+    if ($('staffEditId')) $('staffEditId').value = '';
+    if ($('staffModalTitle')) $('staffModalTitle').innerText = 'Add Staff Member';
+    window._staffPhotoDataUrl = null;
+    if ($('staffPhotoPreview')) $('staffPhotoPreview').src = DEFAULT_AVATAR;
+    switchStaffStep(1);
+    openModal('staffModal');
+}
+
+function switchStaffStep(target) {
+    if (target < 1 || target > 2) return;
+    [1, 2].forEach(i => {
+        const step = $('staff-form-step-' + i);
+        if (step) step.classList.toggle('active', i === target);
+    });
+}
+
+function submitStaff(e) {
+    e.preventDefault();
+    const editId = $('staffEditId')?.value || '';
+    const surname = getVal('staffSurname').trim();
+    const first = getVal('staffFirstName').trim();
+    const other = getVal('staffOtherNames').trim();
+    const name = [surname, first, other].filter(Boolean).join(' ');
+
+    if (!name) { showToast('Surname and First Name are required.', 'error'); return; }
+
+    const department = getVal('staffDept');
+    const staffData = {
+        name, surname, firstName: first, otherNames: other,
+        gender: getVal('staffGender'),
+        dob: getVal('staffDob'),
+        idNo: getVal('staffIdNo'),
+        phone: getVal('staffPhone'),
+        email: getVal('staffEmail'),
+        designation: getVal('staffDesignation'),
+        department: department,
+        dept: department,
+        tsc: getVal('staffTsc'),
+        employmentType: getVal('staffEmploymentType'),
+        appointmentDate: getVal('staffAppointmentDate'),
+        subjects: getVal('staffSubjects'),
+        photo: window._staffPhotoDataUrl || null
+    };
+
+    if (editId) {
+        StaffRepo.update(editId, staffData);
+        showToast('Staff updated successfully!');
+    } else {
+        StaffRepo.create(staffData);
+        showToast('Staff added successfully!');
+    }
+    closeModal('staffModal');
+    renderStaff();
+    renderDashboard();
+}
 
 function renderCurricula() { const c = $('curriculumAccordion'); if (c) c.innerHTML = '<div class="empty-state">Curricula section — paste your original renderCurricula code here.</div>'; }
 function filterCurricula(band) { renderCurricula(); }
-function openCourseModal(id) { openModal('courseModal'); }
+function openCourseModal(id) {
+    if (id) {
+        // Edit mode — populate the form with the existing subject first
+        const subject = (store.learningAreas || []).find(t => t.id === id);
+        if (subject) {
+            editCourse(id);
+            openModal('courseModal');
+            return;
+        }
+    }
+    // Add mode — fresh form
+    const form = $('courseForm');
+    if (form) form.reset();
+    if ($('courseEditId')) $('courseEditId').value = '';
+    if ($('courseModalTitle')) $('courseModalTitle').innerText = 'Add Subject';
+    populateCourseLevels();
+    populateTeacherDropdown('');
+    openModal('courseModal');
+}
+
+// Populates the grade checkboxes in the (single) course modal
+function populateCourseLevels() {
+    const container = $('courseLevelsContainer');
+    if (!container) return;
+    const grades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+    container.innerHTML = grades.map(g => `
+        <label class="checkbox-card" style="display:flex; align-items:center; gap:6px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; font-size:0.8rem; cursor:pointer;">
+            <input type="checkbox" name="courseGrade" value="${g}"> ${g}
+        </label>
+    `).join('');
+}
 function saveCourseSettings(e) { e.preventDefault(); showToast('Subject saved (stub).'); closeModal('courseModal'); }
 
 function renderTimetable() { const c = $('ttGridWrapper'); if (c) c.innerHTML = '<div class="heatmap-empty">Timetable section — paste your original renderTimetable code here.</div>'; }
@@ -6068,6 +6598,7 @@ let staffEmploymentChartInstance = null;
 
 function renderStaffAnalytics(allStaff, buckets) {
     if (!allStaff) return;
+    buckets = buckets || {};
     const teachers = buckets.teachers || [];
     const admin = buckets.admin || [];
     const support = buckets.support || [];
@@ -6480,24 +7011,41 @@ function renderCurricula() {
         `;
         container.appendChild(item);
     });
+
+    // Auto-open the first band so the section never looks empty
+    const firstItem = container.querySelector('.accordion-item');
+    if (firstItem) firstItem.classList.add('open');
+
+    // Empty state (no learning areas defined at all)
+    if (!store.learningAreas || store.learningAreas.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.style.gridColumn = '1 / -1';
+        empty.innerHTML = '<i class="fa-solid fa-book-open" style="font-size:2rem;opacity:0.35;display:block;margin-bottom:0.75rem;"></i>No learning areas yet. Click <strong>Add Subject</strong> to build your CBC curriculum.';
+        container.insertBefore(empty, container.firstChild);
+    }
 }
 
 function renderSubjectCard(sub) {
-    const teacher = sub.teacherId ? StaffRepo.getById(sub.teacherId) : null; 
-    const teacherName = teacher ? teacher.name : 'Unassigned';
-    
+    const teacher = sub.teacherId ? StaffRepo.getById(sub.teacherId) : null;
+    const teacherLine = teacher
+        ? `<span><i class="fa-solid fa-user-tie"></i> ${escapeHtml(teacher.name)}</span>`
+        : `<span class="unassigned"><i class="fa-solid fa-user-slash"></i> Unassigned</span>`;
+
     return `
         <div class="subject-card-modern">
             <div class="subject-header">
-                <h4 style="margin:0">${sub.name}</h4>
-                <span class="subject-code-badge">${sub.code}</span>
+                <h4>${escapeHtml(sub.name)}</h4>
+                <span class="subject-code-badge">${escapeHtml(sub.code)}</span>
             </div>
-            <div style="margin-top:0.5rem; font-size:0.85rem; color:var(--text-muted);">
-                <p style="margin:0"><small>Grades: ${sub.applicableLevels ? sub.applicableLevels.join(', ') : 'All'}</small></p>
-            </div>
+            <div class="subject-grades"><small>Grades: ${sub.applicableLevels ? escapeHtml(sub.applicableLevels.join(', ')) : 'All'}</small></div>
+            <div class="subject-teacher">${teacherLine}</div>
             <div class="subject-footer">
                 <button class="btn btn-sm btn-ghost" data-action="edit-curriculum" data-id="${sub.id}" title="Edit">
-                    <i class="fa-solid fa-edit"></i>
+                    <i class="fa-solid fa-edit"></i> Edit
+                </button>
+                <button class="btn btn-sm btn-ghost" data-action="delete-course" data-id="${sub.id}" title="Delete" style="color:var(--danger);">
+                    <i class="fa-solid fa-trash"></i>
                 </button>
             </div>
         </div>
@@ -6652,10 +7200,19 @@ function toggleAccordion(headerElement) {
     }
 }
 
+// ── PROFILE HEADER ACTIONS (Edit / Report Card for the selected learner) ──
+function editProfileStudent() {
+    if (!_profileSelectedId) { showToast('Select a learner first.', 'error'); return; }
+    editStudent(_profileSelectedId);
+}
+function profileReportCard() {
+    if (!_profileSelectedId) { showToast('Select a learner first.', 'error'); return; }
+    downloadStudentReportCard(_profileSelectedId);
+}
+
 // ── VIEW STUDENT (Sidebar Click Handler) ──
 function viewStudent(studentId) {
     _profileSelectedId = studentId;
-
     // Update active state in sidebar (works for both flat & grouped)
     document.querySelectorAll('#profileStudentList .ps-item').forEach(el => {
         el.classList.toggle('active', el.dataset.sid === studentId);
@@ -7472,20 +8029,43 @@ function _renderDetailEmpty() {
         </div>`;
 }
 
-// ── Render Detail for a Note ──
+// ── Note helpers (were missing — viewing a note detail crashed) ──
+function _findNoteById(id) {
+    return (store.notes || []).find(n => n.id === id) || null;
+}
+
+function _getBackupData() {
+    try {
+        const raw = localStorage.getItem('elimutrack_backup');
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function _getAllNotesFromBackup() {
+    const data = _getBackupData();
+    return Array.isArray(data.notes) ? data.notes : (store.notes || []);
+}
+
 function _renderDetailForNote(id) {
     const view = $('noteDetailView');
     if (!view) return;
 
-    const note = (store.notes || []).find(n => n.id === id);
+    const note = _findNoteById(id);
     if (!note) { _renderDetailEmpty(); return; }
 
-    const student = StudentRepo.getById(note.studentId);
-    const sName = student ? student.name : 'Unknown Student';
-    const sPhoto = student ? (student.photo || DEFAULT_AVATAR) : DEFAULT_AVATAR;
-    const sGrade = student ? student.grade : '';
-    const sStream = student ? student.stream : '';
-    const severity = note.severity || 'medium';
+    const sName = note._studentName || 'Unknown Student';
+    const severity = note.severity || 'medium';  // ✅ FIX: declare severity
+    const data = _getBackupData();
+    const studentObj = data?.students?.find(s => 
+        s.id === note.studentId || s.idNumber === note.studentId || s.idNumber === String(note.studentId)
+    );
+    const sPhoto = studentObj?.photo || DEFAULT_AVATAR;
+    const sGrade = studentObj?.grade || '';
+    const sStream = studentObj?.stream || '';
 
     const badgeMap = {
         'Discipline': { cls: 'db-discipline', val: 'val-discipline', icon: 'fa-gavel' },
@@ -7494,26 +8074,26 @@ function _renderDetailForNote(id) {
         'Medical': { cls: 'db-medical', val: 'val-medical', icon: 'fa-heart-pulse' }
     };
     const cfg = badgeMap[note.type] || badgeMap['Discipline'];
-
     const sevValMap = { low: 'val-low', medium: 'val-medium', high: 'val-high' };
     const sevClsMap = { low: 'dsb-low', medium: 'dsb-medium', high: 'dsb-high' };
-
-    // Related notes for same student (excluding current)
-    const related = (store.notes || [])
-        .filter(n => n.studentId === note.studentId && n.id !== note.id)
-        .sort((a, b) => {
-            const da = a.date ? new Date(a.date).getTime() : 0;
-            const db = b.date ? new Date(b.date).getTime() : 0;
-            return db - da;
-        })
-        .slice(0, 5);
-
-    const dotColorMap = {
-        'Discipline': '#ef4444',
-        'Co-curricular': '#3b82f6',
-        'Academic': '#22c55e',
-        'Medical': '#f59e0b'
+    const dotColorMap = { 
+        'Discipline': '#ef4444', 
+        'Co-curricular': '#3b82f6', 
+        'Academic': '#22c55e', 
+        'Medical': '#f59e0b' 
     };
+
+    // ✅ FIX: proper ternary with closing ) : []
+    const related = note.studentId 
+        ? _getAllNotesFromBackup()
+            .filter(n => n.studentId === note.studentId && n.id !== note.id)
+            .sort((a, b) => {
+                const da = a.date ? new Date(a.date).getTime() : 0;
+                const db = b.date ? new Date(b.date).getTime() : 0;
+                return db - da;
+            })
+            .slice(0, 5) 
+        : [];
 
     view.innerHTML = `
         <div class="detail-header">
@@ -7525,63 +8105,42 @@ function _renderDetailForNote(id) {
                 </div>
             </div>
             <div class="detail-actions">
-                <button class="detail-btn" onclick="editNote('${note.id}')" title="Edit">
-                    <i class="fa-solid fa-pen-to-square"></i>
-                </button>
-                <button class="detail-btn danger" onclick="confirmDeleteNote('${note.id}')" title="Delete">
-                    <i class="fa-solid fa-trash"></i>
-                </button>
+                <button class="detail-btn" onclick="editNote('${note.id}')" title="Edit"><i class="fa-solid fa-pen-to-square"></i></button>
+                <button class="detail-btn danger" onclick="confirmDeleteNote('${note.id}')" title="Delete"><i class="fa-solid fa-trash"></i></button>
             </div>
         </div>
-
         <div class="detail-student-card">
-            <img src="${sPhoto}" class="dsc-avatar" alt="${escapeHtml(sName)}"
-                 onerror="this.src='${DEFAULT_AVATAR}'">
+            <img src="${sPhoto}" class="dsc-avatar" alt="${escapeHtml(sName)}" onerror="this.src='${DEFAULT_AVATAR}'">
             <div class="dsc-info">
-                <p class="dsc-name" onclick="viewStudent('${note.studentId}')">${escapeHtml(sName)}</p>
+                <p class="dsc-name">${escapeHtml(sName)}</p>
                 <span class="dsc-meta">${escapeHtml(sGrade)}${sStream ? ' · ' + escapeHtml(sStream) : ''}</span>
             </div>
         </div>
-
         <div class="detail-meta-grid">
-            <div class="dmg-item">
-                <span class="dmg-label">Type</span>
-                <span class="dmg-value ${cfg.val}">${escapeHtml(note.type || '—')}</span>
-            </div>
-            <div class="dmg-item">
-                <span class="dmg-label">Date</span>
-                <span class="dmg-value">${_fmtDate(note.date)}</span>
-            </div>
-            <div class="dmg-item">
-                <span class="dmg-label">Severity</span>
-                <span class="dmg-value ${sevValMap[severity]}">${_sevLabel(severity)}</span>
-            </div>
+            <div class="dmg-item"><span class="dmg-label">Type</span><span class="dmg-value ${cfg.val}">${escapeHtml(note.type || '—')}</span></div>
+            <div class="dmg-item"><span class="dmg-label">Date</span><span class="dmg-value">${_fmtDate(note.date)}</span></div>
+            <div class="dmg-item"><span class="dmg-label">Severity</span><span class="dmg-value ${sevValMap[severity]}">${_sevLabel(severity)}</span></div>
         </div>
-
         <div class="detail-body">
             <div class="detail-section-label">Details</div>
             <p class="detail-description">${escapeHtml(note.description || 'No details provided.')}</p>
-
             ${related.length > 0 ? `
                 <div class="detail-section-label">Other Records for This Student</div>
                 <div class="detail-related">
-                    ${related.map(r => {
-                        const dotColor = dotColorMap[r.type] || '#94a3b8';
-                        return `
+                    ${related.map(r => `
                         <div class="detail-related-item" onclick="selectNote('${r.id}')">
-                            <span class="detail-related-dot" style="background:${dotColor}"></span>
+                            <span class="detail-related-dot" style="background:${dotColorMap[r.type] || '#94a3b8'}"></span>
                             <div class="detail-related-info">
                                 <span class="detail-related-title">${escapeHtml(r.title || 'Untitled')}</span>
                                 <span class="detail-related-date">${_fmtDate(r.date)} · ${escapeHtml(r.type || '')}</span>
                             </div>
-                        </div>`;
-                    }).join('')}
+                        </div>
+                    `).join('')}
                 </div>
             ` : ''}
         </div>
-
         <div class="detail-footer">
-            <span class="detail-footer-info"><i class="fa-regular fa-clock"></i> Record created ${_fmtDate(note.date)}</span>
+            <span class="detail-footer-info"><i class="fa-regular fa-clock"></i> ${_fmtDate(note.date)}</span>
             <div class="detail-footer-actions">
                 <button class="btn btn-ghost btn-sm" onclick="editNote('${note.id}')"><i class="fa-solid fa-pen"></i> Edit</button>
                 <button class="btn btn-sm" style="color:#ef4444;border-color:rgba(239,68,68,0.3);" onclick="confirmDeleteNote('${note.id}')"><i class="fa-solid fa-trash"></i> Delete</button>
@@ -7664,9 +8223,10 @@ function _executeDeleteNote() {
     showToast('Record deleted', 'info');
 }
 
-// ── Form Submission ──
+// ── Form Submission (fixed — was a diagnostic stub that never saved) ──
 function _handleNoteSubmit(e) {
     e.preventDefault();
+    e.stopPropagation();
 
     const studentId = $('noteStudentSelect')?.value || '';
     const type = $('noteType')?.value || '';
@@ -7674,7 +8234,7 @@ function _handleNoteSubmit(e) {
     const description = ($('noteDesc')?.value || '').trim();
     const date = $('noteDate')?.value || '';
     const severity = $('noteSeverity')?.value || 'medium';
-    const editId = $('noteEditId')?.value || '';
+    const editId = ($('noteEditId')?.value || '').trim();
 
     // Validate
     const errors = {};
@@ -7693,32 +8253,39 @@ function _handleNoteSubmit(e) {
         return;
     }
 
-    if (!store.notes) store.notes = [];
+    if (!Array.isArray(store.notes)) store.notes = [];
 
+    const noteData = {
+        id: editId || Date.now().toString(),
+        studentId, type, title, description, date, severity
+    };
+
+    // ── Actually persist the note (previously this function only logged) ──
     if (editId) {
         const idx = store.notes.findIndex(n => n.id === editId);
-        if (idx >= 0) store.notes[idx] = { ...store.notes[idx], studentId, type, title, description, date, severity };
-        showToast('Record updated successfully');
+        if (idx !== -1) {
+            store.notes[idx] = { ...store.notes[idx], ...noteData };
+            showToast('Record updated successfully!');
+        } else {
+            store.notes.push(noteData);
+            showToast('Record added successfully!');
+        }
     } else {
-        const newId = Date.now().toString();
-        store.notes.push({ id: newId, studentId, type, title, description, date, severity });
-        showToast('Record added successfully');
-        _notesSelectedId = newId; // Auto-select the new note
+        store.notes.push(noteData);
+        showToast('Record added successfully!');
     }
 
     saveData();
+
+    const form = $('noteForm');
+    if (form) form.reset();
+    if ($('noteEditId')) $('noteEditId').value = '';
     closeModal('addNoteModal');
+
+    _notesSelectedId = noteData.id;
     _updateTabCounts();
     _renderNotesList();
-    _renderDetailForNote(_notesSelectedId || (editId || (store.notes[store.notes.length - 1]?.id)));
-
-    setTimeout(() => {
-        const form = $('noteForm');
-        if (form) form.reset();
-        if ($('noteEditId')) $('noteEditId').value = '';
-        if ($('noteSeverity')) $('noteSeverity').value = 'medium';
-        _clearNoteErrors();
-    }, 350);
+    _renderDetailForNote(noteData.id);
 }
 
 // ── Bind Form ──
@@ -8066,9 +8633,14 @@ function renderLaWorkload() {
 function filterCurricula(band) {
     const items = document.querySelectorAll('#curriculumAccordion .accordion-item');
     
+    // Keep the clicked pill highlighted
+    document.querySelectorAll('.band-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.band === band);
+    });
+
     items.forEach(item => {
         if (band === 'all') {
-            item.classList.remove('open'); 
+            item.classList.add('open');
         } else if (item.dataset.band === band) {
             item.classList.add('open');
             item.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -8139,7 +8711,9 @@ function editCourse(id) {
     $('courseEditId').value = id; 
     setVal('courseName', subject.name); 
     setVal('courseCode', subject.code); 
+    setVal('courseType', subject.type || ''); 
     
+    populateCourseLevels();
     const checkboxes = document.querySelectorAll('input[name="courseGrade"]'); 
     checkboxes.forEach(cb => { 
         cb.checked = subject.applicableLevels?.includes(cb.value); 
@@ -10079,6 +10653,226 @@ function downloadBatchScores() {
     showToast('Scores downloaded');
 }
 
+// ── ADMISSIONS EXCEL TEMPLATE (was referenced by index.html but never defined) ──
+function downloadAdmissionTemplate() {
+    const headers = [['Surname', 'First Name', 'Gender', 'DOB', 'Birth Cert No', 'Phone', 'Grade', 'Stream']];
+    try {
+        if (typeof XLSX !== 'undefined') {
+            const ws = XLSX.utils.aoa_to_sheet(headers);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Admissions Template');
+            XLSX.writeFile(wb, 'ElimuTrack_Admission_Template.xlsx');
+            showToast('Admission template downloaded');
+            return;
+        }
+    } catch (e) { /* fall through to CSV */ }
+    const csv = headers[0].join(',') + '\n';
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ElimuTrack_Admission_Template.csv';
+    a.click();
+    showToast('Admission template downloaded (CSV)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//   BATCH ADMISSION (manual + Excel) — FIXED: the entire modal was unwired
+// ═══════════════════════════════════════════════════════════════════════
+let _batchAdmissionRows = [];   // manual-entry rows
+let _batchExcelRows = [];       // parsed Excel rows
+
+function initBatchAdmission() {
+    // Open the modal from the Admissions toolbar
+    $('admBatchBtn')?.addEventListener('click', () => {
+        if (!getVal('batchGrade')) { showToast('Select a default grade first.', 'error'); return; }
+        _batchAdmissionRows = []; _batchExcelRows = [];
+        renderBatchManualTable(); clearBatchExcelPreview();
+        openModal('batchAdmissionModal');
+    });
+
+    // Mode tabs (Manual Entry / Excel Upload)
+    document.querySelectorAll('#batchTabs .batch-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('#batchTabs .batch-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const mode = tab.dataset.mode;
+            $('batchManualPanel')?.classList.toggle('active', mode === 'manual');
+            $('batchExcelPanel')?.classList.toggle('active', mode === 'excel');
+        });
+    });
+
+    // Manual: add row / clear all
+    $('batchAddRowBtn')?.addEventListener('click', () => {
+        _batchAdmissionRows.push({ surname: '', firstName: '', gender: '', grade: '', stream: '', birthCert: '', phone: '' });
+        renderBatchManualTable();
+    });
+    $('batchClearBtn')?.addEventListener('click', () => { _batchAdmissionRows = []; renderBatchManualTable(); });
+
+    // Excel: upload zone (click + drag & drop)
+    const zone = $('batchUploadZone'), fileInput = $('batchAdmissionFile');
+    if (zone && fileInput) {
+        zone.addEventListener('click', () => fileInput.click());
+        zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+        zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+        zone.addEventListener('drop', e => {
+            e.preventDefault(); zone.classList.remove('drag-over');
+            const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (f) handleBatchAdmissionFile(f);
+        });
+        fileInput.addEventListener('change', () => handleBatchAdmissionFile(fileInput.files && fileInput.files[0]));
+    }
+    $('batchExcelClearBtn')?.addEventListener('click', clearBatchExcelPreview);
+
+    // Confirm & import
+    $('btnConfirmBatchAdmission')?.addEventListener('click', confirmBatchAdmission);
+}
+
+function renderBatchManualTable() {
+    const tbody = $('batchManualBody');
+    if (!tbody) return;
+    tbody.innerHTML = _batchAdmissionRows.map((r, i) => `
+        <tr>
+            <td>${i + 1}</td>
+            <td><input class="batch-row-input" data-idx="${i}" data-field="surname" value="${escapeHtml(r.surname)}" placeholder="Surname"></td>
+            <td><input class="batch-row-input" data-idx="${i}" data-field="firstName" value="${escapeHtml(r.firstName)}" placeholder="First name"></td>
+            <td><select class="batch-row-input" data-idx="${i}" data-field="gender">
+                <option value="">--</option>
+                <option value="Male" ${r.gender === 'Male' ? 'selected' : ''}>Male</option>
+                <option value="Female" ${r.gender === 'Female' ? 'selected' : ''}>Female</option>
+            </select></td>
+            <td><input class="batch-row-input" data-idx="${i}" data-field="grade" value="${escapeHtml(r.grade)}" placeholder="e.g. Grade 4"></td>
+            <td><input class="batch-row-input" data-idx="${i}" data-field="stream" value="${escapeHtml(r.stream)}" placeholder="e.g. Blue"></td>
+            <td><input class="batch-row-input" data-idx="${i}" data-field="birthCert" value="${escapeHtml(r.birthCert)}" placeholder="BC No"></td>
+            <td><input class="batch-row-input" data-idx="${i}" data-field="phone" value="${escapeHtml(r.phone)}" placeholder="07..."></td>
+            <td><span class="batch-row-status"></span></td>
+            <td><button class="btn btn-sm btn-ghost" data-remove-row="${i}" style="color:var(--danger);"><i class="fa-solid fa-trash"></i></button></td>
+        </tr>
+    `).join('');
+
+    tbody.querySelectorAll('.batch-row-input').forEach(inp => {
+        inp.addEventListener('input', () => {
+            const idx = parseInt(inp.dataset.idx, 10), f = inp.dataset.field;
+            if (_batchAdmissionRows[idx]) _batchAdmissionRows[idx][f] = inp.value;
+            updateBatchSummary();
+        });
+    });
+    tbody.querySelectorAll('[data-remove-row]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            _batchAdmissionRows.splice(parseInt(btn.dataset.removeRow, 10), 1);
+            renderBatchManualTable();
+        });
+    });
+    updateBatchSummary();
+}
+
+function updateBatchSummary() {
+    const valid = _batchAdmissionRows.filter(r => (r.surname || '').trim() && (r.firstName || '').trim() && (r.grade || '').trim());
+    setText('batchManualCount', _batchAdmissionRows.length);
+    setText('batchManualValid', valid.length);
+    setText('batchManualInvalid', _batchAdmissionRows.length - valid.length);
+
+    const tbody = $('batchManualBody');
+    if (tbody) tbody.querySelectorAll('.batch-row-status').forEach((el, i) => {
+        const r = _batchAdmissionRows[i];
+        const ok = r && (r.surname || '').trim() && (r.firstName || '').trim() && (r.grade || '').trim();
+        el.textContent = ok ? '✓' : '!';
+        el.style.color = ok ? 'var(--success)' : 'var(--warning)';
+    });
+
+    const total = _batchAdmissionRows.length + _batchExcelRows.length;
+    setText('batchFooterSummary', `Ready to import ${total} learner${total === 1 ? '' : 's'}`);
+    const btn = $('btnConfirmBatchAdmission');
+    if (btn) btn.disabled = total === 0;
+}
+
+function handleBatchAdmissionFile(file) {
+    if (!file) return;
+    if (typeof XLSX === 'undefined') { showToast('Excel library not loaded. Check your internet connection.', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const wb = XLSX.read(e.target.result, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+            _batchExcelRows = rows.slice(1)
+                .filter(r => r && r.some(c => c !== null && c !== undefined && String(c).trim() !== ''))
+                .map(r => ({
+                    surname: String(r[0] || '').trim(), firstName: String(r[1] || '').trim(),
+                    gender: String(r[2] || '').trim(), dob: String(r[3] || '').trim(),
+                    birthCert: String(r[4] || '').trim(), phone: String(r[5] || '').trim(),
+                    grade: String(r[6] || '').trim(), stream: String(r[7] || '').trim()
+                }));
+            renderBatchExcelPreview();
+        } catch (err) {
+            console.error('[BATCH XLSX]', err);
+            showToast('Could not read the file: ' + err.message, 'error');
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function renderBatchExcelPreview() {
+    const container = $('batchPreviewContainer');
+    const tbody = document.querySelector('#batchPreviewTable tbody');
+    if (!container || !tbody) return;
+    const valid = _batchExcelRows.filter(r => r.surname && r.firstName && r.grade);
+    setText('batchExcelValid', valid.length);
+    setText('batchExcelInvalid', _batchExcelRows.length - valid.length);
+    setText('batchExcelTotal', _batchExcelRows.length);
+    tbody.innerHTML = _batchExcelRows.map((r, i) => `
+        <tr>
+            <td>${i + 1}</td><td>${escapeHtml(r.surname)}</td><td>${escapeHtml(r.firstName)}</td>
+            <td>${escapeHtml(r.gender)}</td><td>${escapeHtml(r.dob)}</td><td>${escapeHtml(r.birthCert)}</td>
+            <td>${escapeHtml(r.phone)}</td><td>${escapeHtml(r.grade)}</td><td>${escapeHtml(r.stream)}</td>
+            <td>${r.surname && r.firstName && r.grade ? '<span style="color:var(--success);font-weight:700;">✓</span>' : '<span style="color:var(--warning);font-weight:700;">!</span>'}</td>
+        </tr>`).join('');
+    container.style.display = 'block';
+    updateBatchSummary();
+}
+
+function clearBatchExcelPreview() {
+    _batchExcelRows = [];
+    const input = $('batchAdmissionFile'); if (input) input.value = '';
+    const container = $('batchPreviewContainer'); if (container) container.style.display = 'none';
+    setText('batchExcelValid', 0); setText('batchExcelInvalid', 0); setText('batchExcelTotal', 0);
+    updateBatchSummary();
+}
+
+function confirmBatchAdmission() {
+    const defGrade = getVal('batchGrade'), defStream = getVal('batchStream');
+    const all = [..._batchAdmissionRows, ..._batchExcelRows].map(r => ({
+        surname: (r.surname || '').trim(), firstName: (r.firstName || '').trim(),
+        gender: (r.gender || '').trim() || 'Female',
+        grade: (r.grade || '').trim() || defGrade,
+        stream: (r.stream || '').trim() || defStream,
+        birthCert: (r.birthCert || '').trim(), phone: (r.phone || '').trim(), dob: (r.dob || '').trim()
+    })).filter(r => r.surname && r.firstName && r.grade);
+
+    if (all.length === 0) { showToast('No valid rows to import.', 'error'); return; }
+    let added = 0, skipped = 0;
+    all.forEach(r => {
+        const fullName = `${r.surname} ${r.firstName}`.trim();
+        if (StudentRepo.getAll().some(s => s.name === fullName && s.grade === r.grade)) { skipped++; return; }
+        const year = new Date().getFullYear().toString().slice(-2);
+        const gCode = r.grade.replace(/\s/g, '');
+        const count = StudentRepo.findBy('grade', r.grade).length + 1;
+        StudentRepo.create({
+            name: fullName, gender: r.gender, dob: r.dob, idNumber: r.birthCert,
+            phone: r.phone, grade: r.grade, stream: r.stream,
+            reg: `${gCode}/${year}/${String(count).padStart(3, '0')}`,
+            photo: null, guardianName: '', guardianPhone: '', guardianRel: 'Parent',
+            upiNumber: '', prevSchool: '', entryLevel: '', yearCompleted: '', nemisNumber: '', disability: ''
+        });
+        added++;
+    });
+    showToast(`Imported ${added} learner${added === 1 ? '' : 's'}${skipped ? ` · ${skipped} duplicate${skipped === 1 ? '' : 's'} skipped` : ''}`, added > 0 ? 'success' : 'error');
+    _batchAdmissionRows = []; _batchExcelRows = [];
+    renderBatchManualTable(); clearBatchExcelPreview();
+    closeModal('batchAdmissionModal');
+    renderLearnerSection();
+    renderDashboard();
+}
+
 // ── BATCH UPLOAD ──
 function openBatchUploadModal() {
     const assessId = getVal('batchAssessment');
@@ -10370,8 +11164,6 @@ function patchAssessmentIntegrity() {
 
 
 // ==========================================================================
-//   REPORTS CENTER — CBC Harmonized with Assessment Section
-// ==========================================================================
 // ==========================================================================
 //   REPORTS CENTER ENGINE — Full Implementation
 // ==========================================================================
@@ -10530,6 +11322,19 @@ function populateReportFilters() {
         yearSelect.value = cur || String(cy);
     }
 
+    // Stream (FIXED: was present in the HTML but never populated or applied)
+    const streamSelect = $('reportStreamFilter');
+    if (streamSelect) {
+        const cur = streamSelect.value;
+        const streams = [...new Set((store.students || []).map(s => s.stream).filter(Boolean))].sort();
+        streamSelect.innerHTML = '<option value="all">All Streams</option>';
+        streams.forEach(st => {
+            streamSelect.innerHTML += `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`;
+        });
+        streamSelect.value = cur || 'all';
+        streamSelect.onchange = () => { populateReportLearnerSelect(); };
+    }
+
     // Assessment dropdown — derived from store.exams (same source as Assessment tab)
     refreshReportAssessmentDropdown();
 }
@@ -10684,8 +11489,10 @@ function populateReportLearnerSelect() {
     const sel = $('reportLearnerSelect');
     if (!sel) return;
     const grade = $('reportGradeFilter')?.value || 'all';
+    const stream = $('reportStreamFilter')?.value || 'all';
     let students = StudentRepo.getAll();
     if (grade !== 'all') students = students.filter(s => s.grade === grade);
+    if (stream !== 'all') students = students.filter(s => s.stream === stream);
 
     // Use DIRECT fetch for accurate score counts
     const cntMap = {};
@@ -11582,14 +12389,16 @@ function initReportListeners() {
     const sel = $('reportLearnerSelect');
     if (!sel) return;
     const grade = $('reportGradeFilter')?.value || 'all';
+    const stream = $('reportStreamFilter')?.value || 'all';
 
-    // Rebuild dropdown options filtered by search + grade
+    // Rebuild dropdown options filtered by search + grade + stream
     const scores = getFilteredScores();
     const cntMap = {};
     scores.forEach(s => { cntMap[s.studentId] = (cntMap[s.studentId] || 0) + 1; });
 
     let students = StudentRepo.getAll();
     if (grade !== 'all') students = students.filter(s => s.grade === grade);
+    if (stream !== 'all') students = students.filter(s => s.stream === stream);
     if (q) students = students.filter(s =>
         [s.name, s.reg, s.grade, s.stream, s.guardianName].join(' ').toLowerCase().includes(q)
     );
@@ -11960,9 +12769,6 @@ async function downloadIndividualReportPDF() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//   DOWNLOAD ALL GRADE REPORTS AS ONE PDF
-// ═══════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
 //   DOWNLOAD ALL GRADE REPORTS AS ONE PDF — FIXED
 // ═══════════════════════════════════════════════════════════════
 async function downloadGradeReportsPDF() {
@@ -12122,28 +12928,7 @@ function updateSettingsForm() {
     updateHeaderAndDashboard(); updateHOIPreview(); 
 }
 
-// Replace saveEventsDetails entirely with an ADD-event function:
-function addEvent(e) {
-    e.preventDefault();
-    const title = getVal('eventTitle');
-    const date = getVal('eventDate');
-    if (!title || !date) { showToast('Title and date are required.', 'error'); return; }
-    if (!store.settings.events) store.settings.events = [];
-    store.settings.events.push({ title, date });
-    saveData();
-    renderEventsList();
-    $('eventTitle').value = '';
-    $('eventDate').value = '';
-    showToast('Event added!');
-}
-// In updateSettingsForm — remove these 4 lines entirely:
-// setVal('setEventName', ...);  ← DELETE
-// setVal('setEventDate', ...);  ← DELETE
-// setVal('setEventDesc', ...);  ← DELETE
-// setVal('setNoticeTitle', ...); ← DELETE
-// setVal('setNoticeBody', ...);  ← DELETE
-
-// Replace saveEventsDetails entirely with an ADD-event function:
+// ── ADD EVENT (single definition — the duplicate copy was removed) ──
 function addEvent(e) {
     e.preventDefault();
     const title = getVal('eventTitle');
@@ -12204,13 +12989,8 @@ function updateHOIPreview() {
 }
 
 function initSettingsListeners() {
-    // Institution form
-    const instForm = $('institutionForm');
-    if (instForm) instForm.addEventListener('submit', saveInstitutionDetails);
-
-    // HOI form
-    const hoiForm = $('hoiForm');
-    if (hoiForm) hoiForm.addEventListener('submit', saveHOIDetails);
+    // NOTE: institutionForm / hoiForm / staffForm / courseForm are already bound
+    // in initGlobalListeners() — binding them again here would double-fire saves.
 
     // Event form
     const evtForm = $('addEventForm');
@@ -12256,9 +13036,16 @@ function initSettingsListeners() {
     if (btnExport) btnExport.addEventListener('click', exportBackup);
 
     const btnImport = $('btnImportBackup');
-    const importFile = $('importFile');
-    if (btnImport && importFile) btnImport.addEventListener('click', () => importFile.click());
-    if (importFile) importFile.addEventListener('change', function() { importBackup(this); });
+    if (btnImport) btnImport.addEventListener('click', () => {
+        // Create the file picker on the fly so we don't depend on a hidden input
+        const tempInput = document.createElement('input');
+        tempInput.type = 'file';
+        tempInput.accept = '.json';
+        tempInput.onchange = function() {
+            if (this.files && this.files[0]) importBackup(this);
+        };
+        tempInput.click();
+    });
 
     const btnReset = $('btnResetSystem');
     if (btnReset) btnReset.addEventListener('click', function() {
@@ -12272,8 +13059,9 @@ function initSettingsListeners() {
 async function repairData() { 
     if (!confirm('Run database repair utility?')) return;
     try {
-        const token = localStorage.getItem('token');
-        const res = await fetch('/api/repair-data', {
+        const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken') ||
+                      localStorage.getItem('token') || localStorage.getItem('jwt');
+        const res = await fetch(`${API_URL}/api/repair-data`, {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + token }
         });
@@ -12293,24 +13081,33 @@ async function repairData() {
 async function forceSyncAll() { 
     showToast('Syncing with cloud database...');
     try {
-        const token = localStorage.getItem('token');
+        // FIXED: login stores 'authToken' — check it before legacy keys
+        const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken') ||
+                      localStorage.getItem('token') || localStorage.getItem('jwt');
         const headers = { 'Authorization': 'Bearer ' + token };
         
-        // Fetch all tables from the backend simultaneously
-        const [studentsRes, staffRes, examsRes, settingsRes, areasRes] = await Promise.all([
-            fetch('/students', { headers }).then(r => r.json()),
-            fetch('/staff', { headers }).then(r => r.json()),
-            fetch('/exams', { headers }).then(r => r.json()),
-            fetch('/settings', { headers }).then(r => r.json()),
-            fetch('/learningAreas', { headers }).then(r => r.json())
+        // FIXED: absolute URLs (previously relative — failed when the page was
+        // served from a different origin than the backend)
+        const [studentsRes, staffRes, examsRes, settingsRes, areasRes, notesRes, messagesRes] = await Promise.all([
+            fetch(`${API_URL}/students`, { headers }).then(r => r.json()),
+            fetch(`${API_URL}/staff`, { headers }).then(r => r.json()),
+            fetch(`${API_URL}/exams`, { headers }).then(r => r.json()),
+            fetch(`${API_URL}/settings`, { headers }).then(r => r.json()),
+            fetch(`${API_URL}/learningAreas`, { headers }).then(r => r.json()),
+            fetch(`${API_URL}/notes`, { headers }).then(r => r.json()),
+            fetch(`${API_URL}/messages`, { headers }).then(r => r.json())
         ]);
 
-        // Update local memory
-        store.students = studentsRes;
-        store.staff = staffRes;
-        store.exams = examsRes;
-        store.settings = settingsRes;
-        store.learningAreas = areasRes;
+        // Update local memory (merge settings so local logo/term dates etc. survive)
+        store.students = Array.isArray(studentsRes) ? studentsRes : [];
+        store.staff = Array.isArray(staffRes) ? staffRes : [];
+        store.exams = Array.isArray(examsRes) ? examsRes : [];
+        if (settingsRes && !Array.isArray(settingsRes) && typeof settingsRes === 'object') {
+            store.settings = { ...store.settings, ...settingsRes };
+        }
+        store.learningAreas = Array.isArray(areasRes) && areasRes.length > 0 ? areasRes : store.learningAreas;
+        if (Array.isArray(notesRes)) store.notes = notesRes;
+        if (Array.isArray(messagesRes)) store.messages = messagesRes;
 
         // Save to browser and update UI
         saveData();
@@ -12356,7 +13153,7 @@ async function exportBackup() {
             return;
         }
 
-        const res = await fetch('/api/db', {
+        const res = await fetch(`${API_URL}/api/db`, {
             headers: { 'Authorization': 'Bearer ' + token }
         });
         
@@ -12427,7 +13224,7 @@ async function importBackup(input) {
             }
 
             // 3. Send to server
-            const res = await fetch('/api/restore', {
+            const res = await fetch(`${API_URL}/api/restore`, {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
@@ -12484,7 +13281,7 @@ async function pushToCloud() {
 
         showToast('Fetching local data...');
         // 2. Download data from your LOCAL PC
-        const localRes = await fetch('/api/db', {
+        const localRes = await fetch(`${API_URL}/api/db`, {
             headers: { 'Authorization': 'Bearer ' + token }
         });
         if (!localRes.ok) throw new Error('Failed to fetch local data');
@@ -12492,7 +13289,7 @@ async function pushToCloud() {
 
         showToast('Uploading to live site... Please wait.');
         // 3. Upload data to your FLY.DEV server
-        const cloudRes = await fetch('https://my-schools.fly.dev/api/restore', {
+        const cloudRes = await fetch(`${API_URL}/api/restore`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
@@ -12519,13 +13316,9 @@ async function pushToCloud() {
         btn.disabled = false;
     }
 }
-function handleGlobalSearch(val) { 
-    if (val.length > 2) { 
-        if ($('studentSearch')) $('studentSearch').value = val; 
-        router('students'); 
-        applyFilters(); 
-    } 
-}
+// (Dead duplicate of handleGlobalSearch removed — the working version above
+//  the STUBS section performs the actual student/staff search; the duplicate
+//  called an undefined applyFilters() and crashed global search.)
 // 2. HANDLE STEPS (Next / Back)
 //    Removed handleStaffStep(): it duplicated the body-level listener in
 //    initGlobalListeners() but skipped Step 1 validation, letting users
@@ -12553,83 +13346,7 @@ function previewLogo(input) { processAndSaveImage(input, 'logo', 'settingsLogoPr
 function previewStamp(input) { processAndSaveImage(input, 'stamp', 'stampPreview'); }
 function previewHOISignature(input) { processAndSaveImage(input, 'hoiSignature', 'hoiSignaturePreview'); }
 function previewCTSignature(input) { processAndSaveImage(input, 'ctSignature', 'classTeacherSignaturePreview'); }
-// Upload button wiring
-document.getElementById('btnUploadLogo').addEventListener('click', function() {
-    document.getElementById('logoInput').click();
-});
-document.getElementById('btnUploadStamp').addEventListener('click', function() {
-    document.getElementById('stampInput').click();
-});
-document.getElementById('btnUploadHoiSignature').addEventListener('click', function() {
-    document.getElementById('hoiSignatureInput').click();
-});
-document.getElementById('btnUploadClassTeacherSignature').addEventListener('click', function() {
-    document.getElementById('classTeacherSignatureInput').click();
-});
-
-// File input change handlers
-document.getElementById('logoInput').addEventListener('change', function() {
-    previewLogo(this);
-});
-document.getElementById('stampInput').addEventListener('change', function() {
-    previewStamp(this);
-});
-document.getElementById('hoiSignatureInput').addEventListener('change', function() {
-    previewHOISignature(this);
-});
-document.getElementById('classTeacherSignatureInput').addEventListener('change', function() {
-    previewCTSignature(this);
-});
-
-
-
-// FORCE ATTACH LISTENERS (Updated)
-document.addEventListener('DOMContentLoaded', () => {
-    console.log("Attaching button listeners...");
-
-    const btnExport = document.getElementById('btnExportBackup');
-    if (btnExport) {
-        btnExport.onclick = function(e) {
-            e.preventDefault();
-            console.log("Export clicked!");
-            exportBackup();
-        };
-    }
-
-    // NEW IMPORT LOGIC - Creates its own file picker on the fly
-    const btnImport = document.getElementById('btnImportBackup');
-    if (btnImport) {
-        btnImport.onclick = function(e) {
-            e.preventDefault();
-            console.log("Import clicked! Opening file picker...");
-            
-            // Create a temporary file input
-            const tempInput = document.createElement('input');
-            tempInput.type = 'file';
-            tempInput.accept = '.json';
-            
-            tempInput.onchange = function() {
-                if (this.files && this.files[0]) {
-                    console.log("File selected! Starting import...", this.files[0].name);
-                    importBackup(this); // Pass the temporary input to the import function
-                } else {
-                    console.log("No file was selected.");
-                }
-            };
-            
-            tempInput.click(); // Open the picker
-        };
-    }
-
-    const btnReset = document.getElementById('btnResetSystem');
-    if (btnReset) {
-        btnReset.onclick = function(e) {
-            e.preventDefault();
-            console.log("Reset clicked!");
-            if (confirm('⚠️ This will permanently delete ALL data. Are you sure?')) {
-                localStorage.clear();
-                location.reload();
-            }
-        };
-    }
-});
+// (Raw top-level binding blocks for image uploads and backup export/import/reset
+//  were removed — they duplicated initSettingsListeners() (now called from
+//  initializeApp) and crashed at parse time if the target elements were missing,
+//  because unguarded document.getElementById(...).addEventListener(...) throws.)
