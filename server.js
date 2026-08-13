@@ -14,8 +14,12 @@ const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
-//const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key_change_this';
-const JWT_SECRET = process.env.JWT_SECRET;
+// FIXED: a missing JWT_SECRET used to make every login fail with
+// 'secretOrPrivateKey must have a value'. Fall back to a dev secret + warn.
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_only_insecure_secret_change_me';
+if (!process.env.JWT_SECRET) {
+    console.warn('⚠️  JWT_SECRET is not set in .env — using an insecure development fallback. Set JWT_SECRET in production!');
+}
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ==========================================================================
@@ -74,6 +78,8 @@ const initDatabase = async () => {
         [`ALTER TABLE users ADD COLUMN "lockedUntil" TEXT;`, 'users.lockedUntil'],
         [`ALTER TABLE exams ADD COLUMN "grade" TEXT;`, 'exams.grade'],
         [`ALTER TABLE exams ADD COLUMN "type" TEXT;`, 'exams.type'],
+        [`ALTER TABLE exams ADD COLUMN "assessId" TEXT;`, 'exams.assessId'],           // FIXED: client matches scores by assessId
+        [`ALTER TABLE exams ADD COLUMN remarks TEXT;`, 'exams.remarks'],               // FIXED: handleRemarkChange() writes remarks
         [`ALTER TABLE "examSchedules" ADD COLUMN "type" TEXT;`, 'examSchedules.type'],
         [`ALTER TABLE "examSchedules" ADD COLUMN "grade" TEXT;`, 'examSchedules.grade'],
         [`ALTER TABLE "examSchedules" ADD COLUMN "status" TEXT DEFAULT 'open';`, 'examSchedules.status'],
@@ -89,6 +95,21 @@ const initDatabase = async () => {
         [`ALTER TABLE exams ADD COLUMN "endDate" TEXT;`, 'exams.endDate'],
         [`ALTER TABLE exams ADD COLUMN "notes" TEXT;`, 'exams.notes'],
         [`ALTER TABLE exams ADD COLUMN "createdAt" TEXT;`, 'exams.createdAt'],
+        // FIXED: notes/timetable schema now matches what script.js actually saves
+        [`ALTER TABLE notes ADD COLUMN "studentId" TEXT;`, 'notes.studentId'],
+        [`ALTER TABLE notes ADD COLUMN type TEXT;`, 'notes.type'],
+        [`ALTER TABLE notes ADD COLUMN description TEXT;`, 'notes.description'],
+        [`ALTER TABLE notes ADD COLUMN date TEXT;`, 'notes.date'],
+        [`ALTER TABLE notes ADD COLUMN severity TEXT;`, 'notes.severity'],
+        [`ALTER TABLE timetable ADD COLUMN period TEXT;`, 'timetable.period'],
+        [`ALTER TABLE timetable ADD COLUMN "subjectId" TEXT;`, 'timetable.subjectId'],
+        [`ALTER TABLE timetable ADD COLUMN "subjectName" TEXT;`, 'timetable.subjectName'],
+        [`ALTER TABLE timetable ADD COLUMN "subjectCode" TEXT;`, 'timetable.subjectCode'],
+        [`ALTER TABLE timetable ADD COLUMN "teacherId" TEXT;`, 'timetable.teacherId'],
+        [`ALTER TABLE timetable ADD COLUMN "teacherName" TEXT;`, 'timetable.teacherName'],
+        [`ALTER TABLE timetable ADD COLUMN room TEXT;`, 'timetable.room'],
+        [`ALTER TABLE timetable ADD COLUMN notes TEXT;`, 'timetable.notes'],
+        [`ALTER TABLE timetable ADD COLUMN "createdAt" TEXT;`, 'timetable.createdAt'],
     ];
 
     console.log('[DB] Running migrations...');
@@ -121,7 +142,8 @@ const initDatabase = async () => {
             id TEXT PRIMARY KEY, "studentId" TEXT, "subjectId" TEXT, score INTEGER,
             term TEXT, year TEXT, comments TEXT, "grade" TEXT, "type" TEXT,
             name TEXT, subjects TEXT, scores TEXT, "assessType" TEXT, status TEXT DEFAULT 'draft',
-            "virtualId" TEXT, "startDate" TEXT, "endDate" TEXT, notes TEXT, "createdAt" TEXT
+            "virtualId" TEXT, "startDate" TEXT, "endDate" TEXT, notes TEXT, "createdAt" TEXT,
+            "assessId" TEXT, remarks TEXT
         )`],
         [`settings`, `CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1), "schoolName" TEXT, motto TEXT, email TEXT,
@@ -133,10 +155,17 @@ const initDatabase = async () => {
             id TEXT PRIMARY KEY, name TEXT, code TEXT, "applicableLevels" TEXT
         )`],
         [`notes`, `CREATE TABLE IF NOT EXISTS notes (
-            id TEXT PRIMARY KEY, title TEXT, content TEXT, "createdAt" TEXT, "createdBy" TEXT
+            id TEXT PRIMARY KEY, title TEXT, content TEXT, "createdAt" TEXT, "createdBy" TEXT,
+            "studentId" TEXT, type TEXT, description TEXT, date TEXT, severity TEXT
         )`],
         [`timetable`, `CREATE TABLE IF NOT EXISTS timetable (
-            id TEXT PRIMARY KEY, day TEXT, time TEXT, subject TEXT, grade TEXT, teacher TEXT
+            id TEXT PRIMARY KEY, day TEXT, period TEXT, grade TEXT,
+            "subjectId" TEXT, "subjectName" TEXT, "subjectCode" TEXT,
+            "teacherId" TEXT, "teacherName" TEXT, room TEXT, notes TEXT, "createdAt" TEXT
+        )`],
+        [`messages`, `CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY, "to" TEXT, "from" TEXT, subject TEXT, body TEXT,
+            date TEXT, read INTEGER DEFAULT 0, folder TEXT
         )`],
         [`examSchedules`, `CREATE TABLE IF NOT EXISTS "examSchedules" (
             id TEXT PRIMARY KEY, name TEXT, "type" TEXT, grade TEXT, term TEXT, year TEXT,
@@ -201,7 +230,7 @@ const seedDatabase = async () => {
     ]);
 
     const existingEmails = new Set(userCheck.rows.map(r => r.email));
-    
+
     // Seed users
     const usersToSeed = [
         { id: 'u1', email: 'admin@school.com', name: 'System Admin', role: 'admin', dept: 'Administration', pass: 'admin123' },
@@ -259,7 +288,9 @@ app.use((req, res, next) => {
     }
     next();
 });
-app.use(express.json({ limit: '10mb' }));
+// FIXED: raised from 10mb — students/staff arrays carry photo data-URLs which
+// easily exceed 10mb in one bulk sync; the old limit silently dropped the save.
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public'), {
     etag: false,
     maxAge: '0s',
@@ -285,17 +316,24 @@ const logAction = async (userId, userName, action, details) => {
     catch (e) { /* silent */ }
 };
 
+// FIXED: DB lookup inside jwt.verify was unguarded — a pool error left the
+// request hanging (and Node 15+ crashes on unhandled rejections).
 const authenticateToken = (req, res, next) => {
     const token = (req.headers['authorization'] || '').split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Access denied.' });
     jwt.verify(token, JWT_SECRET, async (err, user) => {
         if (err) return res.status(403).json({ error: 'Invalid or expired token.' });
-        const dbUserRes = await pool.query('SELECT * FROM users WHERE id = $1', [user.id]);
-        const dbUser = dbUserRes.rows[0];
-        if (!dbUser) return res.status(403).json({ error: 'User not found.' });
-        if (dbUser.isActive !== 1) return res.status(403).json({ error: 'Account suspended. Contact Admin.' });
-        req.user = dbUser;
-        next();
+        try {
+            const dbUserRes = await pool.query('SELECT * FROM users WHERE id = $1', [user.id]);
+            const dbUser = dbUserRes.rows[0];
+            if (!dbUser) return res.status(403).json({ error: 'User not found.' });
+            if (dbUser.isActive !== 1) return res.status(403).json({ error: 'Account suspended. Contact Admin.' });
+            req.user = dbUser;
+            next();
+        } catch (e) {
+            console.error('[AUTH DB ERROR]', e);
+            res.status(500).json({ error: 'Auth service unavailable.' });
+        }
     });
 };
 
@@ -303,6 +341,15 @@ const requireRole = (...roles) => (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden.' });
     next();
 };
+
+// FIXED: reject empty bulk bodies BEFORE the DELETE so a buggy/empty sync
+// can never wipe a table. Shared by all bulk-replace routes.
+const expectArray = (req, res, next) => {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: 'Expected an array of records.' });
+    if (req.body.length === 0) return res.json([]);
+    next();
+};
+
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
@@ -316,7 +363,7 @@ app.post('/api/login', rateLimit({ windowMs: 60 * 60 * 1000, max: 15 }), async (
         const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         const user = userRes.rows[0];
         if (!user) return res.status(401).json({ success: false, message: 'Invalid credentials.' });
-        
+
         if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
             const mins = Math.ceil((new Date(user.lockedUntil) - new Date()) / 60000);
             return res.status(423).json({ success: false, message: `Account locked. Try again in ${mins} minute${mins !== 1 ? 's' : ''}.` });
@@ -332,18 +379,18 @@ app.post('/api/login', rateLimit({ windowMs: 60 * 60 * 1000, max: 15 }), async (
             return res.status(401).json({ success: false, message: 'Invalid credentials.' });
         }
         if (user.isActive !== 1) return res.status(403).json({ success: false, message: 'Account suspended. Contact Admin.' });
-        
+
         await pool.query('UPDATE users SET "failedLoginAttempts" = 0, "lockedUntil" = NULL WHERE id = $1', [user.id]);
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         await logAction(user.id, user.name, 'LOGIN', `Logged in from ${req.ip}`);
         res.json({ success: true, token, user: { id: user.id, email: user.email, role: user.role, name: user.name, department: user.department } });
-        
-    } catch (err) { 
-        console.error('[LOGIN ERROR]', err); 
+
+    } catch (err) {
+        console.error('[LOGIN ERROR]', err);
         if (['ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET'].includes(err.code)) {
             return res.status(503).json({ success: false, message: 'No internet connection. Cannot reach the database.' });
         }
-        res.status(500).json({ error: 'Login failed.' }); 
+        res.status(500).json({ error: 'Login failed.' });
     }
 });
 
@@ -429,14 +476,18 @@ app.get('/api/teacher/assignments', authenticateToken, requireRole('teacher'), a
 });
 
 // ==========================================================================
-//   RESOURCE ROUTES
+//   RESOURCE ROUTES  (FIXED: every route now has try/catch — an async throw
+//   used to reject unhandled, hanging the request and crashing Node 15+;
+//   bulk POSTs reject empty bodies instead of wiping the whole table)
 // ==========================================================================
 app.get('/students', authenticateToken, async (req, res) => {
-    const res2 = await pool.query('SELECT * FROM students');
-    res.json(res2.rows);
+    try {
+        const rows = (await pool.query('SELECT * FROM students')).rows;
+        res.json(rows);
+    } catch (err) { console.error('[STUDENTS GET ERROR]', err); res.status(500).json({ error: 'Failed to load students' }); }
 });
 
-app.post('/students', authenticateToken, requireRole('hoi', 'admin'), async (req, res) => {
+app.post('/students', authenticateToken, requireRole('hoi', 'admin'), expectArray, async (req, res) => {
     const cols = ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo','guardianName','guardianPhone','guardianRel','upiNumber','prevSchool','entryLevel','yearCompleted','nemisNumber','disability'];
     const client = await pool.connect();
     try {
@@ -450,15 +501,17 @@ app.post('/students', authenticateToken, requireRole('hoi', 'admin'), async (req
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'UPDATE_STUDENTS', `${req.body.length} records`);
         res.json(req.body);
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'DB Error', details: err.message }); }
+    } catch (err) { await client.query('ROLLBACK'); console.error('[STUDENTS POST ERROR]', err); res.status(500).json({ error: 'DB Error', details: err.message }); }
     finally { client.release(); }
 });
 
 app.get('/staff', authenticateToken, async (req, res) => {
-    res.json((await pool.query('SELECT * FROM staff')).rows);
+    try {
+        res.json((await pool.query('SELECT * FROM staff')).rows);
+    } catch (err) { console.error('[STAFF GET ERROR]', err); res.status(500).json({ error: 'Failed to load staff' }); }
 });
 
-app.post('/staff', authenticateToken, requireRole('hoi', 'admin'), async (req, res) => {
+app.post('/staff', authenticateToken, requireRole('hoi', 'admin'), expectArray, async (req, res) => {
     const cols = ['id','name','email','role','department','phone','tscNumber','photo','subjects'];
     const client = await pool.connect();
     try {
@@ -472,19 +525,21 @@ app.post('/staff', authenticateToken, requireRole('hoi', 'admin'), async (req, r
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'UPDATE_STAFF', `${req.body.length} records`);
         res.json(req.body);
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'DB Error', details: err.message }); }
+    } catch (err) { await client.query('ROLLBACK'); console.error('[STAFF POST ERROR]', err); res.status(500).json({ error: 'DB Error', details: err.message }); }
     finally { client.release(); }
 });
 
 app.get('/exams', authenticateToken, async (req, res) => {
-    res.json((await pool.query('SELECT * FROM exams')).rows);
+    try {
+        res.json((await pool.query('SELECT * FROM exams')).rows);
+    } catch (err) { console.error('[EXAMS GET ERROR]', err); res.status(500).json({ error: 'Failed to load exams' }); }
 });
 
-app.post('/exams', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), async (req, res) => {
+app.post('/exams', authenticateToken, requireRole('exam_officer', 'hoi', 'admin', 'teacher'), expectArray, async (req, res) => {
     const cols = [
         'id', 'studentId', 'subjectId', 'score', 'term', 'year', 'comments', 'grade', 'type',
         'name', 'subjects', 'scores', 'assessType', 'status', 'virtualId',
-        'startDate', 'endDate', 'notes', 'createdAt'
+        'startDate', 'endDate', 'notes', 'createdAt', 'assessId', 'remarks'
     ];
     const client = await pool.connect();
     try {
@@ -513,8 +568,10 @@ app.post('/exams', authenticateToken, requireRole('exam_officer', 'hoi', 'admin'
 });
 
 app.get('/settings', authenticateToken, async (req, res) => {
-    const res2 = await pool.query('SELECT * FROM settings WHERE id = 1');
-    res.json(res2.rows[0] || { id: 1 });
+    try {
+        const rows = (await pool.query('SELECT * FROM settings WHERE id = 1')).rows;
+        res.json(rows[0] || { id: 1 });
+    } catch (err) { console.error('[SETTINGS GET ERROR]', err); res.status(500).json({ error: 'Failed to load settings' }); }
 });
 
 app.post('/settings', authenticateToken, requireRole('admin', 'hoi'), async (req, res) => {
@@ -527,15 +584,18 @@ app.post('/settings', authenticateToken, requireRole('admin', 'hoi'), async (req
         await pool.query(`INSERT INTO settings (${colsQuoted.join(', ')}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, cols.map(c => d[c]));
         await logAction(req.user.id, req.user.name, 'UPDATE_SETTINGS', 'School settings updated');
         res.json(d);
-    } catch (err) { res.status(500).json({ error: 'Settings failed' }); }
+    } catch (err) { console.error('[SETTINGS POST ERROR]', err); res.status(500).json({ error: 'Settings failed' }); }
 });
 
 app.get('/learningAreas', authenticateToken, async (req, res) => {
-    const areas = (await pool.query('SELECT * FROM "learningAreas"')).rows;
-    res.json(areas.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels) })));
+    try {
+        const areas = (await pool.query('SELECT * FROM "learningAreas"')).rows;
+        res.json(areas.map(a => ({ ...a, applicableLevels: (() => { try { return JSON.parse(a.applicableLevels); } catch (_) { return []; } })() })));
+    } catch (err) { console.error('[AREAS GET ERROR]', err); res.status(500).json({ error: 'Failed to load learning areas' }); }
 });
 
-app.post('/learningAreas', authenticateToken, async (req, res) => {
+// FIXED: was missing requireRole — any authenticated user could rewrite the curriculum
+app.post('/learningAreas', authenticateToken, requireRole('hoi', 'admin'), expectArray, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -546,11 +606,92 @@ app.post('/learningAreas', authenticateToken, async (req, res) => {
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'UPDATE_LEARNING_AREAS', 'Curriculum updated');
         res.json(req.body);
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'DB Error', details: err.message }); }
+    } catch (err) { await client.query('ROLLBACK'); console.error('[AREAS POST ERROR]', err); res.status(500).json({ error: 'DB Error', details: err.message }); }
     finally { client.release(); }
 });
 
-app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi', 'admin'), async (req, res) => {
+// ── FIXED: NEW routes — the client saveData() POSTs to /notes, /timetable
+//    and /messages; these previously 404'd and the records were silently lost ──
+app.get('/notes', authenticateToken, async (req, res) => {
+    try {
+        res.json((await pool.query('SELECT * FROM notes')).rows);
+    } catch (err) { console.error('[NOTES GET ERROR]', err); res.status(500).json({ error: 'Failed to load notes' }); }
+});
+
+app.post('/notes', authenticateToken, expectArray, async (req, res) => {
+    const cols = ['id','title','content','createdAt','createdBy','studentId','type','description','date','severity'];
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM notes');
+        for (const i of req.body) {
+            const values = cols.map(c => { const val = i[c]; return (val === null || val === undefined) ? '' : (typeof val === 'object' ? JSON.stringify(val) : val); });
+            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(',');
+            await client.query(`INSERT INTO notes ("${cols.join('","')}") VALUES (${placeholders})`, values);
+        }
+        await client.query('COMMIT');
+        await logAction(req.user.id, req.user.name, 'UPDATE_NOTES', `${req.body.length} records`);
+        res.json(req.body);
+    } catch (err) { await client.query('ROLLBACK'); console.error('[NOTES POST ERROR]', err); res.status(500).json({ error: 'DB Error', details: err.message }); }
+    finally { client.release(); }
+});
+
+app.get('/timetable', authenticateToken, async (req, res) => {
+    try {
+        res.json((await pool.query('SELECT * FROM timetable')).rows);
+    } catch (err) { console.error('[TIMETABLE GET ERROR]', err); res.status(500).json({ error: 'Failed to load timetable' }); }
+});
+
+app.post('/timetable', authenticateToken, expectArray, async (req, res) => {
+    const cols = ['id','day','period','grade','subjectId','subjectName','subjectCode','teacherId','teacherName','room','notes','createdAt'];
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM timetable');
+        for (const i of req.body) {
+            const values = cols.map(c => { const val = i[c]; return (val === null || val === undefined) ? '' : (typeof val === 'object' ? JSON.stringify(val) : val); });
+            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(',');
+            await client.query(`INSERT INTO timetable ("${cols.join('","')}") VALUES (${placeholders})`, values);
+        }
+        await client.query('COMMIT');
+        await logAction(req.user.id, req.user.name, 'UPDATE_TIMETABLE', `${req.body.length} slots`);
+        res.json(req.body);
+    } catch (err) { await client.query('ROLLBACK'); console.error('[TIMETABLE POST ERROR]', err); res.status(500).json({ error: 'DB Error', details: err.message }); }
+    finally { client.release(); }
+});
+
+app.get('/messages', authenticateToken, async (req, res) => {
+    try {
+        const rows = (await pool.query('SELECT * FROM messages')).rows;
+        res.json(rows.map(m => ({ ...m, read: !!m.read })));
+    } catch (err) { console.error('[MESSAGES GET ERROR]', err); res.status(500).json({ error: 'Failed to load messages' }); }
+});
+
+app.post('/messages', authenticateToken, expectArray, async (req, res) => {
+    const cols = ['id','to','from','subject','body','date','read','folder'];
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM messages');
+        for (const i of req.body) {
+            const values = cols.map(c => {
+                const val = i[c];
+                if (val === null || val === undefined) return null;
+                if (c === 'read') return val ? 1 : 0;      // boolean → INTEGER
+                if (typeof val === 'object') return JSON.stringify(val);
+                return val;
+            });
+            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(',');
+            await client.query(`INSERT INTO messages ("${cols.join('","')}") VALUES (${placeholders})`, values);
+        }
+        await client.query('COMMIT');
+        await logAction(req.user.id, req.user.name, 'UPDATE_MESSAGES', `${req.body.length} messages`);
+        res.json(req.body);
+    } catch (err) { await client.query('ROLLBACK'); console.error('[MESSAGES POST ERROR]', err); res.status(500).json({ error: 'DB Error', details: err.message }); }
+    finally { client.release(); }
+});
+
+app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi', 'admin'), expectArray, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -648,10 +789,10 @@ app.post('/api/exam', authenticateToken, requireRole('exam_officer', 'hoi', 'adm
     if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     try {
         await pool.query(`
-            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type, name, subjects, scores, "assessType", status, "virtualId", "startDate", "endDate", notes, "createdAt")
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-            ON CONFLICT (id) DO UPDATE SET "studentId"=EXCLUDED."studentId", "subjectId"=EXCLUDED."subjectId", score=EXCLUDED.score, term=EXCLUDED.term, year=EXCLUDED.year, comments=EXCLUDED.comments, grade=EXCLUDED.grade, type=EXCLUDED.type, name=EXCLUDED.name, subjects=EXCLUDED.subjects, scores=EXCLUDED.scores, "assessType"=EXCLUDED."assessType", status=EXCLUDED.status, "virtualId"=EXCLUDED."virtualId", "startDate"=EXCLUDED."startDate", "endDate"=EXCLUDED."endDate", notes=EXCLUDED.notes, "createdAt"=EXCLUDED."createdAt"
-        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments, exam.grade||null, exam.type||null, exam.name||null, exam.subjects?JSON.stringify(exam.subjects):null, exam.scores?JSON.stringify(exam.scores):null, exam.assessType||null, exam.status||'draft', exam.virtualId||null, exam.startDate||null, exam.endDate||null, exam.notes||null, exam.createdAt||null]);
+            INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type, name, subjects, scores, "assessType", status, "virtualId", "startDate", "endDate", notes, "createdAt", "assessId", remarks)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+            ON CONFLICT (id) DO UPDATE SET "studentId"=EXCLUDED."studentId", "subjectId"=EXCLUDED."subjectId", score=EXCLUDED.score, term=EXCLUDED.term, year=EXCLUDED.year, comments=EXCLUDED.comments, grade=EXCLUDED.grade, type=EXCLUDED.type, name=EXCLUDED.name, subjects=EXCLUDED.subjects, scores=EXCLUDED.scores, "assessType"=EXCLUDED."assessType", status=EXCLUDED.status, "virtualId"=EXCLUDED."virtualId", "startDate"=EXCLUDED."startDate", "endDate"=EXCLUDED."endDate", notes=EXCLUDED.notes, "createdAt"=EXCLUDED."createdAt", "assessId"=EXCLUDED."assessId", remarks=EXCLUDED.remarks
+        `, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments, exam.grade||null, exam.type||null, exam.name||null, exam.subjects?JSON.stringify(exam.subjects):null, exam.scores?JSON.stringify(exam.scores):null, exam.assessType||null, exam.status||'draft', exam.virtualId||null, exam.startDate||null, exam.endDate||null, exam.notes||null, exam.createdAt||null, exam.assessId||null, exam.remarks||null]);
         res.json(exam);
     } catch (err) { console.error('[EXAM SAVE ERROR]', err); res.status(500).json({ error: 'Failed to save exam' }); }
 });
@@ -665,11 +806,11 @@ app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi'
         for (const exam of exams) {
             if (!exam.id) exam.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
             if (!exam.studentId || !exam.subjectId) continue;
-            await client.query(`INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO UPDATE SET score=EXCLUDED.score, term=EXCLUDED.term, comments=EXCLUDED.comments, grade=EXCLUDED.grade, type=EXCLUDED.type`, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments||null, exam.grade||null, exam.type||null]);
+            await client.query(`INSERT INTO exams (id, "studentId", "subjectId", score, term, year, comments, grade, type, "assessId", remarks) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO UPDATE SET score=EXCLUDED.score, term=EXCLUDED.term, comments=EXCLUDED.comments, grade=EXCLUDED.grade, type=EXCLUDED.type, "assessId"=EXCLUDED."assessId", remarks=EXCLUDED.remarks`, [exam.id, exam.studentId, exam.subjectId, exam.score, exam.term, exam.year, exam.comments||null, exam.grade||null, exam.type||null, exam.assessId||null, exam.remarks||null]);
         }
         await client.query('COMMIT');
         res.json({ success: true, total: exams.length });
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: 'Exam sync failed' }); }
+    } catch (err) { await client.query('ROLLBACK'); console.error('[EXAMS SYNC ERROR]', err); res.status(500).json({ error: 'Exam sync failed', details: err.message }); }
     finally { client.release(); }
 });
 
@@ -678,26 +819,29 @@ app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi'
 // ==========================================================================
 app.get('/api/db', authenticateToken, requireRole('admin', 'hoi', 'teacher', 'exam_officer'), async (req, res) => {
     try {
-        const [students, staff, exams, settings, learningAreas, notes, timetable, examSchedules] = await Promise.all([
+        const [students, staff, exams, settings, learningAreas, notes, timetable, examSchedules, messages] = await Promise.all([
             pool.query('SELECT * FROM students'), pool.query('SELECT * FROM staff'), pool.query('SELECT * FROM exams'),
             pool.query('SELECT * FROM settings WHERE id=1'), pool.query('SELECT * FROM "learningAreas"'),
-            pool.query('SELECT * FROM notes'), pool.query('SELECT * FROM timetable'), pool.query('SELECT * FROM "examSchedules"')
+            pool.query('SELECT * FROM notes'), pool.query('SELECT * FROM timetable'), pool.query('SELECT * FROM "examSchedules"'),
+            pool.query('SELECT * FROM messages')
         ]);
         const parsedExams = exams.rows.map(e => { try { e.subjects = e.subjects ? JSON.parse(e.subjects) : []; } catch (_) { e.subjects = []; } try { e.scores = e.scores ? JSON.parse(e.scores) : {}; } catch (_) { e.scores = {}; } return e; });
-        res.json({ students: students.rows, staff: staff.rows, exams: parsedExams, settings: settings.rows[0] || {}, learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels) })), notes: notes.rows, timetable: timetable.rows, examSchedules: examSchedules.rows });
+        res.json({ students: students.rows, staff: staff.rows, exams: parsedExams, settings: settings.rows[0] || {}, learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels) })), notes: notes.rows, timetable: timetable.rows, examSchedules: examSchedules.rows, messages: messages.rows.map(m => ({ ...m, read: !!m.read })) });
         await logAction(req.user.id, req.user.name, 'BACKUP_DB', 'Full backup downloaded');
     } catch (err) { console.error('[BACKUP ERROR]', err); res.status(500).json({ error: 'Backup failed' }); }
 });
 
-app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_officer', 'teacher'), async (req, res) => {
-    
+// FIXED: removed 'teacher' from restore roles — a teacher could wipe the
+// entire database; restore is now admin/hoi only.
+app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi'), async (req, res) => {
+
     // HELPER: Remove duplicate IDs from the backup file
     const dedupe = (arr) => {
         if (!Array.isArray(arr)) return arr;
         const seen = new Set();
         return arr.filter(item => {
-            if (!item.id) return false; 
-            if (seen.has(item.id)) return false; 
+            if (!item.id) return false;
+            if (seen.has(item.id)) return false;
             seen.add(item.id);
             return true;
         });
@@ -707,31 +851,32 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
     const safeReplace = async (client, table, data, columns) => {
         if (!data || !Array.isArray(data) || data.length === 0) return;
         await client.query(`DELETE FROM "${table}"`);
-        
+
         const CHUNK_SIZE = 500; // Send 500 rows at a time
-        
+
         for (let i = 0; i < data.length; i += CHUNK_SIZE) {
             const chunk = data.slice(i, i + CHUNK_SIZE);
             const allPlaceholders = [];
             const allValues = [];
             let paramIndex = 1;
-            
+
             for (const r of chunk) {
                 const rowPlaceholders = [];
                 for (const c of columns) {
                     let val = r[c];
                     if (val === null || val === undefined) val = null;
+                    else if (c === 'read' && typeof val === 'boolean') val = val ? 1 : 0;
                     else if (typeof val === 'object') val = JSON.stringify(val);
-                    
+
                     allValues.push(val);
                     rowPlaceholders.push(`$${paramIndex++}`);
                 }
                 allPlaceholders.push(`(${rowPlaceholders.join(',')})`);
             }
-            
+
             const updateSet = columns.slice(1).map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
             const sql = `INSERT INTO "${table}" ("${columns.join('","')}") VALUES ${allPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET ${updateSet}`;
-            
+
             await client.query(sql, allValues);
         }
     };
@@ -739,8 +884,8 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        let { students, staff, exams, settings, learningAreas, notes, timetable, examSchedules } = req.body;
-        
+        let { students, staff, exams, settings, learningAreas, notes, timetable, examSchedules, messages } = req.body;
+
         // CLEAN THE DATA (Remove duplicates)
         students = dedupe(students);
         staff = dedupe(staff);
@@ -749,7 +894,8 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
         notes = dedupe(notes);
         timetable = dedupe(timetable);
         examSchedules = dedupe(examSchedules);
-        
+        messages = dedupe(messages);
+
         // BULK INSERT LEARNING AREAS
         if (learningAreas && learningAreas.length > 0) {
             await client.query('DELETE FROM "learningAreas"');
@@ -761,9 +907,9 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
                 laPlaceholders.push(`($${laIdx++}, $${laIdx++}, $${laIdx++}, $${laIdx++})`);
             }
             await client.query(
-                `INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ${laPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, code=EXCLUDED.code, "applicableLevels"=EXCLUDED."applicableLevels"`, 
+                `INSERT INTO "learningAreas" (id, name, code, "applicableLevels") VALUES ${laPlaceholders.join(',')} ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, code=EXCLUDED.code, "applicableLevels"=EXCLUDED."applicableLevels"`,
                 laValues
-            ); 
+            );
         }
 
         if (settings) {
@@ -772,23 +918,26 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
             const colsQuoted = c.map(x => `"${x}"`);
             const placeholders = c.map((_, i) => `$${i + 1}`).join(', ');
             const updateSet = c.slice(1).map(x => `"${x}" = EXCLUDED."${x}"`).join(', ');
-            await pool.query(`INSERT INTO settings (${colsQuoted.join(', ')}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, c.map(x => s[x] ?? ''));
+            // FIXED: was pool.query (outside this transaction) — a later failure
+            // rolled back the rest but settings persisted anyway. Now uses client.
+            await client.query(`INSERT INTO settings (${colsQuoted.join(', ')}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, c.map(x => s[x] ?? ''));
         }
-        
+
         await safeReplace(client, 'students', students, ['id','name','gender','dob','idNumber','phone','grade','stream','reg','photo','guardianName','guardianPhone','guardianRel','upiNumber','prevSchool','entryLevel','yearCompleted','nemisNumber','disability']);
         await safeReplace(client, 'staff', staff, ['id','name','email','role','department','phone','tscNumber','photo','subjects']);
-        await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments','grade','type','name','subjects','scores','assessType','status','virtualId','startDate','endDate','notes','createdAt']);
-        await safeReplace(client, 'notes', notes, ['id','title','content','createdAt','createdBy']);
-        await safeReplace(client, 'timetable', timetable, ['id','day','time','subject','grade','teacher']);
+        await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments','grade','type','name','subjects','scores','assessType','status','virtualId','startDate','endDate','notes','createdAt','assessId','remarks']);
+        await safeReplace(client, 'notes', notes, ['id','title','content','createdAt','createdBy','studentId','type','description','date','severity']);
+        await safeReplace(client, 'timetable', timetable, ['id','day','period','grade','subjectId','subjectName','subjectCode','teacherId','teacherName','room','notes','createdAt']);
         await safeReplace(client, 'examSchedules', examSchedules, ['id','name','type','grade','term','year','startDate','endDate','subjects','status','notes','createdAt']);
-        
+        await safeReplace(client, 'messages', messages, ['id','to','from','subject','body','date','read','folder']);
+
         await client.query('COMMIT');
         await logAction(req.user.id, req.user.name, 'RESTORE_DB', 'Database restored from backup');
         res.json({ success: true, message: 'Database restored successfully!' });
-    } catch (err) { 
-        await client.query('ROLLBACK'); 
-        console.error('[RESTORE ERROR]', err); 
-        res.status(500).json({ error: 'Restore failed.', details: err.message }); 
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[RESTORE ERROR]', err);
+        res.status(500).json({ error: 'Restore failed.', details: err.message });
     }
     finally { client.release(); }
 });
@@ -797,13 +946,17 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi', 'exam_of
 //   USER MANAGEMENT
 // ==========================================================================
 app.post('/api/users/:id/deactivate', authenticateToken, requireRole('admin'), async (req, res) => {
-    const r = await pool.query('UPDATE users SET "isActive" = 0 WHERE id = $1', [req.params.id]);
-    r.rowCount > 0 ? (await logAction(req.user.id, req.user.name, 'DEACTIVATE_USER', req.params.id), res.json({ success: true })) : res.status(404).json({ success: false });
+    try {
+        const r = await pool.query('UPDATE users SET "isActive" = 0 WHERE id = $1', [req.params.id]);
+        r.rowCount > 0 ? (await logAction(req.user.id, req.user.name, 'DEACTIVATE_USER', req.params.id), res.json({ success: true })) : res.status(404).json({ success: false });
+    } catch (err) { console.error('[DEACTIVATE ERROR]', err); res.status(500).json({ error: 'Failed to deactivate user' }); }
 });
 
 app.post('/api/users/:id/activate', authenticateToken, requireRole('admin'), async (req, res) => {
-    const r = await pool.query('UPDATE users SET "isActive" = 1, "failedLoginAttempts" = 0, "lockedUntil" = NULL WHERE id = $1', [req.params.id]);
-    r.rowCount > 0 ? (await logAction(req.user.id, req.user.name, 'ACTIVATE_USER', req.params.id), res.json({ success: true })) : res.status(404).json({ success: false });
+    try {
+        const r = await pool.query('UPDATE users SET "isActive" = 1, "failedLoginAttempts" = 0, "lockedUntil" = NULL WHERE id = $1', [req.params.id]);
+        r.rowCount > 0 ? (await logAction(req.user.id, req.user.name, 'ACTIVATE_USER', req.params.id), res.json({ success: true })) : res.status(404).json({ success: false });
+    } catch (err) { console.error('[ACTIVATE ERROR]', err); res.status(500).json({ error: 'Failed to activate user' }); }
 });
 
 // ==========================================================================
@@ -854,16 +1007,16 @@ const getNetworkIPs = () => {
 initDatabase().then(() => {
     const server = app.listen(PORT, '0.0.0.0', () => {
         const networkIPs = getNetworkIPs();
-        
+
         console.log('\n✅ Local:   http://localhost:' + PORT);
 
         if (networkIPs.length > 0) {
             const url = 'http://' + networkIPs[0].ip + ':' + PORT;
             console.log('✅ Network: ' + url);
-            
+
             //console.log('\n📱 Point your phone camera at this QR code:\n');
-            
-            
+
+
         }
     });
 
