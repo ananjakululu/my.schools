@@ -14834,3 +14834,347 @@ header { flex-direction: column; height: auto; padding: 0; border-bottom: 1px so
     .sidebar { position: fixed; left: 0; top: 0; bottom: 0; transform: translateX(-100%); width: 260px; z-index: 90; }
     .sidebar.open { transform: translateX(0); box-shadow: 0 0 40px rgba(0,0,0,0.4); }
 }
+
+/* ==========================================================================
+   GLOBAL RESPONSIVE OVERRIDES (ALL SECTIONS — final pass)
+   Every section now stacks cleanly on phones/tablets. Rules in this block
+   are the LAST word: they intentionally win over earlier definitions.
+   ========================================================================== */
+
+/* ── 1. Grid/flex children must be allowed to shrink below content width.
+   Without min-width:0, wide tables/selects/canvases inside grid columns
+   force the whole page to overflow horizontally on narrow screens. ── */
+.content-area > .view-section,
+.dash-kpi-row > *,
+.dash-bento-grid > *,
+.analysis-layout > *,
+.profile-split-layout > *,
+.intake-modern-layout > *,
+.inbox-modern-layout > *,
+#notes .notes-container > *,
+.assess-grid > *,
+.learner-grid > *,
+.leaderboard-grid > *,
+.profile-content-grid > *,
+.analysis-grid-visuals > *,
+.analysis-grid-tertiary > *,
+.gauge-grid > *,
+.tt-grid-wrapper,
+.tt-grid-card {
+    min-width: 0;
+}
+
+/* ── 2. Safety net: never let a stray wide element scroll the page sideways ── */
+html, body { overflow-x: hidden; }
+
+/* ── 3. Header: proper search pill + compaction on narrow screens ── */
+.header-right .search-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.4rem 0.9rem;
+    min-width: 0;
+    flex: 0 1 260px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.header-right .search-wrapper:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-light);
+}
+.header-right .search-wrapper i {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+    .header-top-row { padding: 0.5rem 1rem; }
+    .header-right { gap: 0.5rem; }
+    .header-right .search-wrapper { flex: 1 1 120px; }
+    .user-info { display: none; }              /* avatar only — settings link remains */
+}
+
+@media (max-width: 640px) {
+    .header-right .search-wrapper { flex: 1; } /* search takes remaining space */
+    .header-left { gap: 0.5rem; }
+    .page-title { font-size: 1rem; }
+}
+
+@media (max-width: 480px) {
+    .header-right .btn-secondary {             /* logout → icon-only square */
+        font-size: 0;
+        padding: 0.5rem;
+        gap: 0;
+    }
+    .header-right .btn-secondary i { font-size: 1rem; }
+    .header-right .btn-icon { padding: 0.45rem; }
+}
+
+/* ── 4. Content padding scales down with the viewport ── */
+@media (max-width: 768px) {
+    .content-area { padding: 1rem; }
+}
+@media (max-width: 480px) {
+    .content-area { padding: 0.75rem; }
+}
+
+/* ── 5. Legacy two-column layouts → single column (future-proofing;
+   the modern variants used by the current UI are covered above). ── */
+@media (max-width: 900px) {
+    .intake-split-layout { grid-template-columns: 1fr; gap: 1.5rem; }
+    .exam-workspace { grid-template-columns: 1fr; }
+}
+@media (max-width: 820px) {
+    .inbox-container { grid-template-columns: 1fr; height: auto; }
+    .inbox-messages { grid-template-columns: 1fr; border-left: 0; }
+    .inbox-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+    .msg-list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 40vh; }
+}
+
+/* ── 6. Admissions stepper compacts on small screens ── */
+@media (max-width: 640px) {
+    .stepper-modern { padding: 0; gap: 0.25rem; }
+    .stepper-modern .step-circle { width: 34px; height: 34px; font-size: 0.8rem; margin-bottom: 0.35rem; }
+    .stepper-modern .step-line { width: 36px; margin-bottom: 1rem; }
+    .stepper-modern .step-label { font-size: 0.6rem; max-width: 60px; white-space: normal; line-height: 1.2; }
+}
+
+/* ── 7. Form rows collapse earlier so fields stay usable ── */
+@media (max-width: 700px) {
+    .form-row-3 { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+    .form-row-2 { grid-template-columns: 1fr; }
+}
+
+/* ── 8. Small info grids go single-column on phones ── */
+@media (max-width: 480px) {
+    .staff-details-grid { grid-template-columns: 1fr; }
+    .report-remarks-section { grid-template-columns: 1fr; }
+}
+
+/* ── 9. Dashboard command tools wrap instead of overflowing ── */
+@media (max-width: 600px) {
+    .dash-command-tools { flex-wrap: wrap; }
+    .dash-range-pill { width: 100%; justify-content: space-between; }
+}
+
+/* ==========================================================================
+   18. RESPONSIVE HARDENING — ALL SECTIONS (v3)
+   Closes the remaining gaps: sticky sidebars on mobile, assessment-grading
+   modal layout, learner/report table overflow, modal & toast behaviour,
+   iOS input zoom, sticky exam controls, stepper compacting, safe areas & dvh.
+   Appended after all previous rules so these overrides win.
+   ========================================================================== */
+
+/* ── Base hardening (no breakpoint) ── */
+html { -webkit-text-size-adjust: 100%; }
+body { height: 100vh; height: 100dvh; } /* dvh removes mobile URL-bar jump */
+img { max-width: 100%; }                /* images can never blow out a container */
+
+/* ── ≤1024px: intake layout goes single-column → sticky sidebar becomes static ── */
+@media (max-width: 1024px) {
+    .sidebar-modern,
+    .intake-sidebar { position: static; }
+}
+
+/* ── ≤900px: learners split view, exam workspace, assessment modal ── */
+@media (max-width: 900px) {
+    /* Learners: sidebar + card grid stack into one column */
+    .split-layout-students { grid-template-columns: 1fr; height: auto; }
+    .student-sidebar {
+        max-height: 300px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        border-radius: 12px 12px 0 0;
+    }
+    .student-main-view {
+        border-radius: 0 0 12px 12px;
+        min-height: 50vh;
+    }
+    .students-grid-modern { padding: 1rem; }
+
+    /* Exam workspace: sticky sidebar off once it stacks below the grid */
+    .exam-sidebar { position: static; }
+    .exam-workspace { gap: 1rem; }
+
+    /* Assessment (grading) modal: split panes stack */
+    .assessment-layout { grid-template-columns: 1fr; min-height: 0; }
+    .assessment-grading {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 1.5rem;
+    }
+    .assessment-evidence { padding: 1.5rem; }
+}
+
+/* ── ≤768px: tablets & large phones ── */
+@media (max-width: 768px) {
+    /* iOS auto-zoom fix: keep form inputs at 16px on touch devices
+       (!important beats component-specific font-sizes like .score-input) */
+    input, select, textarea,
+    .form-control, .form-control-modern, .search-input, .ls-search-input,
+    .score-input, .eg-score-input, .batch-row-input, .filter-select-modern,
+    .batch-table input, .batch-table select {
+        font-size: 16px !important;
+    }
+
+    /* Sticky exam session bar → static so it never overlaps content */
+    .exam-session-bar { position: static; padding: 1rem 1.1rem; }
+
+    /* Units search field takes full width */
+    .units-column-header { flex-wrap: wrap; gap: 0.75rem; }
+    .units-column-header .search-wrapper { width: 100%; max-width: 320px; }
+
+    /* Command bars stack */
+    .exam-header-modern {
+        flex-direction: column; align-items: flex-start;
+        gap: 1rem; padding: 1.5rem;
+    }
+    .exam-header-modern h2 { font-size: 1.4rem; }
+    .exam-header-actions { width: 100%; }
+    .exam-header-actions .btn-group { width: 100%; }
+    .exam-header-actions .btn-sm { flex: 1; justify-content: center; }
+
+    .staff-header-glass {
+        flex-direction: column; align-items: flex-start;
+        gap: 1rem; padding: 1.5rem;
+    }
+    .staff-header-glass h2 { font-size: 1.4rem; }
+
+    .reports-command-bar {
+        flex-direction: column; align-items: flex-start;
+        gap: 1rem; padding: 1.25rem 1.5rem;
+    }
+    .reports-command-tools { width: 100%; }
+    .reports-command-tools .reports-tool-btn { flex: 1; justify-content: center; }
+
+    .section-header-modern { flex-direction: column; align-items: flex-start; }
+    .section-header-modern .header-actions { width: 100%; flex-wrap: wrap; }
+
+    /* Modals: more breathing room + horizontal scroll for wide tables inside */
+    .modal-backdrop { padding: 0.75rem; }
+    .modal { padding: 1.5rem; max-height: 92vh; overflow: auto; }
+    .modal-footer { flex-wrap: wrap; }
+
+    /* Wide tables scroll horizontally instead of crushing cells */
+    .learner-table-wrap { overflow-x: auto; }
+    .report-table-block,
+    .rcb-table-section,
+    .report-card-body,
+    .class-report-body { overflow-x: auto; }
+    .report-table,
+    .rcb-grades-table,
+    .class-ranking-table { min-width: 620px; }
+    .score-table { min-width: 680px; }
+    .eg-table { min-width: 760px; }
+    #examGradingBody { min-width: 620px; }
+
+    /* Report learner info rows → 2 columns */
+    .report-learner-row { grid-template-columns: 1fr 1fr; }
+
+    /* Safe area padding for notched phones */
+    .content-area { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+    .toast { bottom: calc(20px + env(safe-area-inset-bottom)); }
+}
+
+/* ── ≤640px: small phones ── */
+@media (max-width: 640px) {
+    /* Legacy admissions stepper compacts like the modern one */
+    .stepper { padding: 0; margin-bottom: 2.5rem; }
+    .stepper::before { top: 20px; left: 30px; right: 30px; }
+    .step-circle { width: 40px; height: 40px; font-size: 0.9rem; margin-bottom: 0.6rem; }
+    .step span { font-size: 0.68rem; max-width: 64px; line-height: 1.2; }
+
+    /* Wizard nav buttons stack full-width */
+    .form-nav,
+    .form-nav-modern { flex-direction: column; gap: 0.75rem; }
+    .form-nav .btn,
+    .form-nav-modern .btn { width: 100%; justify-content: center; }
+
+    /* Form containers tighten */
+    .intake-form-container,
+    .form-container-modern { padding: 1.5rem; }
+
+    /* Batch entry toolbar & clash sweep items stack */
+    .batch-entry-toolbar { flex-direction: column; align-items: stretch; }
+    .bet-left, .bet-right { justify-content: center; }
+    .csi-body { flex-direction: column; align-items: stretch; }
+    .csi-vs { text-align: center; }
+
+    /* Timetable controls scroll horizontally */
+    .tt-controls { flex-direction: column; align-items: stretch; }
+    .tt-tabs { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tt-filters { flex-wrap: wrap; }
+    .tt-filters .filter-select-modern { flex: 1; min-width: 120px; }
+}
+
+/* ── ≤480px: compact phones ── */
+@media (max-width: 480px) {
+    /* Modal becomes a near-fullscreen sheet */
+    .modal { padding: 1.25rem; border-radius: 16px; }
+    .modal-header { margin-bottom: 1rem; }
+    .modal-header h3 { font-size: 1.05rem; }
+    .modal-body { padding: 1rem 0; }
+    .modal-footer {
+        margin-top: 1.25rem;
+        flex-direction: column-reverse; /* primary action on top */
+        gap: 0.5rem;
+    }
+    .modal-footer .btn { width: 100%; justify-content: center; }
+
+    /* Toast spans the bottom edge */
+    .toast {
+        left: 12px; right: 12px; bottom: 12px;
+        width: auto; max-width: none;
+        padding: 0.85rem 1rem; font-size: 0.85rem;
+    }
+
+    /* Card paddings tighten */
+    .card-header { padding: 1rem 1.25rem; }
+    .card-body { padding: 1.25rem; }
+    .content-card-modern { padding: 1rem; }
+
+    /* Intake forms & fee preview */
+    .intake-form-container,
+    .form-container-modern { padding: 1.25rem; border-radius: 14px; }
+    .fee-preview-card { padding: 1.5rem; }
+    .fee-total {
+        margin-left: -1.5rem; margin-right: -1.5rem;
+        padding-left: 1.5rem; padding-right: 1.5rem;
+    }
+
+    /* Report paper padding */
+    .report-page { padding: 18px 14px; }
+    .report-card-header,
+    .report-card-body,
+    .report-card-footer,
+    .class-report-header,
+    .class-report-body { padding: 1.25rem; }
+    .report-card-footer { flex-direction: column; align-items: stretch; }
+    .rcf-signature { min-width: 0; }
+    .report-signature-area { padding: 1.25rem; }
+    .report-summary-kpis,
+    .report-performance-strip { padding: 1rem 1.25rem; }
+
+    /* Report pickers & inline controls stack */
+    .report-student-picker { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+    .report-student-picker select { max-width: 100%; }
+    .report-inline-control { flex-direction: column; align-items: stretch; }
+    .report-inline-control .filter-select-modern { max-width: 100%; }
+
+    /* Exam student card wraps */
+    .exam-student-card { flex-wrap: wrap; }
+    .esc-trade-badge { margin-left: 0; }
+
+    /* Exam header tighter */
+    .exam-header-modern { padding: 1.25rem; }
+    .exam-header-modern h2 { font-size: 1.3rem; }
+
+    /* Inbox message rows */
+    .msg-item { padding: 0.75rem; }
+    .msg-sender { font-size: 0.85rem; }
+}
