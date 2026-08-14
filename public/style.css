@@ -15178,3 +15178,271 @@ img { max-width: 100%; }                /* images can never blow out a container
     .msg-item { padding: 0.75rem; }
     .msg-sender { font-size: 0.85rem; }
 }
+
+/* ==========================================================================
+   19. ASSESSMENT CARDS v2 — MODERN REDESIGN
+   Styles the LIVE markup produced by renderAssessmentCards(). Several
+   classes in that markup (.assess-type-badge, .assess-status-dot, .acs-*,
+   .assess-progress-*, .assess-card-footer) previously had no rules at all,
+   so the stats row, progress bar and badges rendered as raw text.
+   ========================================================================== */
+
+/* ── Card grid ── */
+.assess-grid {
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.25rem;
+    align-items: stretch;
+}
+
+/* ── Card shell ── */
+.assess-card {
+    --acc: #6366f1;
+    --acc-rgb: 99, 102, 241;
+    display: flex;
+    flex-direction: column;
+    padding: 0 0 1rem 0;
+    background:
+        radial-gradient(120% 90% at 100% 0%, rgba(var(--acc-rgb), 0.10), transparent 55%),
+        var(--bg-card, #fff);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    overflow: hidden;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+    transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
+                box-shadow 0.28s ease, border-color 0.28s ease;
+}
+
+/* Type-coloured top accent ribbon */
+.assess-card::before {
+    content: '';
+    display: block;
+    height: 4px;
+    background: linear-gradient(90deg, var(--acc), color-mix(in srgb, var(--acc) 45%, #fff));
+    transition: filter 0.2s ease;
+}
+.assess-card:hover::before { filter: brightness(1.12); }
+
+.assess-card:has(.type-opener)    { --acc: #22c55e; --acc-rgb: 34, 197, 94; }
+.assess-card:has(.type-midterm)   { --acc: #3b82f6; --acc-rgb: 59, 130, 246; }
+.assess-card:has(.type-endterm)   { --acc: #f59e0b; --acc-rgb: 245, 158, 11; }
+.assess-card:has(.type-endyear)   { --acc: #f43f5e; --acc-rgb: 244, 63, 94; }
+.assess-card:has(.type-practical) { --acc: #14b8a6; --acc-rgb: 20, 184, 166; }
+
+.assess-card:hover {
+    transform: translateY(-5px);
+    border-color: color-mix(in srgb, var(--acc) 45%, var(--border));
+    box-shadow: 0 16px 32px -10px rgba(15, 23, 42, 0.18),
+                0 0 0 1px color-mix(in srgb, var(--acc) 25%, transparent);
+}
+
+/* ── Header: type badge + live status chip ── */
+.assess-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.25rem 0.6rem;
+    margin: 0;
+}
+
+.assess-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0.32rem 0.72rem;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+}
+.assess-type-badge::before {
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 0.72rem;
+}
+.assess-type-badge.type-opener::before    { content: '\f024'; } /* flag */
+.assess-type-badge.type-midterm::before   { content: '\f252'; } /* hourglass */
+.assess-type-badge.type-endterm::before   { content: '\f46d'; } /* clipboard-list */
+.assess-type-badge.type-endyear::before   { content: '\f559'; } /* award */
+.assess-type-badge.type-practical::before { content: '\f19d'; } /* graduation-cap */
+
+/* Status chip — inline colour comes from JS; label comes from title attr */
+.assess-status-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0.28rem 0.72rem;
+    border-radius: 999px;
+    color: #fff;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+}
+.assess-status-dot::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.95);
+    animation: assessPulse 1.8s ease-in-out infinite;
+}
+.assess-status-dot::after { content: attr(title); }
+@keyframes assessPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.55); }
+    50%      { box-shadow: 0 0 0 5px rgba(255, 255, 255, 0); }
+}
+
+/* ── Body ── */
+.assess-card-body { padding: 0.35rem 1.25rem 0; }
+
+.assess-card-title {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: var(--text-main);
+    letter-spacing: -0.01em;
+    line-height: 1.35;
+    margin: 0 0 0.6rem;
+}
+
+.assess-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-bottom: 0.9rem;
+}
+.assess-card-meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.28rem 0.65rem;
+    border-radius: 8px;
+    background: var(--bg-alt, #f1f5f9);
+    border: 1px solid var(--border);
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+.assess-card-meta span i { font-size: 0.68rem; opacity: 0.8; }
+
+/* ── Stats row (was raw text) ── */
+.assess-card-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    padding: 0.85rem 0;
+    margin: 0.4rem 0 0;
+    border-top: 1px dashed var(--border);
+    border-bottom: 1px dashed var(--border);
+}
+.acs-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 0.15rem 0.5rem;
+}
+.acs-item + .acs-item { border-left: 1px solid var(--border); }
+.acs-val {
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: var(--text-main);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.acs-item:nth-child(3) .acs-val { color: var(--acc); }
+.acs-label {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+}
+
+/* ── Progress bar (was raw div) ── */
+.assess-progress-bar {
+    position: relative;
+    height: 8px;
+    margin: 0.85rem 0 0;
+    border-radius: 999px;
+    background: var(--bg-alt, #e2e8f0);
+    overflow: hidden;
+}
+.assess-progress-fill {
+    position: relative;
+    height: 100%;
+    border-radius: 999px;
+    overflow: hidden;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.assess-progress-fill::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+    transform: translateX(-100%);
+    animation: assessShimmer 2.2s ease-in-out infinite;
+}
+@keyframes assessShimmer {
+    60%, 100% { transform: translateX(100%); }
+}
+
+/* ── Footer actions (was unstyled buttons) ── */
+.assess-card-footer {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.85rem 1.25rem 0;
+    margin-top: auto;
+}
+.assess-action-btn {
+    flex: 1;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0.55rem 0.4rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-card, #fff);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.assess-action-btn:hover { transform: translateY(-2px); }
+.assess-action-btn:nth-child(1):hover { background: rgba(34, 197, 94, 0.1);   border-color: #22c55e; color: #16a34a; }
+.assess-action-btn:nth-child(2):hover { background: rgba(59, 130, 246, 0.1);  border-color: #3b82f6; color: #2563eb; }
+.assess-action-btn:nth-child(3):hover { background: rgba(245, 158, 11, 0.1);  border-color: #f59e0b; color: #d97706; }
+.assess-action-btn:nth-child(4):hover,
+.assess-action-btn.assess-action-danger:hover { background: rgba(239, 68, 68, 0.1); border-color: #ef4444; color: #dc2626; }
+
+/* ── Dark theme ── */
+[data-theme="dark"] .assess-card {
+    background:
+        radial-gradient(120% 90% at 100% 0%, rgba(var(--acc-rgb), 0.12), transparent 55%),
+        var(--bg-card);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"] .assess-card:hover {
+    box-shadow: 0 18px 36px -14px rgba(0, 0, 0, 0.65),
+                0 0 0 1px color-mix(in srgb, var(--acc) 30%, transparent);
+}
+[data-theme="dark"] .assess-card-meta span,
+[data-theme="dark"] .assess-progress-bar { background: rgba(15, 23, 42, 0.5); border-color: rgba(255, 255, 255, 0.08); }
+[data-theme="dark"] .assess-card-stats { border-color: rgba(255, 255, 255, 0.08); }
+[data-theme="dark"] .acs-item + .acs-item { border-color: rgba(255, 255, 255, 0.08); }
+[data-theme="dark"] .assess-action-btn { background: rgba(15, 23, 42, 0.4); border-color: rgba(255, 255, 255, 0.08); color: var(--text-muted); }
+
+/* ── Compact phones ── */
+@media (max-width: 420px) {
+    .assess-card-header,
+    .assess-card-body,
+    .assess-card-footer { padding-left: 1rem; padding-right: 1rem; }
+    .acs-val { font-size: 1.1rem; }
+    .assess-card-stats { padding: 0.7rem 0; }
+}
