@@ -346,7 +346,15 @@ const authenticateToken = (req, res, next) => {
 };
 
 const requireRole = (...roles) => (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!req.user) return res.status(401).json({ error: 'Authentication required.' });
+    if (!roles.includes(req.user.role)) {
+        const roleLabels = { admin: 'Admin', hoi: 'Head Teacher', exam_officer: 'Exam Officer', teacher: 'Teacher', parent: 'Parent' };
+        const required = roles.map(r => roleLabels[r] || r).join(' or ');
+        const current = roleLabels[req.user.role] || req.user.role;
+        return res.status(403).json({ 
+            error: `Access denied. This action requires ${required} privileges. Your current role is ${current}.` 
+        });
+    }
     next();
 };
 
