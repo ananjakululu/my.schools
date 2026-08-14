@@ -13,7 +13,12 @@ const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 
 const app = express();
-const PORT = process.env.PORT || 8000;
+
+// ==========================================================================
+//   FLY.IO FIX: Changed default port from 8000 to 8080
+// ==========================================================================
+const PORT = process.env.PORT || 8080;
+
 // FIXED: a missing JWT_SECRET used to make every login fail with
 // 'secretOrPrivateKey must have a value'. Fall back to a dev secret + warn.
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_only_insecure_secret_change_me';
@@ -694,6 +699,13 @@ app.post('/messages', authenticateToken, expectArray, async (req, res) => {
     finally { client.release(); }
 });
 
+// ADDED: Missing GET route for exam schedules
+app.get('/examSchedules', authenticateToken, async (req, res) => {
+    try {
+        res.json((await pool.query('SELECT * FROM "examSchedules"')).rows);
+    } catch (err) { console.error('[EXAM SCHEDULES GET ERROR]', err); res.status(500).json({ error: 'Failed to load exam schedules' }); }
+});
+
 app.post('/examSchedules', authenticateToken, requireRole('exam_officer', 'hoi', 'admin'), expectArray, async (req, res) => {
     const client = await pool.connect();
     try {
@@ -921,8 +933,6 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi'), async (
             const colsQuoted = c.map(x => `"${x}"`);
             const placeholders = c.map((_, i) => `$${i + 1}`).join(', ');
             const updateSet = c.slice(1).map(x => `"${x}" = EXCLUDED."${x}"`).join(', ');
-            // FIXED: was pool.query (outside this transaction) — a later failure
-            // rolled back the rest but settings persisted anyway. Now uses client.
             await client.query(`INSERT INTO settings (${colsQuoted.join(', ')}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateSet}`, c.map(x => s[x] ?? ''));
         }
 
@@ -962,6 +972,14 @@ app.post('/api/users/:id/activate', authenticateToken, requireRole('admin'), asy
     } catch (err) { console.error('[ACTIVATE ERROR]', err); res.status(500).json({ error: 'Failed to activate user' }); }
 });
 
+// ADDED: Missing GET route for audit logs
+app.get('/api/audit-logs', authenticateToken, requireRole('admin', 'hoi'), async (req, res) => {
+    try {
+        const rows = (await pool.query('SELECT * FROM "auditLogs" ORDER BY id DESC LIMIT 500')).rows;
+        res.json(rows);
+    } catch (err) { console.error('[AUDIT LOGS ERROR]', err); res.status(500).json({ error: 'Failed to load audit logs' }); }
+});
+
 // ==========================================================================
 //   DATA REPAIR ENDPOINT
 // ==========================================================================
@@ -989,10 +1007,37 @@ app.post('/api/repair-data', authenticateToken, requireRole('admin'), async (req
 });
 
 // ==========================================================================
-//   START SERVER (WITH REAL QR CODE)
+//   FLY.IO HEALTH CHECK & SPA CATCH-ALL
+// ==========================================================================
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok' });
+});
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ==========================================================================
+//   GRACEFUL SHUTDOWN (Required for Fly.io to prevent DB corruption)
+// ==========================================================================
+const gracefulShutdown = async (signal) => {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    try {
+        await pool.end();
+        console.log('[DB] Connection pool closed.');
+    } catch (e) {
+        console.error('[DB] Error during shutdown:', e.message);
+    }
+    process.exit(0);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ==========================================================================
+//   START SERVER
 // ==========================================================================
 const os = require('os');
- // Added for QR generation
 
 const getNetworkIPs = () => {
     const interfaces = os.networkInterfaces();
@@ -1016,10 +1061,6 @@ initDatabase().then(() => {
         if (networkIPs.length > 0) {
             const url = 'http://' + networkIPs[0].ip + ':' + PORT;
             console.log('✅ Network: ' + url);
-
-            //console.log('\n📱 Point your phone camera at this QR code:\n');
-
-
         }
     });
 
