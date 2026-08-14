@@ -676,6 +676,7 @@ function initializeApp(user) {
     applyRoleRestrictions(user.role);
     initTheme();
     initSidebarState();
+    initSidebarSections();
     initGlobalListeners();
     initSettingsListeners();
     initReportListeners(); 
@@ -6025,6 +6026,54 @@ function initSidebarState() {
             sb.classList.add('collapsed');
         }
     } catch (_) { /* ignore */ }
+}
+
+// ── COLLAPSIBLE SIDEBAR SECTIONS (Quick Access / School Management / Curriculum / System) ──
+function initSidebarSections() {
+    const headers = document.querySelectorAll('#sidebar .nav-section-header');
+    headers.forEach(h => {
+        h.setAttribute('role', 'button');
+        h.setAttribute('tabindex', '0');
+        h.setAttribute('aria-expanded', String(h.closest('.nav-section').classList.contains('open')));
+    });
+
+    // Restore persisted open/closed state (labels of sections the user collapsed)
+    try {
+        const closed = new Set(JSON.parse(localStorage.getItem('elimutrack_sidebar_sections') || '[]'));
+        document.querySelectorAll('#sidebar .nav-section').forEach(sec => {
+            const label = sec.querySelector('.nav-label')?.textContent?.trim();
+            if (label && closed.has(label)) {
+                sec.classList.remove('open');
+                sec.querySelector('.nav-section-header')?.setAttribute('aria-expanded', 'false');
+            }
+        });
+    } catch (_) { /* ignore */ }
+
+    // Toggle on click (works on the label, the chevron, or header padding)
+    document.body.addEventListener('click', e => {
+        const header = e.target.closest('.nav-section-header');
+        if (!header) return;
+        const section = header.closest('.nav-section');
+        if (!section) return;
+        section.classList.toggle('open');
+        header.setAttribute('aria-expanded', section.classList.contains('open'));
+        try {
+            const label = section.querySelector('.nav-label')?.textContent?.trim() || '';
+            const closed = new Set(JSON.parse(localStorage.getItem('elimutrack_sidebar_sections') || '[]'));
+            if (section.classList.contains('open')) closed.delete(label);
+            else closed.add(label);
+            localStorage.setItem('elimutrack_sidebar_sections', JSON.stringify([...closed]));
+        } catch (_) { /* ignore */ }
+    });
+
+    // Keyboard support: Enter / Space toggles the focused section header
+    document.body.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const header = e.target.closest?.('.nav-section-header');
+        if (!header) return;
+        e.preventDefault();
+        header.click();
+    });
 }
 
 // ── REAL-TIME DASHBOARD SYNC ──
@@ -14003,9 +14052,9 @@ async function pushToCloud() {
 
         // FIXED: the upload must target the LIVE website, not the local server.
         // (An earlier URL "fix" pointed it at API_URL, so pushing became a
-        // local no-op.) Target fly.dev by default; override with
+        // local no-op.) Defaults to this app's live site; override with
         // localStorage.setItem('elimutrack_cloud_url', 'https://your-site.com')
-        const CLOUD_URL = (localStorage.getItem('elimutrack_cloud_url') || 'https://my-schools.fly.dev').replace(/\/+$/, '');
+        const CLOUD_URL = (localStorage.getItem('elimutrack_cloud_url') || 'https://my-schools-2dp2pg.fly.dev').replace(/\/+$/, '');
 
         showToast(`Uploading to ${CLOUD_URL}... Please wait.`);
         // 3. Upload data to your LIVE website
