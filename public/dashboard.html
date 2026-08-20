@@ -32,7 +32,7 @@
 
     
     <!-- Main Stylesheet -->
-    <link rel="stylesheet" href="style.css"> 
+    <link rel="stylesheet" href="style.css?v=9"> 
 
     <!-- Additional Modern Styles -->
     <style>
@@ -68,7 +68,7 @@
                     <li class="nav-item" data-page="analysis" tabindex="0"><i class="fa-solid fa-magnifying-glass-chart"></i><span>Analysis</span></li>
                     <li class="nav-item" data-page="profile" tabindex="0"><i class="fa-solid fa-user-graduate"></i><span>Profile</span></li>
                     <li class="nav-item" data-page="notes" tabindex="0"><i class="fa-solid fa-clipboard-list"></i><span>Notes</span></li>
-                    <li class="nav-item" data-page="inbox" tabindex="0"><i class="fa-solid fa-inbox"></i><span>Inbox</span><span class="nav-badge" style="margin-left: auto; margin-right: 1rem;">3</span></li>
+                    <li class="nav-item" data-page="inbox" tabindex="0"><i class="fa-solid fa-inbox"></i><span>Inbox</span><span class="nav-badge" id="navInboxBadge" style="margin-left: auto; margin-right: 1rem; display:none;">0</span></li>
                 </div>
             </div>
 
@@ -108,7 +108,7 @@
                 </div>
             </div>
         </ul>
-        <div class="sidebar-footer">v1.0 CBC Edition</div>
+        <div class="sidebar-footer">v3.0 · Role-Based Access</div>
     </nav>
 
     <div class="main-wrapper">
@@ -124,7 +124,7 @@
                     <button class="btn-icon" id="btnNotify"><i class="fa-regular fa-bell"></i></button>
                     <div class="user-profile" data-page="settings" tabindex="0">
                         <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'%3E%3Crect fill='%23ddd' width='40' height='40'/%3E%3Ctext fill='rgba(0,0,0,0.5)' font-family='sans-serif' font-size='10' x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle'%3EAdmin%3C/text%3E%3C/svg%3E" alt="Admin">
-                        <div class="user-info"><span>Admin</span><small>School Admin</small></div>
+                        <div class="user-info"><span id="userDisplayName">Admin</span><small id="userRoleChip">School Admin</small></div>
                     </div>
                     <button class="btn btn-secondary btn-sm" onclick="logout()"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
                     
@@ -147,6 +147,10 @@
             </div>
         </div>
         <div class="dash-command-tools">
+            <div class="dash-date-chip" id="dashDateChip" title="Today">
+                <i class="fa-solid fa-calendar-day"></i>
+                <span id="dashDateText">—</span>
+            </div>
             <div class="dash-range-pill" id="dashRangePill" role="tablist" aria-label="Time range">
                 <button data-range="today" class="range-btn">Today</button>
                 <button data-range="week" class="range-btn">Week</button>
@@ -231,6 +235,39 @@
                 </div>
             </div>
             <div class="kpi-spark-wrap"><canvas class="kpi-spark" id="sparkPending" height="40"></canvas></div>
+        </div>
+    </div>
+
+    <!-- QUICK ACTIONS (landing page priority — placed right under the KPIs) -->
+    <div class="modern-card quickactions-section">
+        <div class="dash-card-header">
+            <div class="dash-card-title"><h3>Quick Actions</h3><small>Jump to a task</small></div>
+        </div>
+        <div class="quickactions-grid">
+            <button class="quickaction-btn" data-require="admit" onclick="router('intake')">
+                <span class="qa-icon" style="--qa-c1:#DCFCE7; --qa-c2:#22C55E;"><i class="fa-solid fa-user-plus"></i></span>
+                <span class="qa-label">New Admission</span>
+            </button>
+            <button class="quickaction-btn" data-require="scoresEdit" onclick="router('exams')">
+                <span class="qa-icon" style="--qa-c1:#E0E7FF; --qa-c2:#6366f1;"><i class="fa-solid fa-pen-to-square"></i></span>
+                <span class="qa-label">Enter Scores</span>
+            </button>
+            <button class="quickaction-btn" onclick="router('reports')">
+                <span class="qa-icon" style="--qa-c1:#FEF3C7; --qa-c2:#f59e0b;"><i class="fa-solid fa-print"></i></span>
+                <span class="qa-label">Reports</span>
+            </button>
+            <button class="quickaction-btn" onclick="router('staff')">
+                <span class="qa-icon" style="--qa-c1:#FEE2E2; --qa-c2:#ef4444;"><i class="fa-solid fa-id-card"></i></span>
+                <span class="qa-label">Staff</span>
+            </button>
+            <button class="quickaction-btn" onclick="router('timetable')">
+                <span class="qa-icon" style="--qa-c1:#CCFBF1; --qa-c2:#14B8A6;"><i class="fa-solid fa-table-cells"></i></span>
+                <span class="qa-label">Timetable</span>
+            </button>
+            <button class="quickaction-btn" onclick="router('settings')">
+                <span class="qa-icon" style="--qa-c1:#F1F5F9; --qa-c2:#64748b;"><i class="fa-solid fa-gear"></i></span>
+                <span class="qa-label">Settings</span>
+            </button>
         </div>
     </div>
 
@@ -350,39 +387,6 @@
             <div class="leaderboard-list" id="leaderboardList"></div>
         </div>
 
-        <!-- QUICK ACTIONS -->
-        <div class="modern-card quickactions-section">
-            <div class="dash-card-header">
-                <div class="dash-card-title"><h3>Quick Actions</h3><small>Jump to a task</small></div>
-            </div>
-            <div class="quickactions-grid">
-                <button class="quickaction-btn" onclick="router('intake')">
-                    <span class="qa-icon" style="--qa-c1:#DCFCE7; --qa-c2:#22C55E;"><i class="fa-solid fa-user-plus"></i></span>
-                    <span class="qa-label">New Admission</span>
-                </button>
-                <button class="quickaction-btn" onclick="router('exams')">
-                    <span class="qa-icon" style="--qa-c1:#E0E7FF; --qa-c2:#6366f1;"><i class="fa-solid fa-pen-to-square"></i></span>
-                    <span class="qa-label">Assessment</span>
-                </button>
-                <button class="quickaction-btn" onclick="router('reports')">
-                    <span class="qa-icon" style="--qa-c1:#FEF3C7; --qa-c2:#f59e0b;"><i class="fa-solid fa-print"></i></span>
-                    <span class="qa-label">Reports</span>
-                </button>
-                <button class="quickaction-btn" onclick="router('staff')">
-                    <span class="qa-icon" style="--qa-c1:#FEE2E2; --qa-c2:#ef4444;"><i class="fa-solid fa-id-card"></i></span>
-                    <span class="qa-label">Staff</span>
-                </button>
-                <button class="quickaction-btn" onclick="router('exams')">
-                    <span class="qa-icon" style="--qa-c1:#CCFBF1; --qa-c2:#14B8A6;"><i class="fa-solid fa-clipboard-check"></i></span>
-                    <span class="qa-label">Attendance</span>
-                </button>
-                <button class="quickaction-btn" onclick="router('settings')">
-                    <span class="qa-icon" style="--qa-c1:#F1F5F9; --qa-c2:#64748b;"><i class="fa-solid fa-gear"></i></span>
-                    <span class="qa-label">Settings</span>
-                </button>
-            </div>
-        </div>
-
         <!-- ACTIVITY TIMELINE -->
         <div class="modern-card activity-section">
             <div class="dash-card-header">
@@ -395,6 +399,15 @@
                 </div>
             </div>
             <div class="activity-list-modern" id="dashboardActivity"></div>
+        </div>
+
+        <!-- UPCOMING ASSESSMENTS & EVENTS -->
+        <div class="modern-card upcoming-section">
+            <div class="dash-card-header">
+                <div class="dash-card-title"><h3><i class="fa-solid fa-calendar-week" style="color:#6366f1"></i> Upcoming Assessments & Events</h3><small>What's next on the calendar</small></div>
+                <button class="dash-link-btn" onclick="router('settings'); setTimeout(()=>switchSettingsTab('events'), 50);">Manage <i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+            <div class="upcoming-grid" id="upcomingList"></div>
         </div>
 
     </div>
@@ -569,9 +582,30 @@
         <!-- LEFT: SEARCHABLE SIDEBAR -->
         <aside class="profile-sidebar-list" id="profileSidebar">
             <div class="ps-header">
+                <div class="ps-identity" id="psIdentity" style="display:none;">
+                    <div class="psi-avatar" id="psiAvatar">—</div>
+                    <div class="psi-info">
+                        <strong id="psiName">—</strong>
+                        <small id="psiMeta">—</small>
+                        <span class="psi-badge" id="psiParentAccess" style="display:none;"><i class="fa-solid fa-key"></i> Parent access: on</span>
+                    </div>
+                </div>
                 <div class="search-box-advanced" style="width:100%;">
                     <i class="fa-solid fa-search"></i>
                     <input type="text" id="profileSearchInput" placeholder="Search name, ADM..." class="search-input">
+                </div>
+                <div class="ps-filters">
+                    <select id="profileGradeFilter" class="filter-select-modern">
+                        <option value="all">All Grades</option>
+                    </select>
+                    <select id="profileStreamFilter" class="filter-select-modern">
+                        <option value="all">All Streams</option>
+                    </select>
+                    <select id="profileSortSelect" class="filter-select-modern">
+                        <option value="name-asc">Name A-Z</option>
+                        <option value="name-desc">Name Z-A</option>
+                        <option value="grade">Grade</option>
+                    </select>
                 </div>
             </div>
             <div class="ps-list" id="profileStudentList">
@@ -605,8 +639,9 @@
                         </div>
                     </div>
                     <div class="ph-actions">
-                        <button class="btn-pill btn-pill-ghost" onclick="editProfileStudent()"><i class="fa-solid fa-pen"></i> Edit</button>
-                        <button class="btn-pill btn-pill-primary" onclick="profileReportCard()"><i class="fa-solid fa-print"></i> Report Card</button>
+                        <button class="btn-pill btn-pill-ghost" data-require="studentEdit" onclick="editProfileStudent()"><i class="fa-solid fa-pen"></i> Edit</button>
+                        <button class="btn-pill btn-pill-ghost" data-require="userManage" onclick="openAccessPasswordModal()" title="Set the sign-in password parents use with this learner's ADM/NEMIS number"><i class="fa-solid fa-key"></i> Parent Access</button>
+                        <button class="btn-pill btn-pill-primary" data-require="reportsExport" onclick="profileReportCard()"><i class="fa-solid fa-print"></i> Report Card</button>
                     </div>
                 </div>
             </div>
@@ -645,7 +680,27 @@
                 </div>
             </div>
 
-            <!-- 3. DATA VISUALIZATION ROW -->
+            <!-- 3. PERFORMANCE FILTER BAR (drives all charts + breakdown) -->
+            <div class="profile-perf-filter" id="pfFilterBar" style="display:none;">
+                <span class="ppf-title"><i class="fa-solid fa-sliders"></i> Performance Filters</span>
+                <select id="pfTypeFilter" class="filter-select-modern">
+                    <option value="all">All Assessment Types</option>
+                </select>
+                <select id="pfTermFilter" class="filter-select-modern">
+                    <option value="all">All Terms</option>
+                </select>
+                <select id="pfYearFilter" class="filter-select-modern">
+                    <option value="all">All Years</option>
+                </select>
+                <select id="pfSubjectFilter" class="filter-select-modern">
+                    <option value="all">All Subjects</option>
+                </select>
+                <button class="btn btn-sm btn-ghost" id="pfResetBtn" title="Clear all performance filters">
+                    <i class="fa-solid fa-rotate-left"></i> Reset
+                </button>
+            </div>
+
+            <!-- 4. DATA VISUALIZATION ROW -->
             <div class="profile-viz-row viz-row-v2">
                 
                 <!-- Subject Strength (Radar Chart) -->
@@ -682,11 +737,50 @@
                 </div>
             </div>
 
-            <!-- 4. TABS & DETAILS -->
+            <!-- 5. PERFORMANCE BREAKDOWN (subject / type / term) -->
+            <div class="profile-breakdown-grid" id="profileBreakdown" style="display:none;">
+                <div class="modern-card">
+                    <div class="viz-header">
+                        <h4><i class="fa-solid fa-table-list"></i> Subject Performance</h4>
+                        <small id="pSubjectMeta">—</small>
+                    </div>
+                    <div class="pb-table-wrap">
+                        <table class="pb-table">
+                            <thead><tr>
+                                <th>Subject</th>
+                                <th>Assessments</th>
+                                <th>Best</th>
+                                <th>Average</th>
+                                <th>Latest</th>
+                                <th>Rating</th>
+                            </tr></thead>
+                            <tbody id="pSubjectTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modern-card">
+                    <div class="viz-header">
+                        <h4><i class="fa-solid fa-layer-group"></i> By Assessment Type</h4>
+                        <small>Average per exam type</small>
+                    </div>
+                    <div id="pTypeSummary" class="pb-type-summary"></div>
+                    <div class="viz-header" style="margin-top:1.25rem;">
+                        <h4><i class="fa-solid fa-arrows-up-down"></i> Term Comparison</h4>
+                        <small>Average per term (best subject)</small>
+                    </div>
+                    <table class="pb-table">
+                        <thead><tr><th>Term</th><th>Average</th><th>Best Subject</th><th>Rating</th></tr></thead>
+                        <tbody id="pTermCompareBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 6. TABS & DETAILS -->
             <div class="profile-tabs-modern tabs-v2">
                 <button class="ptm-item active" onclick="switchProfileTab('assessments')"><i class="fa-solid fa-list-check"></i> Assessments</button>
                 <button class="ptm-item" onclick="switchProfileTab('bio')"><i class="fa-solid fa-user"></i> Bio & Guardian</button>
                 <button class="ptm-item" onclick="switchProfileTab('notes')"><i class="fa-solid fa-clipboard"></i> Discipline</button>
+                <button class="ptm-item" onclick="switchProfileTab('parent')"><i class="fa-solid fa-people-roof"></i> Parent View</button>
             </div>
 
             <div class="profile-content-area" id="pContentAssessments">
@@ -725,6 +819,31 @@
                 </div>
             </div>
 
+            <!-- Parent View Tab Content -->
+            <div class="profile-content-area" id="pContentParent" style="display:none;">
+                <div class="modern-card parent-summary-card">
+                    <div class="viz-header">
+                        <h4><i class="fa-solid fa-people-roof"></i> Parent / Guardian View</h4>
+                        <small>Everything a guardian needs to know at a glance</small>
+                    </div>
+                    <div class="parent-grid">
+                        <div class="pg-item"><label>Guardian</label><strong id="pParentGuardian">—</strong></div>
+                        <div class="pg-item"><label>Relationship</label><strong id="pParentRel">—</strong></div>
+                        <div class="pg-item"><label>Phone</label><strong id="pParentPhone">—</strong></div>
+                        <div class="pg-item"><label>Fee Status</label><strong id="pParentFee">—</strong></div>
+                        <div class="pg-item"><label>Attendance</label><strong id="pParentAttendance">—</strong></div>
+                        <div class="pg-item"><label>Overall Average</label><strong id="pParentAvg">—</strong></div>
+                        <div class="pg-item"><label>Current Grade</label><strong id="pParentGrade">—</strong></div>
+                        <div class="pg-item"><label>Admission No</label><strong id="pParentAdm">—</strong></div>
+                    </div>
+                    <div class="parent-actions">
+                        <a class="btn btn-sm btn-secondary" id="pParentCallBtn" href="#" target="_blank" rel="noopener"><i class="fa-solid fa-phone"></i> Call Guardian</a>
+                        <button class="btn btn-sm btn-secondary" onclick="profileReportCard()"><i class="fa-solid fa-print"></i> Download Report Card</button>
+                        <button class="btn btn-sm btn-primary" onclick="window.print()"><i class="fa-solid fa-share-nodes"></i> Print Profile</button>
+                    </div>
+                </div>
+            </div>
+
         </main>
     </div>
 </section>
@@ -737,7 +856,7 @@
             <p>Track discipline, co-curricular, academic achievements, and health records.</p>
         </div>
         <div class="header-actions">
-            <button class="btn btn-primary" onclick="openAddNoteModal()">
+            <button class="btn btn-primary" data-require="notesManage" onclick="openAddNoteModal()">
                 <i class="fa-solid fa-plus"></i> Add Record
             </button>
         </div>
@@ -1344,6 +1463,9 @@
                             <span id="learnerResultCount">0</span> of <span id="learnerTotalCount">0</span> learners
                         </span>
                     </div>
+                    <button class="btn btn-sm btn-ghost lt-filter-toggle" id="ltFilterToggle" title="Show/hide filters">
+                        <i class="fa-solid fa-sliders"></i> Filters <i class="fa-solid fa-chevron-down lt-fchev"></i>
+                    </button>
                 </div>
                 <div class="lt-right">
                     <!-- Sort -->
@@ -1463,7 +1585,7 @@
             <button class="exam-tool-btn" onclick="examImportScores()" title="Import scores from Excel">
                 <i class="fa-solid fa-file-arrow-up"></i><span>Import</span>
             </button>
-            <button class="exam-tool-btn primary" onclick="openCreateAssessmentModal()" title="Create new assessment">
+            <button class="exam-tool-btn primary" data-require="examsManage" onclick="openCreateAssessmentModal()" title="Create new assessment">
                 <i class="fa-solid fa-plus"></i><span>New Assessment</span>
             </button>
         </div>
@@ -1484,7 +1606,10 @@
             <i class="fa-solid fa-chart-bar"></i> Subject Analysis
         </button>
         <button class="exam-tab-btn" data-examtab="batch" onclick="switchExamTab('batch')">
-            <i class="fa-solid fa-table-cells-large"></i> Batch Entry
+            <i class="fa-solid fa-table-list"></i> Batch Entry
+        </button>
+        <button class="exam-tab-btn" data-examtab="schedules" onclick="switchExamTab('schedules')">
+            <i class="fa-solid fa-calendar-week"></i> Exam Timetable
         </button>
     </div>
 
@@ -1539,7 +1664,7 @@
             <i class="fa-solid fa-clipboard-check" style="font-size:3rem; color:var(--border); margin-bottom:1rem;"></i>
             <h3>No Assessments Found</h3>
             <p>Create your first assessment to get started.</p>
-            <button class="btn btn-primary" onclick="openCreateAssessmentModal()"><i class="fa-solid fa-plus"></i> Create Assessment</button>
+            <button class="btn btn-primary" data-require="examsManage" onclick="openCreateAssessmentModal()"><i class="fa-solid fa-plus"></i> Create Assessment</button>
         </div>
     </div>
 
@@ -1561,15 +1686,26 @@
             <span id="scoreEntryCount" style="font-size:0.82rem; color:var(--text-muted);">0 learners</span>
         </div>
 
+        <!-- Assessment type legend — explains the (Type · Term) shown in the dropdown -->
+        <div class="exam-type-legend">
+            <span class="etl-title"><i class="fa-solid fa-circle-info"></i> Assessment types:</span>
+            <span class="etl-chip etl-opener"><i></i>Opener · start of term</span>
+            <span class="etl-chip etl-mid"><i></i>Mid Term · halfway</span>
+            <span class="etl-chip etl-endterm"><i></i>End Term · end of term</span>
+            <span class="etl-chip etl-endyear"><i></i>End Year · final exam</span>
+            <span class="etl-hint">Dropdown format: Name — Grade (Type · Term)</span>
+        </div>
+
         <!-- SCORE ENTRY TABLE -->
         <div class="score-entry-wrapper" id="scoreEntryWrapper" style="display:none;">
             <div class="score-entry-header">
                 <h3 id="scoreEntryTitle">Score Entry</h3>
                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                    <button class="exam-tool-btn" onclick="autoSaveScores()"><i class="fa-solid fa-floppy-disk"></i> Save Draft</button>
-                    <button class="exam-tool-btn" onclick="submitAllScores()"><i class="fa-solid fa-check-double"></i> Submit &amp; Close</button>
+                    <button class="exam-tool-btn" id="saveScoresDraftBtn" onclick="autoSaveScores()"><i class="fa-solid fa-floppy-disk"></i> Save Draft</button>
+                    <button class="exam-tool-btn" id="submitAllScoresBtn" onclick="submitAllScores()"><i class="fa-solid fa-check-double"></i> Submit &amp; Close</button>
                 </div>
             </div>
+            <div class="score-lock-banner" id="scoreEntryLockBanner" style="display:none;"></div>
             <div class="score-table-scroll">
                 <table class="score-table" id="scoreEntryTable">
                     <thead>
@@ -1746,7 +1882,132 @@
         </div>
     </div>
 
+    <!-- TAB 6: EXAM TIMETABLE -->
+    <div class="exam-tab-content" id="examTab-schedules">
+        <div class="ett-toolbar">
+            <div class="ett-filters">
+                <select id="ettGrade" class="filter-select-modern"><option value="all">All Grades</option></select>
+                <select id="ettTerm" class="filter-select-modern"><option value="all">All Terms</option></select>
+                <select id="ettType" class="filter-select-modern"><option value="all">All Types</option></select>
+                <select id="ettYear" class="filter-select-modern"><option value="all">All Years</option></select>
+            </div>
+            <div class="ett-tools">
+                <div class="ett-view-toggle" id="ettViewToggle" role="tablist" aria-label="Timetable view">
+                    <button data-view="list" class="active" title="List view"><i class="fa-solid fa-list"></i><span>List</span></button>
+                    <button data-view="calendar" title="Calendar view"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></button>
+                    <button data-view="matrix" title="Timetable matrix"><i class="fa-solid fa-table-cells"></i><span>Matrix</span></button>
+                </div>
+                <button class="ett-tool-btn" id="ettPrintBtn" title="Print timetable"><i class="fa-solid fa-print"></i><span>Print</span></button>
+                <button class="ett-tool-btn" id="ettPdfBtn" title="Export to PDF"><i class="fa-solid fa-file-pdf"></i><span>PDF</span></button>
+                <button class="ett-tool-btn ett-primary" data-require="examsManage" id="ettAddBtn" title="Create new exam series"><i class="fa-solid fa-plus"></i><span>New Exam Series</span></button>
+            </div>
+        </div>
+
+        <div id="ettStats"></div>
+
+        <div class="ett-view-body">
+            <div id="ettViewList"></div>
+            <div id="ettViewCalendar" style="display:none;"></div>
+            <div id="ettViewMatrix" style="display:none;"></div>
+        </div>
+    </div>
+
 </section>
+
+<!-- EXAM TIMETABLE MODAL (series + subject sessions) -->
+<div class="modal-backdrop" id="ettModal">
+    <div class="modal modal-lg ett-modal">
+        <div class="modal-header">
+            <h3 id="ettModalTitle"><i class="fa-solid fa-calendar-week"></i> New Exam Series</h3>
+            <button data-dismiss="modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="ettForm" novalidate>
+                <div class="form-row-2">
+                    <div class="form-group-modern">
+                        <label>Exam Name <span class="req-ast">*</span></label>
+                        <input type="text" id="ettName" class="form-control-modern" placeholder="e.g. End Term 2 2026">
+                        <span class="error-msg"></span>
+                    </div>
+                    <div class="form-group-modern">
+                        <label>Type <span class="req-ast">*</span></label>
+                        <select id="ettTypeSel" class="form-control-modern">
+                            <option>Opener</option>
+                            <option>Mid Term</option>
+                            <option selected>End Term</option>
+                            <option>End Year</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group-modern">
+                        <label>Grade <span class="req-ast">*</span></label>
+                        <select id="ettGradeSel" class="form-control-modern"><option value="">Select grade…</option></select>
+                    </div>
+                    <div class="form-group-modern">
+                        <label>Term</label>
+                        <select id="ettTermSel" class="form-control-modern">
+                            <option>Term 1</option><option>Term 2</option><option>Term 3</option>
+                        </select>
+                    </div>
+                    <div class="form-group-modern">
+                        <label>Year</label>
+                        <input type="number" id="ettYearSel" class="form-control-modern" min="2020" max="2100">
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group-modern">
+                        <label>Start Date <span class="req-ast">*</span></label>
+                        <input type="date" id="ettStart" class="form-control-modern">
+                    </div>
+                    <div class="form-group-modern">
+                        <label>End Date</label>
+                        <input type="date" id="ettEnd" class="form-control-modern">
+                    </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group-modern">
+                        <label>Status</label>
+                        <select id="ettStatusSel" class="form-control-modern">
+                            <option value="draft">Draft</option>
+                            <option value="open" selected>Open</option>
+                            <option value="closed">Closed</option>
+                        </select>
+                    </div>
+                    <div class="form-group-modern">
+                        <label>Default Venue</label>
+                        <input type="text" id="ettVenue" class="form-control-modern" placeholder="e.g. Hall A">
+                    </div>
+                </div>
+                <div class="form-group-modern">
+                    <label>Notes</label>
+                    <input type="text" id="ettNotes" class="form-control-modern" placeholder="Instructions, exam rules…">
+                </div>
+
+                <div class="ett-sessions-head">
+                    <div>
+                        <h4><i class="fa-solid fa-clock"></i> Subject Sessions</h4>
+                        <small>Assign each subject a date, time, room and invigilator.</small>
+                    </div>
+                    <button type="button" class="ett-tool-btn ett-primary" id="ettAddSessionBtn"><i class="fa-solid fa-plus"></i> Add Session</button>
+                </div>
+                <div class="ett-sessions-table-wrap">
+                    <table class="ett-sessions-table">
+                        <thead><tr><th>Subject</th><th>Date</th><th>Start</th><th>End</th><th>Room</th><th>Invigilator</th><th style="width:34px;"></th></tr></thead>
+                        <tbody id="ettSessionsBody"></tbody>
+                    </table>
+                </div>
+                <datalist id="ettInvigList"></datalist>
+                <div class="ett-sessions-hint"><i class="fa-solid fa-circle-info"></i> The same subject on the same date, or overlapping times in the same room, is flagged as a clash and blocked.</div>
+                <div class="ett-clash-box" id="ettClashBox" style="display:none;"></div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" data-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-primary" id="ettSaveBtn"><i class="fa-solid fa-check"></i> Save Timetable</button>
+        </div>
+    </div>
+</div>
 
 <!-- CREATE ASSESSMENT MODAL -->
 <div class="modal-backdrop" id="createAssessmentModal">
@@ -1766,12 +2027,13 @@
                         <label>Assessment Type <span style="color:var(--danger)">*</span></label>
                         <!-- NEW — USE THIS -->
 <select id="assessType" class="form-control" required>
-    <option value="">Select type...</option>
-    <option value="Opener">Opener</option>
-    <option value="Mid Term">Mid Term</option>
-    <option value="End Term">End Term</option>
-    <option value="End Year">End Year</option>
+    <option value="">Select assessment type...</option>
+    <option value="Opener">Opener — first exam of the term</option>
+    <option value="Mid Term">Mid Term — halfway progress check</option>
+    <option value="End Term">End Term — end-of-term exam</option>
+    <option value="End Year">End Year — final exam of the year</option>
 </select>
+<small class="form-hint">Choose what this exam is. The type labels every score entry, report and card colour.</small>
                     </div>
                 </div>
                 <div class="form-row-2">
@@ -1929,9 +2191,9 @@
             <p>Build the master weekly schedule; teachers can extract personal timetables.</p>
         </div>
         <div class="header-actions">
-            <button class="btn btn-secondary" id="btnCheckClashes"><i class="fa-solid fa-shield-halved"></i> Check Clashes</button>
-            <button class="btn btn-primary" id="btnAddSlot"><i class="fa-solid fa-plus"></i> Add Slot</button>
-            <button class="btn btn-secondary" id="btnExportTimetable"><i class="fa-solid fa-file-pdf"></i> Export PDF</button>
+            <button class="btn btn-secondary" id="btnCheckClashes" data-require="timetableEdit"><i class="fa-solid fa-shield-halved"></i> Check Clashes</button>
+            <button class="btn btn-primary" id="btnAddSlot" data-require="timetableEdit"><i class="fa-solid fa-plus"></i> Add Slot</button>
+            <button class="btn btn-secondary" id="btnExportTimetable"><i class="fa-solid fa-file-pdf"></i> <span id="ttExportLabel">Export Master PDF</span></button>
         </div>
     </div>
 
@@ -2013,7 +2275,7 @@
     <div class="section-header-modern">
         <div class="header-info"><h2><i class="fa-solid fa-book-open"></i> Learning Areas</h2><p>Organize subjects by grade bands (CBC Structure).</p></div>
         <div class="header-actions">
-            <button class="btn btn-primary" onclick="openCourseModal()"><i class="fa-solid fa-plus"></i> Add Subject</button>
+            <button class="btn btn-primary" data-require="curriculaEdit" onclick="openCourseModal()"><i class="fa-solid fa-plus"></i> Add Subject</button>
         </div>
     </div>
 
@@ -2155,6 +2417,10 @@
                     <div id="courseLevelsContainer" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; padding: 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-body); margin-top: 0.5rem;">
                         <!-- Populated dynamically by JS -->
                     </div>
+                </div>
+                <div class="form-group" id="courseTeacherLevelsGroup" style="display:none;">
+                    <label>Subject Teacher per Level <small style="color:var(--text-muted)">— assign a different teacher for specific grades (optional)</small></label>
+                    <div id="courseTeacherLevels" style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; margin-top:.4rem;"></div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
@@ -2343,6 +2609,25 @@
                         <!-- Staff cards or table will be injected here by JS -->
                     </div>
 
+                    <!-- ═══════════ CLASS TEACHER ASSIGNMENTS ═══════════ -->
+                    <div class="modern-card ct-card" data-require="staffManage">
+                        <div class="viz-header" style="cursor:pointer;" onclick="this.parentElement.classList.toggle('ct-collapsed')">
+                            <h4><i class="fa-solid fa-users-line"></i> Class Teacher Assignments</h4>
+                            <small>Who is in charge of each grade / stream</small>
+                        </div>
+                        <div class="ct-body">
+                            <div class="ct-add-row">
+                                <select id="ctStaff" class="form-control"><option value="">Select staff…</option></select>
+                                <select id="ctGrade" class="form-control"><option value="">Select grade…</option></select>
+                                <select id="ctStream" class="form-control"><option value="">All streams</option></select>
+                                <button class="btn btn-primary btn-sm" id="ctAssignBtn" style="white-space:nowrap;"><i class="fa-solid fa-plus"></i> Assign</button>
+                            </div>
+                            <div class="ct-list" id="ctList">
+                                <div class="ct-empty">No class-teacher assignments yet.</div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </section>
 
@@ -2359,7 +2644,7 @@
         </div>
         <div class="header-actions">
             <!-- Scoped to grade report cards; disabled until a specific grade is selected -->
-            <button class="btn btn-secondary btn-sm" id="reportsPrintAllBtn" disabled title="Select a specific grade and term first, then use this to print all report cards for that grade.">
+            <button class="btn btn-secondary btn-sm" id="reportsPrintAllBtn" data-require="reportsPrint" disabled title="Select a specific grade and term first, then use this to print all report cards for that grade.">
                 <i class="fa-solid fa-print"></i> Print All Report Cards
             </button>
         </div>
@@ -2546,13 +2831,13 @@
             <div class="rph-right">
                 <!-- Excel export hidden for individual report cards (document, not tabular data);
                      JS should toggle display:none on this button when report type is "individual" -->
-                <button class="btn btn-secondary btn-sm" id="reportsExportExcelBtn">
+                <button class="btn btn-secondary btn-sm" id="reportsExportExcelBtn" data-require="reportsExport">
                     <i class="fa-solid fa-file-excel" aria-hidden="true"></i> Excel
                 </button>
-                <button class="btn btn-secondary btn-sm" id="reportsExportPdfBtn">
+                <button class="btn btn-secondary btn-sm" id="reportsExportPdfBtn" data-require="reportsExport">
                     <i class="fa-solid fa-file-pdf" aria-hidden="true"></i> PDF
                 </button>
-                <button class="btn btn-primary btn-sm" id="reportsPrintBtn">
+                <button class="btn btn-primary btn-sm" id="reportsPrintBtn" data-require="reportsPrint">
                     <i class="fa-solid fa-print" aria-hidden="true"></i> Print
                 </button>
             </div>
@@ -2577,10 +2862,10 @@
                     </button>
                 </div>
                 <div class="rss-right">
-                    <button class="btn btn-outline-primary btn-sm" id="btnDownloadIndividualPDF" title="Download this learner's report card as PDF" style="margin-right:8px;">
+                    <button class="btn btn-outline-primary btn-sm" id="btnDownloadIndividualPDF" data-require="reportsExport" title="Download this learner's report card as PDF" style="margin-right:8px;">
                         <i class="fa-solid fa-download" aria-hidden="true"></i> Download Report
                     </button>
-                    <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" title="Download all report cards for the selected grade as one PDF">
+                    <button class="btn btn-secondary btn-sm" id="btnDownloadGradePDFs" data-require="reportsExport" title="Download all report cards for the selected grade as one PDF">
                         <i class="fa-solid fa-file-zipper" aria-hidden="true"></i> Download Grade Reports
                     </button>
                 </div>
@@ -3445,6 +3730,7 @@
         <button class="s-tab" onclick="switchSettingsTab(2)"><i class="fa-solid fa-book-open"></i> <span>Academics</span></button>
         <button class="s-tab" onclick="switchSettingsTab(3)"><i class="fa-solid fa-calendar-days"></i> <span>Events & Notices</span></button>
         <button class="s-tab" onclick="switchSettingsTab(4)"><i class="fa-solid fa-database"></i> <span>Data</span></button>
+        <button class="s-tab" onclick="switchSettingsTab(5)"><i class="fa-solid fa-users-gear"></i> <span>Users</span></button>
     </nav>
 
     <!-- TAB 0 -->
@@ -3608,7 +3894,7 @@
             <div class="s-card-head">
                 <div class="s-card-icon blue"><i class="fa-solid fa-book-open"></i></div>
                 <div><h3>Learning Areas Setup</h3><p>Define subjects and assign them to grade levels.</p></div>
-                <button class="s-btn s-btn-primary" onclick="openCourseModal()"><i class="fa-solid fa-plus"></i> Add Subject</button>
+                <button class="s-btn s-btn-primary" data-require="curriculaEdit" onclick="openCourseModal()"><i class="fa-solid fa-plus"></i> Add Subject</button>
             </div>
             <div class="s-table-wrap">
                 <table class="s-table">
@@ -3706,7 +3992,165 @@
         
         
     </div>
+
+    <!-- ═══════════ USERS PANEL (admin only) ═══════════ -->
+    <div class="s-panel" id="settings-tab-5">
+        <div class="s-users-head">
+            <div>
+                <h3 style="font-size:1.05rem;font-weight:700;color:var(--text-main);">System Users</h3>
+                <p style="font-size:.8rem;color:var(--text-muted);margin-top:.2rem;">Create accounts, assign roles, suspend or reset passwords. Roles control what each person can see and do.</p>
+            </div>
+            <button class="s-btn s-btn-primary" data-require="userManage" onclick="openAddUserModal()"><i class="fa-solid fa-user-plus"></i> Add User</button>
+        </div>
+        <div class="s-table-wrap" style="margin-top:1rem;">
+            <table class="s-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTableBody">
+                    <tr><td colspan="5" class="s-table-empty">Loading users…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 </section>
+
+    <!-- ═══════════ USER MANAGEMENT MODALS ═══════════ -->
+    <div class="modal-backdrop" id="addUserModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-user-plus"></i> Create Account</h3>
+                <button data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group-modern">
+                    <label>Full Name <span style="color:var(--danger)">*</span></label>
+                    <input type="text" id="nuName" class="form-control-modern" placeholder="e.g. Jane Wanjiru">
+                    <span class="error-msg"></span>
+                </div>
+                <div class="form-group-modern">
+                    <label>Email <span style="color:var(--danger)">*</span></label>
+                    <input type="email" id="nuEmail" class="form-control-modern" placeholder="name@school.com">
+                    <span class="error-msg"></span>
+                </div>
+                <div class="form-group-modern">
+                    <label>Role <span style="color:var(--danger)">*</span></label>
+                    <select id="nuRole" class="form-control-modern">
+                        <option value="admin">Admin — full access</option>
+                        <option value="hoi">Head Teacher — all sections, no data tools</option>
+                        <option value="exam_officer">Exam Officer — assessments, reports</option>
+                        <option value="teacher" selected>Teacher — scores, reports, own timetable</option>
+                        <option value="parent">Parent — signs in with child's ADM + school password</option>
+                    </select>
+                </div>
+                <div class="form-group-modern">
+                    <label>Password <span style="color:var(--danger)">*</span></label>
+                    <input type="password" id="nuPass" class="form-control-modern" placeholder="Min 8 chars, upper, lower & number">
+                    <span class="error-msg"></span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" data-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" id="btnSaveNewUser"><i class="fa-solid fa-check"></i> Create Account</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="editUserModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-user-pen"></i> Edit Account</h3>
+                <button data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="euId">
+                <div class="form-group-modern">
+                    <label>Full Name <span style="color:var(--danger)">*</span></label>
+                    <input type="text" id="euName" class="form-control-modern">
+                    <span class="error-msg"></span>
+                </div>
+                <div class="form-group-modern">
+                    <label>Email <span style="color:var(--danger)">*</span></label>
+                    <input type="email" id="euEmail" class="form-control-modern">
+                    <span class="error-msg"></span>
+                </div>
+                <div class="form-group-modern">
+                    <label>Role <span style="color:var(--danger)">*</span></label>
+                    <select id="euRole" class="form-control-modern">
+                        <option value="admin">Admin</option>
+                        <option value="hoi">Head Teacher</option>
+                        <option value="exam_officer">Exam Officer</option>
+                        <option value="teacher">Teacher</option>
+                        <option value="parent">Parent</option>
+                    </select>
+                </div>
+                <div class="form-group-modern">
+                    <label>Status</label>
+                    <select id="euStatus" class="form-control-modern">
+                        <option value="1">Active</option>
+                        <option value="0">Suspended</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" data-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" id="btnSaveUserChanges"><i class="fa-solid fa-check"></i> Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="resetPassModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key"></i> Reset Password</h3>
+                <button data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="rpId">
+                <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:1rem;">Set a new password for <strong id="rpName">this user</strong>. They will use it at their next sign-in.</p>
+                <div class="form-group-modern">
+                    <label>New Password <span style="color:var(--danger)">*</span></label>
+                    <input type="password" id="rpPass" class="form-control-modern" placeholder="Min 8 chars, upper, lower & number">
+                    <span class="error-msg"></span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" data-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" id="btnConfirmResetPass"><i class="fa-solid fa-rotate"></i> Reset Password</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="accessPassModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key"></i> Parent Access Password</h3>
+                <button data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="apStudentId">
+                <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:.6rem;">
+                    Set the sign-in password for <strong id="apName">this learner</strong>. Parents use the learner's ADM / NEMIS / UPI number plus this password, and can only view this learner's profile.
+                </p>
+                <div id="apLoginHint" class="ap-login-hint"></div>
+                <div class="form-group-modern">
+                    <label>Access Password <span style="color:var(--danger)">*</span></label>
+                    <input type="password" id="apPass" class="form-control-modern" placeholder="Min 8 chars, upper, lower & number">
+                    <span class="error-msg"></span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" data-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" id="btnSaveAccessPass"><i class="fa-solid fa-check"></i> Save Password</button>
+            </div>
+        </div>
+    </div>
 
     <!-- MODALS -->
     <div class="modal-backdrop" id="batchAdmissionModal">
@@ -4080,7 +4524,8 @@
     <div id="toast" class="toast" role="alert"></div>
 
     <!-- Sidebar Toggle Logic -->
-    <script src="script.js?v=8"></script>
+    <script src="script.js?v=9"></script>
+    <script src="exam-timetable.js?v=1"></script>
     
 </body>
 </html>
