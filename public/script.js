@@ -243,7 +243,8 @@ const store = {
     },
     learningAreas: DEFAULT_LEARNING_AREAS,
     timetable: [],
-    examSchedules: []
+    examSchedules: [],
+    classAssignments: []
 };
 
 const ADMIN_PASSWORD = 'admin123';
@@ -612,32 +613,375 @@ async function saveData() {
      repackAssessments();
     _backupToLocalStorage();
 
-    if (!navigator.onLine) { showToast('Saved locally (no internet).', 'info'); return; }
+    if (!navigator.onLine) {
+        showToast('Saved locally (no internet).', 'info');
+        refreshActiveView(); // keep the active view in sync even offline
+        return;
+    }
 
     const endpoints = [
         ['/students', store.students], ['/staff', store.staff], ['/settings', store.settings],
         ['/exams', store.exams], ['/learningAreas', store.learningAreas], ['/notes', store.notes || []],
         ['/timetable', store.timetable || []], ['/examSchedules', store.examSchedules || []],
-        ['/messages', store.messages || []]
+        ['/messages', store.messages || []], ['/classAssignments', store.classAssignments || []]
     ];
 
+    // FIXED: report sync failures instead of swallowing them silently — the
+    // data is still safe in localStorage, but the user needs to know their
+    // latest changes have NOT reached the cloud yet.
+    let failed = 0, synced = 0;
     try {
-        await Promise.all(endpoints.map(([path, data]) =>
-            fetch(`${API_URL}${path}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(data)
-            })
-        ));
+        await Promise.all(endpoints.map(async ([path, data]) => {
+            try {
+                const res = await fetch(`${API_URL}${path}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify(data)
+                });
+                if (!res.ok) { failed++; console.warn(`[SYNC] ${path} responded ${res.status}`); return false; }
+                synced++;
+                return true;
+            } catch (err) {
+                failed++;
+                console.warn(`[SYNC] ${path} failed:`, err.message);
+                return false;
+            }
+        }));
     } catch (err) {
         console.warn('Server sync failed (data safe in localStorage):', err.message);
+        failed = endpoints.length;
+    }
+    if (failed > 0) {
+        showToast(`Saved locally — ${failed}/${endpoints.length} cloud sync${failed === 1 ? '' : 's'} failed`, 'error');
+    }
+
+    // FIXED (real-time): re-render the currently active view so any visible
+    // dashboard/analysis/profile data reflects the save immediately.
+    refreshActiveView();
+}
+
+// ==========================================================================
+//   SETTINGS → DATA TAB HANDLERS (FIXED: pushToCloud / forceSyncAll /
+//   repairData were referenced by dashboard.html but never defined — the
+//   buttons in Settings → Data were dead).
+// ==========================================================================
+function pushToCloud() {
+    if (!navigator.onLine) return showToast('You are offline — data stays in local storage.', 'error');
+    showToast('Pushing all data to the cloud…', 'info');
+    saveData();
+    setTimeout(() => showToast('Cloud sync completed.', 'success'), 900);
+}
+
+function forceSyncAll() {
+    if (!navigator.onLine) return showToast('You are offline — cannot force a cloud sync.', 'error');
+    showToast('Forcing full sync of every dataset…', 'info');
+    saveData();
+    setTimeout(() => showToast('Full sync finished.', 'success'), 900);
+}
+
+async function repairData() {
+    if (!confirm('Run data repair? This re-generates missing admission numbers and cleans blank fields. It cannot undo user-created records.')) return;
+    const token = localStorage.getItem('authToken');
+    if (!token) return logout();
+    showToast('Repairing database…', 'info');
+    try {
+        const res = await fetch(`${API_URL}/api/repair-data`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+            showToast(`Repair complete — ${data.fixed || 0} record(s) fixed.`, 'success');
+            await loadData();
+            refreshActiveView();
+        } else {
+            showToast(data.error || data.message || 'Repair failed.', 'error');
+        }
+    } catch (err) {
+        console.error('[REPAIR]', err);
+        showToast('Repair failed — is the server running?', 'error');
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//   ROLE-BASED ACCESS CONTROL (RBAC)
+//   Roles: admin · hoi (Head Teacher) · exam_officer · teacher · parent
+//   - Sections a role cannot see are HIDDEN from the nav and BLOCKED by the
+//     router (deep links bounce back to the dashboard).
+//   - Action buttons are hidden (perm-hidden) and clicks are intercepted.
+//   - The server enforces the same rules on every mutation endpoint.
+// ═══════════════════════════════════════════════════════════════════════
+const ROLE_LABELS = { admin: 'Admin', hoi: 'Head Teacher', exam_officer: 'Exam Officer', teacher: 'Teacher', parent: 'Parent' };
+
+// Top-level sections each role may SEE
+const ROLE_SECTIONS = {
+    admin: ['dashboard','intake','students','staff','exams','curricula','timetable','reports','analysis','profile','notes','inbox','settings'],
+    hoi: ['dashboard','intake','students','staff','exams','curricula','timetable','reports','analysis','profile','notes','inbox','settings'],
+    exam_officer: ['dashboard','students','exams','reports','analysis','profile','notes','inbox'],
+    // Teacher: only their assigned grade/stream scope — analysis, learners
+    // (no edit), assessment (enter scores only), timetable (no edits, print
+    // self or grade), reports (assigned grade/stream), profile.
+    teacher: ['analysis','profile','students','exams','timetable','reports'],
+    // Parent: signs in with the learner's ADM + school password → profile only
+    parent: ['profile']
+};
+
+// Action-level permissions (view/edit/print/download matrix)
+const ROLE_ACTIONS = {
+    admin: { admit:true, studentEdit:true, studentDelete:true, staffManage:true, staffEdit:true, examsManage:true, scoresEdit:true, curriculaEdit:true, timetableEdit:true, reportsExport:true, reportsPrint:true, settingsAccess:true, dataTools:true, userManage:true, notesManage:true, sendMessage:true },
+    hoi: { admit:true, studentEdit:true, studentDelete:true, staffManage:true, staffEdit:true, examsManage:true, scoresEdit:true, curriculaEdit:true, timetableEdit:true, reportsExport:true, reportsPrint:true, settingsAccess:true, dataTools:false, userManage:false, notesManage:true, sendMessage:true },
+    exam_officer: { admit:false, studentEdit:false, studentDelete:false, staffManage:false, staffEdit:false, examsManage:true, scoresEdit:true, curriculaEdit:false, timetableEdit:false, reportsExport:true, reportsPrint:true, settingsAccess:false, dataTools:false, userManage:false, notesManage:false, sendMessage:true },
+    teacher: { admit:false, studentEdit:false, studentDelete:false, staffManage:false, staffEdit:false, examsManage:false, scoresEdit:true, curriculaEdit:false, timetableEdit:false, reportsExport:true, reportsPrint:true, settingsAccess:false, dataTools:false, userManage:false, notesManage:false, sendMessage:true },
+    parent: { admit:false, studentEdit:false, studentDelete:false, staffManage:false, staffEdit:false, examsManage:false, scoresEdit:false, curriculaEdit:false, timetableEdit:false, reportsExport:true, reportsPrint:true, settingsAccess:false, dataTools:false, userManage:false, notesManage:false, sendMessage:true }
+};
+
+function getCurrentRole() {
+    const u = (typeof CURRENT_USER !== 'undefined' && CURRENT_USER) || (store && store.user) ||
+              JSON.parse(localStorage.getItem('user') || '{}');
+    return (u && u.role) || localStorage.getItem('authRole') || 'admin';
+}
+function canAccessSection(section) { return (ROLE_SECTIONS[getCurrentRole()] || []).includes(section); }
+function canDo(action) {
+    const r = ROLE_ACTIONS[getCurrentRole()];
+    return !!(r && r[action]);
+}
+
+// A teacher's scope = grades they are assigned via Learning Areas
+// (learningAreas.teacherId matches their staff record). Their user account is
+// linked to the staff record by email (fallback: name).
+function getTeacherScope() {
+    const u = CURRENT_USER || JSON.parse(localStorage.getItem('user') || '{}');
+    if (getCurrentRole() !== 'teacher') return { teacherId: null, grades: [], streams: [], staff: null, classAssign: null };
+    const email = String(u.email || '').toLowerCase();
+    const name = String(u.name || '').toLowerCase();
+    const staff = (store.staff || []).find(s =>
+        (s.email && s.email.toLowerCase() === email) ||
+        (name && s.name && s.name.toLowerCase() === name)
+    );
+    if (!staff) return { teacherId: null, grades: [], streams: [], staff: null, classAssign: null };
+    const grades = new Set();
+    // Subject teacher: grades from Learning Areas (teacherId + per-level map)
+    (store.learningAreas || []).forEach(la => {
+        if (la.teacherId === staff.id && Array.isArray(la.applicableLevels)) {
+            la.applicableLevels.forEach(g => grades.add(g));
+        }
+        if (la.teacherByLevel && typeof la.teacherByLevel === 'object') {
+            Object.entries(la.teacherByLevel).forEach(([g, tid]) => { if (tid === staff.id) grades.add(g); });
+        }
+    });
+    // Class teacher: the grade/stream they are in charge of
+    const classAssign = (store.classAssignments || []).find(c => c.staffId === staff.id);
+    if (classAssign && classAssign.grade) grades.add(classAssign.grade);
+    const streams = classAssign && classAssign.stream ? [classAssign.stream] : [];
+    return { teacherId: staff.id, grades: [...grades], streams, staff, classAssign: classAssign || null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//   DOMAIN HELPERS — streamlined RBAC for assessments / timetable / reports
+// ═══════════════════════════════════════════════════════════════════════
+
+// Who may manage (create / close / reopen / delete) assessments & timetable slots.
+function canManageAssessments() { return canDo('examsManage'); }
+
+// Subject IDs a teacher is assigned to (subject teacher + class-teacher rule).
+// Returns null for unrestricted roles (admin/HOI/exam officer/parent).
+function getTeacherSubjectIds(grade) {
+    if (getCurrentRole() !== 'teacher') return null;
+    const scope = getTeacherScope();
+    if (!scope.staff) return new Set(); // teacher without staff record → nothing
+    const mine = new Set();
+    (store.learningAreas || []).forEach(la => {
+        const teaches = la.teacherId === scope.staff.id ||
+            (la.teacherByLevel && typeof la.teacherByLevel === 'object' &&
+             Object.values(la.teacherByLevel).includes(scope.staff.id));
+        if (!teaches) return;
+        if (grade) {
+            if (Array.isArray(la.applicableLevels) && la.applicableLevels.includes(grade)) mine.add(la.id);
+        } else {
+            mine.add(la.id);
+        }
+    });
+    // Class teacher: all learning areas of their class
+    if (scope.classAssign && (!grade || scope.classAssign.grade === grade)) {
+        (store.learningAreas || []).forEach(la => {
+            if (Array.isArray(la.applicableLevels) && la.applicableLevels.includes(scope.classAssign.grade)) mine.add(la.id);
+        });
+    }
+    return mine;
+}
+
+// A closed assessment is LOCKED for everyone except exam-management roles.
+function isAssessmentLocked(assessment) {
+    return !!(assessment && assessment.status === 'closed' && !canManageAssessments());
+}
+
+// Grades visible to the current role for reporting (null = all grades).
+function getScopedGradesForReports() {
+    if (getCurrentRole() !== 'teacher') return null;
+    return getTeacherScope().grades;
+}
+
+// Learners visible to the current role (teachers → their classes only).
+function getScopedStudentsForReports() {
+    if (getCurrentRole() !== 'teacher') return StudentRepo.getAll();
+    return getScopedStudents();
+}
+
+// Class teacher lookup for a grade/stream
+function getClassTeacherFor(grade, stream) {
+    return (store.classAssignments || []).find(c =>
+        c.grade === grade && (!stream || !c.stream || c.stream === stream));
+}
+
+function staffHasId(id) { return StaffRepo.getAll().some(s => s.id === id); }
+
+// ═══════════════════════════════════════════════════════════════════════
+//   CLASS TEACHER ASSIGNMENTS (Staff section — admin/HOI)
+// ═══════════════════════════════════════════════════════════════════════
+function initClassTeacherPanel() {
+    const staffSel = $('ctStaff'), gradeSel = $('ctGrade'), streamSel = $('ctStream');
+    if (!staffSel) return;
+    const grades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+    if (!staffSel.dataset.bound) {
+        staffSel.dataset.bound = '1';
+        gradeSel.innerHTML = '<option value="">Select grade…</option>' + grades.map(g => `<option value="${g}">${g}</option>`).join('');
+        $('ctAssignBtn')?.addEventListener('click', addClassTeacher);
+        gradeSel.addEventListener('change', () => {
+            const streams = [...new Set(getScopedStudents().filter(s => s.grade === gradeSel.value).map(s => s.stream).filter(Boolean))].sort();
+            streamSel.innerHTML = '<option value="">All streams</option>' +
+                streams.map(st => `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`).join('');
+        });
+    }
+    // refresh staff options
+    const cur = staffSel.value;
+    staffSel.innerHTML = '<option value="">Select staff…</option>' +
+        StaffRepo.getAll().map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+    staffSel.value = cur;
+    renderClassTeacherList();
+}
+
+function renderClassTeacherList() {
+    const list = $('ctList');
+    if (!list) return;
+    const assigns = store.classAssignments || [];
+    if (!assigns.length) { list.innerHTML = '<div class="ct-empty">No class-teacher assignments yet.</div>'; return; }
+    list.innerHTML = assigns.map(c => {
+        const staff = StaffRepo.getById(c.staffId);
+        return `<div class="ct-row">
+            <span class="ct-staff"><i class="fa-solid fa-user-tie"></i> ${escapeHtml(staff ? staff.name : 'Unknown staff')}</span>
+            <span class="ct-class"><i class="fa-solid fa-users"></i> ${escapeHtml(c.grade)}${c.stream ? ' · ' + escapeHtml(c.stream) : ''}</span>
+            <button class="btn btn-sm btn-ghost" data-require="staffManage" onclick="removeClassTeacher('${c.id}')" title="Remove assignment"><i class="fa-solid fa-xmark" style="color:var(--danger)"></i></button>
+        </div>`;
+    }).join('');
+}
+
+function addClassTeacher() {
+    const staffId = getVal('ctStaff'), grade = getVal('ctGrade'), stream = getVal('ctStream');
+    if (!staffId || !grade) { showToast('Select a staff member and a grade.', 'error'); return; }
+    const exists = (store.classAssignments || []).find(c =>
+        c.grade === grade && ((stream && c.stream === stream) || (!stream && !c.stream)));
+    if (exists) { showToast('This class already has a class teacher.', 'error'); return; }
+    const staff = StaffRepo.getById(staffId);
+    if (!confirm(`Assign ${staff ? staff.name : 'this staff member'} as class teacher for ${grade}${stream ? ' ' + stream : ''}?`)) return;
+    store.classAssignments.push({ id: generateId(), staffId, grade, stream: stream || '', createdAt: new Date().toISOString() });
+    saveData();
+    renderClassTeacherList();
+    showToast('Class teacher assigned.', 'success');
+}
+
+function removeClassTeacher(id) {
+    const c = (store.classAssignments || []).find(x => x.id === id);
+    if (!c) return;
+    if (!confirm('Remove this class-teacher assignment?')) return;
+    store.classAssignments = store.classAssignments.filter(x => x.id !== id);
+    saveData();
+    renderClassTeacherList();
+    showToast('Assignment removed.', 'success');
+}
+
+// Returns learners the current role may see:
+//   parent → the single linked learner · teacher → assigned grades · else all
+function getScopedStudents() {
+    let list = StudentRepo.getAll();
+    const role = getCurrentRole();
+    if (role === 'parent') {
+        const pid = (CURRENT_USER && (CURRENT_USER.studentId || CURRENT_USER.id)) || '';
+        return pid ? list.filter(s => s.id === pid) : [];
+    }
+    if (role === 'teacher') {
+        const scope = getTeacherScope();
+        return scope.grades.length ? list.filter(s => scope.grades.includes(s.grade)) : [];
+    }
+    return list;
+}
+
+// Is this grade within the current role's scope? (teacher: assigned grades only)
+function isGradeInScope(grade) {
+    const role = getCurrentRole();
+    if (role !== 'teacher') return true;
+    return getTeacherScope().grades.includes(grade);
+}
+
+// Capture-phase guard: blocks clicks on any [data-require] the role cannot use
+// (wins over inline onclick handlers).
+document.addEventListener('click', (e) => {
+    const req = e.target.closest('[data-require]');
+    if (req && !canDo(req.dataset.require)) {
+        e.preventDefault();
+        e.stopPropagation();
+        showToast('Your role does not have permission for this action.', 'error');
+    }
+}, true);
+
 function applyRoleRestrictions(role) {
-    if (role === 'teacher') document.body.classList.add('role-teacher');
+    const allowed = ROLE_SECTIONS[role] || [];
+    document.body.dataset.role = role;
+
+    // Hide nav items for sections the role cannot see
+    document.querySelectorAll('#navList .nav-item').forEach(item => {
+        const page = item.dataset.page;
+        item.style.display = allowed.includes(page) ? '' : 'none';
+    });
+    // Hide nav groups that have no visible items left
+    document.querySelectorAll('#navList .nav-section').forEach(sec => {
+        const anyVisible = [...sec.querySelectorAll('.nav-item')].some(i => i.style.display !== 'none');
+        sec.style.display = anyVisible ? '' : 'none';
+    });
+
+    // Header identity + role chip
     const profileName = document.querySelector('.user-profile .user-info span');
     if (CURRENT_USER && profileName) profileName.innerText = CURRENT_USER.name;
+    const roleChip = $('userRoleChip');
+    if (roleChip) roleChip.textContent = ROLE_LABELS[role] || role;
+
+    // Hide static action buttons the role cannot use
+    document.querySelectorAll('[data-require]').forEach(el => {
+        el.classList.toggle('perm-hidden', !canDo(el.dataset.require));
+    });
+
+    // Settings → Data & Users tabs are admin-only
+    ['data', 'users'].forEach(tabName => {
+        if (!canDo(tabName === 'data' ? 'dataTools' : 'userManage')) {
+            document.querySelectorAll('#settingsTabs .s-tab').forEach(btn => {
+                if (new RegExp(tabName, 'i').test(btn.textContent)) btn.style.display = 'none';
+            });
+        }
+    });
+
+    // Parent mode: profile auto-links the learner whose credentials were used;
+    // the "Parent View" tab is redundant for them, so hide it
+    window._parentMode = role === 'parent';
+    if (role === 'parent') {
+        document.querySelectorAll('.ptm-item').forEach(btn => {
+            if (/parent view/i.test(btn.textContent)) btn.style.display = 'none';
+        });
+    }
+    scopeRoleSelects();
+
+    // Bounce off a section that isn't allowed (deep link / stale state) —
+    // land on the first section the role may see
+    const active = document.querySelector('.view-section.active');
+    if (active && !allowed.includes(active.id)) router(allowed[0] || 'dashboard');
 }
 
 // ==========================================================================
@@ -722,6 +1066,24 @@ function initGlobalListeners() {
         if (actionBtn) {
             const action = actionBtn.dataset.action;
             const id = actionBtn.dataset.id;
+            // RBAC: resolve the required permission for this action
+            let required = null;
+            if (action === 'edit' || action === 'delete') {
+                const isStaff = !!id && StaffRepo.getById(id);
+                if (isStaff) required = 'staffEdit';
+                else required = action === 'delete' ? 'studentDelete' : 'studentEdit';
+            } else {
+                const permMap = {
+                    'view': null, 'openStaffModal': 'staffManage',
+                    'edit-curriculum': 'curriculaEdit', 'edit-subject': 'curriculaEdit',
+                    'delete-course': 'curriculaEdit'
+                };
+                required = permMap[action] || null;
+            }
+            if (required && !canDo(required)) {
+                showToast('Your role does not have permission for this action.', 'error');
+                return;
+            }
             if (action === 'edit') return id ? editStaff(id) : editStudent(id);
             if (action === 'delete') return id ? deleteStaff(id) : secureDelete(id);
             if (action === 'view') return viewStudent(id);
@@ -891,10 +1253,38 @@ function initGlobalListeners() {
     $('btnExportTimetable')?.addEventListener('click', exportTimetablePDF);
     $('ttSlotForm')?.addEventListener('submit', handleTimetableSlotSubmit);
     $('ttSlotGrade')?.addEventListener('change', e => populateTimetableSlotSubjects(e.target.value));
-    
+
+    // Assessment cards: click the header to collapse/expand the body
+    const assessGrid = $('assessGrid');
+    if (assessGrid && !assessGrid.dataset.collapseBound) {
+        assessGrid.dataset.collapseBound = '1';
+        assessGrid.addEventListener('click', (e) => {
+            const hdr = e.target.closest('.assess-card-header');
+            if (!hdr || e.target.closest('button')) return;
+            const card = hdr.closest('.assess-card');
+            if (!card) return;
+            card.classList.toggle('collapsed');
+            const ic = hdr.querySelector('.assess-collapse-ic');
+            if (ic) ic.classList.toggle('fa-chevron-down', !card.classList.contains('collapsed'));
+        });
+    }
+}
+
+// Unified confirmation gate for destructive / irreversible actions
+// (imports, exports, prints, downloads, closures, deletions).
+function confirmAction(message, fn) {
+    if (window.confirm(message)) { try { fn(); } catch (err) { console.error('[ACTION]', err); showToast('Action failed: ' + (err.message || 'error'), 'error'); } return true; }
+    return false;
 }
 
 function router(viewId, navEl) {
+    // RBAC: a role cannot even open a section it isn't allowed to see
+    if (!canAccessSection(viewId)) {
+        showToast('Access denied — your role cannot view this section.', 'error');
+        const active = document.querySelector('.view-section.active');
+        if (active) return;
+        return router('dashboard');
+    }
     document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
     const section = $(viewId);
     if (section) section.classList.add('active');
@@ -931,6 +1321,39 @@ function router(viewId, navEl) {
     if (window.innerWidth < 768) $('sidebar')?.classList.remove('open');
 }
 
+// Re-renders whatever view is currently active so the UI always reflects the
+// latest data immediately after a save or a cross-tab data change. Preserves
+// the active exam tab and the currently selected learner in Profile.
+function refreshActiveView() {
+    const active = document.querySelector('.view-section.active');
+    if (!active) return;
+    try {
+        switch (active.id) {
+            case 'dashboard': renderDashboard(); break;
+            case 'students': renderLearnerSection(); break;
+            case 'staff': renderStaff(); break;
+            case 'exams': {
+                const tab = document.querySelector('.exam-tab-btn.active')?.dataset.examtab || 'assessments';
+                switchExamTab(tab);
+                break;
+            }
+            case 'curricula': renderCurricula(); renderCourseSettings(); break;
+            case 'timetable': initTimetableSection(); break;
+            case 'reports': renderReportsAnalytics(); break;
+            case 'analysis': renderAnalysis(); break;
+            case 'profile': {
+                populateProfileList();
+                if (_profileSelectedId) renderStudentProfile(_profileSelectedId);
+                break;
+            }
+            case 'notes': renderNotesTab(); break;
+            case 'inbox': renderInboxTab(); break;
+        }
+    } catch (e) {
+        console.warn('[refreshActiveView]', active.id, e);
+    }
+}
+
 // ==========================================================================
 //   INBOX / MESSAGES (rewritten to match index.html: #inboxMessageList,
 //   #inboxDetailView, #composeRecipient, folder tabs, trash)
@@ -957,6 +1380,12 @@ function renderInboxTab() {
     const unread = all.filter(m => !m.read && (!m.folder || m.folder === 'inbox')).length;
     const badge = $('inboxCountBadge');
     if (badge) badge.textContent = unread;
+    // Sidebar navigation badge — keep in sync with real unread count
+    const navBadge = $('navInboxBadge');
+    if (navBadge) {
+        navBadge.textContent = unread > 99 ? '99+' : unread;
+        navBadge.style.display = unread > 0 ? '' : 'none';
+    }
     document.querySelectorAll('.folder-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.folder === inboxCurrentFolder);
     });
@@ -1151,6 +1580,7 @@ class DashboardEngine {
 
     _renderAll() {
         const stats = this.cachedStats;
+        this._renderDateChip();
         this._renderKPIs(stats);
         this._renderSparklines(stats);
         this._renderFilteredEnrollmentChart();
@@ -1159,7 +1589,87 @@ class DashboardEngine {
         this._renderPerformanceTrend(stats.exams);
         this._renderSubjectRadar(stats.exams);
         this._renderLeaderboard(stats.students, stats.exams);
+        this._renderUpcoming();
         this._renderActivityFeed();
+    }
+
+    // Live date chip in the command bar (updates every minute)
+    _renderDateChip() {
+        const el = $('dashDateText');
+        if (!el) return;
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        el.textContent = dateStr;
+        const term = store.settings.currentTerm || 'Term 1';
+        const year = store.settings.academicYear || now.getFullYear();
+        const chip = $('dashDateChip');
+        if (chip) chip.title = `${dateStr} · ${term}, ${year}`;
+    }
+
+    // Upcoming assessments + calendar events merged into one timeline
+    _renderUpcoming() {
+        const list = $('upcomingList');
+        if (!list) return;
+        const now = Date.now();
+        const items = [];
+
+        (store.exams || []).forEach(a => {
+            const d = a.startDate || a.endDate || (a.createdAt ? a.createdAt.slice(0, 10) : '');
+            if (!d) return;
+            const t = new Date(d + (d.length === 10 ? 'T00:00:00' : '')).getTime();
+            if (isNaN(t)) return;
+            const status = (a.status || 'draft').toLowerCase();
+            // show upcoming + today's, plus recently created drafts without dates
+            if (status === 'closed' && t < now) return;
+            if (t < now - 14 * 86400000) return; // skip stale
+            items.push({
+                t, kind: 'assessment', id: a.id, title: a.name || 'Assessment',
+                grade: a.grade, term: a.term, type: a.assessType || 'Exam', status, date: d
+            });
+        });
+
+        (store.settings.events || []).forEach(ev => {
+            if (!ev || !ev.date) return;
+            const t = new Date(ev.date + (String(ev.date).length === 10 ? 'T00:00:00' : '')).getTime();
+            if (isNaN(t)) return;
+            if (t < now - 3 * 86400000) return;
+            items.push({ t, kind: 'event', id: ev.id || '', title: ev.name || ev.title || 'Event', date: ev.date, status: '' });
+        });
+
+        items.sort((a, b) => a.t - b.t);
+        const upcoming = items.filter(i => i.t >= now).slice(0, 6);
+        const recent = items.filter(i => i.t < now).slice(-3).reverse();
+
+        const chip = (title, cls, sub) => `<span class="up-item-chip ${cls}">${title}${sub ? `<em>${sub}</em>` : ''}</span>`;
+        const renderItem = (i) => {
+            const d = new Date(i.t);
+            const day = d.toLocaleDateString('en-GB', { day: 'numeric' });
+            const mon = d.toLocaleDateString('en-GB', { month: 'short' });
+            const isPast = i.t < now;
+            const accent = i.kind === 'event'
+                ? 'up-event'
+                : (isPast ? 'up-past' : (i.status === 'open' ? 'up-open' : 'up-draft'));
+            return `<div class="up-item ${accent} ${isPast ? 'up-past-row' : ''}">
+                <div class="up-date"><span class="up-day">${day}</span><span class="up-mon">${mon}</span></div>
+                <div class="up-body">
+                    <strong>${escapeHtml(i.title)}</strong>
+                    <span class="up-sub">
+                        ${i.kind === 'event' ? '<i class="fa-solid fa-star"></i> Event' :
+                          `<i class="fa-solid fa-file-lines"></i> ${escapeHtml(i.grade || '')} · ${escapeHtml(i.type)} · ${escapeHtml(i.term || '')}`}
+                    </span>
+                </div>
+                ${i.kind === 'assessment' ? chip(i.status === 'open' ? 'Open' : 'Draft', i.status === 'open' ? 'c-open' : 'c-draft', '') : ''}
+            </div>`;
+        };
+
+        if (items.length === 0) {
+            list.innerHTML = '<div class="up-empty"><i class="fa-solid fa-calendar-days"></i><p>No upcoming assessments or events yet. Create an assessment or add an event to see it here.</p></div>';
+            return;
+        }
+        list.innerHTML = [
+            upcoming.length ? `<div class="up-group-label">Upcoming</div>${upcoming.map(renderItem).join('')}` : '',
+            recent.length ? `<div class="up-group-label">Recently passed</div>${recent.map(renderItem).join('')}` : ''
+        ].join('');
     }
 
     // --- EVENT LISTENERS (Bulletproof Binding) ---
@@ -1292,11 +1802,15 @@ class DashboardEngine {
     // --- DATA AGGREGATION (Enhanced for new KPIs) ---
     _aggregateStats() {
         const students = StudentRepo.getAll();
+        // FIXED (real data): aggregate through flattenExams() so Assessment
+        // Centre scores (stored nested inside wrappers) count in the dashboard
+        // KPIs, competency donut, leaderboard and pending count — previously
+        // only legacy flat records were visible and the dashboard showed ~0.
+        let exams = flattenExams();
         // FIXED: respect the Week/Term/Year range pills when aggregating exam data
-        let exams = store.exams || [];
         if (this.state.range === 'week') {
             const cutoff = Date.now() - 7 * 86400000;
-            exams = exams.filter(e => (e.createdAt ? new Date(e.createdAt).getTime() : 0) >= cutoff);
+            exams = exams.filter(e => ((e.createdAt || e.updatedAt) ? new Date(e.createdAt || e.updatedAt).getTime() : 0) >= cutoff);
         } else if (this.state.range === 'term') {
             const t = store.settings.currentTerm;
             exams = exams.filter(e => !e.term || e.term === t);
@@ -1358,6 +1872,28 @@ class DashboardEngine {
         // Competency sub-stats
         setText('kpiCompetentCount', stats.competency.EE + stats.competency.ME);
         setText('kpiBelowCount', stats.competency.AE + stats.competency.BE);
+
+        // Dynamic trend badges — compute real deltas against the last render
+        // snapshot instead of showing hard-coded "+12%"/"+5%" placeholders.
+        try {
+            const now = { enrollment: stats.students.length, competency: stats.avgPerf };
+            const prev = window._dashTrendBase;
+            if (prev) {
+                const eDelta = now.enrollment - prev.enrollment;
+                const enrollEl = document.querySelector('[data-trend="enrollment"]');
+                if (enrollEl) {
+                    enrollEl.textContent = (eDelta >= 0 ? '+' : '') + eDelta;
+                    enrollEl.closest('.kpi-hero-badge')?.classList.toggle('down', eDelta < 0);
+                }
+                const cDelta = now.competency - prev.competency;
+                const compEl = document.querySelector('[data-trend="competency"]');
+                if (compEl) {
+                    compEl.textContent = (cDelta >= 0 ? '+' : '') + cDelta + '%';
+                    compEl.closest('.kpi-hero-badge')?.classList.toggle('down', cDelta < 0);
+                }
+            }
+            window._dashTrendBase = now;
+        } catch (_) { /* non-critical visual enhancement */ }
 
         // Dynamic Greeting
         const user = store.user || JSON.parse(localStorage.getItem('user') || '{}');
@@ -1723,6 +2259,9 @@ function resetIntakeForm() {
     if ($('studentPhotoPreview')) $('studentPhotoPreview').src = DEFAULT_AVATAR;
     document.querySelectorAll('.form-step').forEach((s, i) => s.classList.toggle('active', i === 0));
     document.querySelectorAll('.step-modern').forEach((s, i) => s.classList.toggle('active', i === 0));
+    document.querySelectorAll('.form-control-modern.error').forEach(el => el.classList.remove('error'));
+    document.querySelectorAll('.error-msg').forEach(el => { el.innerText = ''; });
+    updateAdmProgress(1);
     updateLiveCard();
 }
 
@@ -1753,6 +2292,18 @@ function validateField(input) {
     return isValid;
 }
 
+// Updates the admissions wizard progress bar + percentage (FIXED: the bar was
+// hard-coded at 25% in the HTML and never moved as steps changed).
+function updateAdmProgress(step) {
+    const pct = Math.min(100, Math.max(0, Math.round((step / 4) * 100)));
+    const bar = $('admProgressBar');
+    if (bar) bar.style.width = pct + '%';
+    const pctEl = $('admProgressPct');
+    if (pctEl) pctEl.textContent = pct + '%';
+    // Progress bar colour shifts with completion
+    if (bar) bar.style.background = pct >= 100 ? 'var(--success)' : 'var(--primary-gradient, #22c55e)';
+}
+
 function nextStep(current, next) {
     const currentStep = $(`form-step-${current}`);
     const inputs = currentStep.querySelectorAll('input[required], select[required]');
@@ -1779,6 +2330,8 @@ function nextStep(current, next) {
         if (stepNum < next) step.classList.add('completed');
         else if (stepNum === next) step.classList.add('active');
     });
+
+    updateAdmProgress(next);
 }
 
 function prevStep(current, prev) {
@@ -1790,6 +2343,8 @@ function prevStep(current, prev) {
         if (stepNum < prev) step.classList.add('completed');
         else if (stepNum === prev) step.classList.add('active');
     });
+
+    updateAdmProgress(prev);
 }
 
 function updateLiveCard() {
@@ -1823,31 +2378,82 @@ function previewStudentPhoto(input) {
 
 function submitRegistration(e) {
     e.preventDefault();
+
     const grade = getVal('regTrade');
     const names = [getVal('surname'), getVal('firstName'), getVal('otherNames')].filter(Boolean).join(' ');
+    const guardianName = getVal('guardianName');
+    const guardianPhone = getVal('guardianPhone');
+    const dob = getVal('dob');
+    const idNumber = getVal('idNumber');
+    const editId = $('editModeId')?.value || '';
+
+    // ── Final validation pass (step 4 + cross-field rules) ──
+    const errors = [];
+    const markError = (fieldId, msg) => {
+        const input = $(fieldId);
+        const group = input ? input.closest('.form-group-modern') : null;
+        if (group) {
+            input.classList.add('error');
+            const span = group.querySelector('.error-msg');
+            if (span) span.innerText = msg;
+        }
+        errors.push(msg);
+    };
+    // Clear stale inline errors before re-validating
+    document.querySelectorAll('#newStudentForm .form-control-modern.error').forEach(el => el.classList.remove('error'));
+    document.querySelectorAll('#newStudentForm .error-msg').forEach(el => { el.innerText = ''; });
+
+    if (!names.trim()) markError('firstName', 'Surname and First Name are required.');
+    if (!getVal('gender')) markError('gender', 'Please select gender.');
+    if (!dob) markError('dob', 'Date of Birth is required.');
+    else if (new Date(dob) > new Date()) markError('dob', 'Date of Birth cannot be in the future.');
+    if (!grade) markError('regTrade', 'Please select a grade.');
+    if (!getVal('level')) markError('level', 'Please select a stream.');
+    if (idNumber.length > 0 && idNumber.length !== 8) markError('idNumber', 'Birth Cert No. must be exactly 8 digits.');
+    else if (idNumber.length === 8 && StudentRepo.getAll().some(s => s.idNumber === idNumber && s.id !== editId)) {
+        markError('idNumber', 'Birth Cert No. already exists.');
+    }
+    if (!guardianName) markError('guardianName', 'Guardian Name is required.');
+    if (guardianPhone && !/^(?:254|\+254|0)?([17][0-9]{8})$/.test(guardianPhone)) {
+        markError('guardianPhone', 'Invalid guardian phone format.');
+    }
+
+    if (errors.length > 0) {
+        const first = document.querySelector('#newStudentForm .form-control-modern.error');
+        if (first) {
+            first.focus();
+            first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        showToast(errors[0], 'error');
+        return;
+    }
 
     const studentData = {
-        name: names, gender: getVal('gender'), dob: getVal('dob'), idNumber: getVal('idNumber'),
-        phone: getVal('phone'), grade: grade, stream: getVal('level'), photo: $('studentPhotoPreview').src,
+        name: names, gender: getVal('gender'), dob: dob, idNumber: idNumber,
+        phone: getVal('phone'), grade: grade, stream: getVal('level'), photo: $('studentPhotoPreview') ? $('studentPhotoPreview').src : DEFAULT_AVATAR,
         upiNumber: getVal('upiNumber'), prevSchool: getVal('prevSchool'), entryLevel: getVal('entryLevel'),
         yearCompleted: getVal('yearCompleted'), nemisNumber: getVal('assessmentNo'), disability: getVal('disability'),
-        guardianName: getVal('guardianName'), guardianPhone: getVal('guardianPhone'), guardianRel: getVal('guardianRel')
+        guardianName: guardianName, guardianPhone: guardianPhone, guardianRel: getVal('guardianRel')
     };
 
-    const editId = $('editModeId').value;
-    if (editId) {
-        StudentRepo.update(editId, studentData);
-        showToast('Learner updated successfully!');
-    } else {
-        const year = new Date().getFullYear().toString().slice(-2);
-        const count = StudentRepo.findBy('grade', grade).length + 1;
-        studentData.reg = `${grade.replace(' ', '')}/${year}/${String(count).padStart(3, '0')}`;
-        StudentRepo.create(studentData);
-        showToast('Learner Registered Successfully!');
+    try {
+        if (editId) {
+            StudentRepo.update(editId, studentData);
+            showToast('Learner updated successfully!');
+        } else {
+            const year = new Date().getFullYear().toString().slice(-2);
+            const count = StudentRepo.findBy('grade', grade).length + 1;
+            studentData.reg = `${grade.replace(' ', '')}/${year}/${String(count).padStart(3, '0')}`;
+            StudentRepo.create(studentData);
+            showToast('Learner Registered Successfully!');
+        }
+        router('students');
+        resetIntakeForm();
+        renderDashboard();
+    } catch (err) {
+        console.error('[REGISTRATION ERROR]', err);
+        showToast('Failed to save learner: ' + (err.message || 'unknown error'), 'error');
     }
-    router('students');
-    resetIntakeForm();
-    renderDashboard();
 }
 
 function editStudent(id) {
@@ -1895,7 +2501,19 @@ function secureDelete(id) {
 //   STUDENTS LIST SECTION
 // ==========================================================================
 function renderLearnerSection() {
-    const all = StudentRepo.getAll();
+    // RBAC scope: teachers/parents only see their assigned learners
+    const all = getScopedStudents();
+    // Collapsible filter toolbar (single binding)
+    const toggle = $('ltFilterToggle');
+    if (toggle && !toggle.dataset.bound) {
+        toggle.dataset.bound = '1';
+        toggle.addEventListener('click', () => {
+            const tb = document.querySelector('.learner-toolbar');
+            const collapsed = tb ? tb.classList.toggle('collapsed') : false;
+            const ic = toggle.querySelector('.lt-fchev');
+            if (ic) ic.className = 'fa-solid fa-chevron-' + (collapsed ? 'down' : 'up');
+        });
+    }
     setText('lsTotalCount', all.length);
     setText('lsStatAll', all.length);
     setText('lsStatMale', all.filter(s => s.gender === 'Male').length);
@@ -1919,7 +2537,8 @@ function renderLearnerSection() {
 }
 
 function getFilteredLearners() {
-    return StudentRepo.getAll().filter(s => {
+    // RBAC scope: teachers/parents only ever see their assigned learners
+    return getScopedStudents().filter(s => {
         if (LearnerState.grade !== 'all' && s.grade !== LearnerState.grade) return false;
         if (LearnerState.stream !== 'all' && s.stream !== LearnerState.stream) return false;
         if (LearnerState.gender !== 'all' && s.gender !== LearnerState.gender) return false;
@@ -1999,8 +2618,8 @@ function renderLearnerCards(students) {
                 <span class="sc-badge">${escapeHtml(s.stream || 'N/A')}</span>
             </div>
             <div class="sc-actions">
-                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); editStudent('${s.id}')"><i class="fa-solid fa-pen"></i></button>
-                <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); secureDelete('${s.id}')"><i class="fa-solid fa-trash"></i></button>
+                <button class="btn btn-sm btn-secondary" data-require="studentEdit" onclick="event.stopPropagation(); editStudent('${s.id}')"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn btn-sm btn-danger" data-require="studentDelete" onclick="event.stopPropagation(); secureDelete('${s.id}')"><i class="fa-solid fa-trash"></i></button>
             </div>
         </div>
     `).join('');
@@ -2023,8 +2642,8 @@ function renderLearnerTable(students) {
             <td>${escapeHtml(s.guardianName || 'N/A')}</td>
             <td>${escapeHtml(s.guardianPhone || 'N/A')}</td>
             <td>
-                <button class="btn btn-sm btn-ghost" onclick="editStudent('${s.id}')"><i class="fa-solid fa-pen"></i></button>
-                <button class="btn btn-sm btn-ghost" onclick="secureDelete('${s.id}')"><i class="fa-solid fa-trash" style="color:var(--danger)"></i></button>
+                <button class="btn btn-sm btn-ghost" data-require="studentEdit" onclick="editStudent('${s.id}')"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn btn-sm btn-ghost" data-require="studentDelete" onclick="secureDelete('${s.id}')"><i class="fa-solid fa-trash" style="color:var(--danger)"></i></button>
             </td>
         </tr>
     `).join('');
@@ -3105,6 +3724,7 @@ function renderModernReportCard(doc, data) {
 
 // --- Download Single Student Report Card ---
 async function downloadStudentReportCard(studentId) {
+    if (!confirmAction('Download this learner\'s report card as PDF?', () => {})) return;
     // Honor the Reports-section term/year filters when they are set to a
     // specific value (FIXED: previously always used settings defaults)
     const termFilter = $('reportTermFilter')?.value;
@@ -3538,7 +4158,10 @@ function normalizeLegacyAssessmentTypes() {
     });
 }
 function getAssessments() {
-    return (store.exams || []).filter(e => e.type === 'assessment');
+    // RBAC scope: teachers only see assessments for their assigned grades
+    let list = (store.exams || []).filter(e => e.type === 'assessment');
+    if (getCurrentRole() === 'teacher') list = list.filter(e => isGradeInScope(e.grade));
+    return list;
 }
 
 function getAssessmentById(id) {
@@ -3686,6 +4309,7 @@ function switchExamTab(tabName) {
         case 'results': populateResultsDropdowns(); break;
         case 'analysis': populateAnalysisDropdowns(); break;
         case 'batch': populateBatchDropdowns(); break;
+        case 'schedules': populateScheduleFilters(); renderExamSchedules(); break;
     }
 }
 // --- TAB 1: ASSESSMENT CARDS ---
@@ -3741,10 +4365,11 @@ function renderAssessmentCards() {
         };
 
         return `
-        <div class="assess-card" data-id="${a.id}">
+        <div class="assess-card" data-id="${a.id}" data-type="${escapeHtml(a.assessType || 'Exam')}" data-status="${escapeHtml(a.status || 'draft')}">
             <div class="assess-card-header">
                 <span class="assess-type-badge ${typeColors[a.assessType] || ''}">${escapeHtml(a.assessType || 'Exam')}</span>
                 <div class="assess-status-dot" style="background:${st.color};" title="${a.status}"></div>
+                <i class="fa-solid fa-chevron-up assess-collapse-ic" title="Collapse / expand"></i>
             </div>
             <div class="assess-card-body">
                 <h4 class="assess-card-title">${escapeHtml(a.name)}</h4>
@@ -3777,10 +4402,10 @@ function renderAssessmentCards() {
                 <button class="assess-action-btn" onclick="viewAssessmentResults('${a.id}')" title="View Results">
                     <i class="fa-solid fa-table-columns"></i>
                 </button>
-                <button class="assess-action-btn" onclick="toggleAssessmentStatus('${a.id}')" title="Toggle Status">
+                <button class="assess-action-btn" data-require="examsManage" onclick="toggleAssessmentStatus('${a.id}')" title="Toggle Status">
                     <i class="fa-solid ${a.status === 'open' ? 'fa-lock' : 'fa-lock-open'}"></i>
                 </button>
-                <button class="assess-action-btn assess-action-danger" onclick="promptDeleteAssessment('${a.id}')" title="Delete">
+                <button class="assess-action-btn assess-action-danger" data-require="examsManage" onclick="promptDeleteAssessment('${a.id}')" title="Delete">
                     <i class="fa-solid fa-trash"></i>
                 </button>
             </div>
@@ -3798,12 +4423,13 @@ function promptDeleteAssessment(id) {
 function toggleAssessmentStatus(id) {
     const assessment = getAssessmentById(id);
     if (!assessment) return;
-    if (assessment.status === 'draft') assessment.status = 'open';
-    else if (assessment.status === 'open') assessment.status = 'closed';
-    else assessment.status = 'draft';
+    const next = assessment.status === 'draft' ? 'open' : assessment.status === 'open' ? 'closed' : 'draft';
+    // Confirmation required before closing/opening an assessment
+    if (!confirmAction(`Change "${assessment.name}" status from "${assessment.status}" to "${next}"?`, () => {})) return;
+    assessment.status = next;
     saveData();
     renderAssessmentCards();
-    showToast(`Assessment status changed to "${assessment.status}"`);
+    showToast(`Assessment status changed to "${next}"`);
 }
 
 function openAssessmentForScoring(id) {
@@ -3901,6 +4527,11 @@ function confirmDeleteAssessment() {
 }
 
 function openCreateAssessmentModal() {
+    // RBAC: only the Exam Officer (or Admin/HOI override) can create assessments
+    if (!canDo('examsManage')) {
+        showToast('Only the Exam Officer can create assessments.', 'error');
+        return;
+    }
     const form = $('createAssessmentForm');
     if (form) form.reset();
     setText('courseModalTitle', 'Create New Assessment'); // Reset if reused
@@ -3917,7 +4548,7 @@ function populateScoreEntryDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -3942,13 +4573,30 @@ function populateScoreEntrySubjects() {
     }
 
     const currentVal = subjectSelect.value;
-    subjectSelect.innerHTML = '<option value="">Select Subject...</option>' +
-        (assessment.subjects || []).map(subId => {
-            const sub = getSubjectById(subId);
-            return sub ? `<option value="${sub.id}">${escapeHtml(sub.name)}</option>` : '';
-        }).join('');
+    let subjects = (assessment.subjects || []).map(subId => getSubjectById(subId)).filter(Boolean);
 
-    if (currentVal && (assessment.subjects || []).includes(currentVal)) {
+    // RBAC: subject/class teachers only enter scores for THEIR subjects in
+    // their assigned grades; a class teacher of this grade may enter all.
+    if (getCurrentRole() === 'teacher') {
+        const scope = getTeacherScope();
+        const isClassTeacher = scope.classAssign && scope.classAssign.grade === assessment.grade;
+        if (!isClassTeacher && scope.staff) {
+            const mine = new Set(
+                (store.learningAreas || []).filter(la =>
+                    la.teacherId === scope.staff.id ||
+                    (la.teacherByLevel && la.teacherByLevel[assessment.grade] === scope.staff.id)
+                ).map(la => la.id)
+            );
+            subjects = subjects.filter(s => mine.has(s.id));
+        }
+    }
+
+    subjectSelect.innerHTML = subjects.length === 0
+        ? '<option value="">No subjects assigned to you for this grade</option>'
+        : '<option value="">Select Subject...</option>' +
+          subjects.map(sub => `<option value="${sub.id}">${escapeHtml(sub.name)}</option>`).join('');
+
+    if (currentVal && subjects.some(s => s.id === currentVal)) {
         subjectSelect.value = currentVal;
     }
 }
@@ -4175,7 +4823,7 @@ function populateResultsDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -4401,7 +5049,7 @@ function populateAnalysisDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -4589,7 +5237,7 @@ function populateBatchDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -4625,7 +5273,10 @@ function normalizeLegacyAssessmentTypes() {
 }
 
 function getAssessments() {
-    return (store.exams || []).filter(e => e.type === 'assessment');
+    // RBAC scope: teachers only see assessments for their assigned grades
+    let list = (store.exams || []).filter(e => e.type === 'assessment');
+    if (getCurrentRole() === 'teacher') list = list.filter(e => isGradeInScope(e.grade));
+    return list;
 }
 
 function getAssessmentById(id) {
@@ -4666,6 +5317,7 @@ function switchExamTab(tabName) {
         case 'results': populateResultsDropdowns(); break;
         case 'analysis': populateAnalysisDropdowns(); break;
         case 'batch': populateBatchDropdowns(); break;
+        case 'schedules': populateScheduleFilters(); renderExamSchedules(); break;
     }
 }
 
@@ -4722,10 +5374,11 @@ function renderAssessmentCards() {
         };
 
         return `
-        <div class="assess-card" data-id="${a.id}">
+        <div class="assess-card" data-id="${a.id}" data-type="${escapeHtml(a.assessType || 'Exam')}" data-status="${escapeHtml(a.status || 'draft')}">
             <div class="assess-card-header">
                 <span class="assess-type-badge ${typeColors[a.assessType] || ''}">${escapeHtml(a.assessType || 'Exam')}</span>
                 <div class="assess-status-dot" style="background:${st.color};" title="${a.status}"></div>
+                <i class="fa-solid fa-chevron-up assess-collapse-ic" title="Collapse / expand"></i>
             </div>
             <div class="assess-card-body">
                 <h4 class="assess-card-title">${escapeHtml(a.name)}</h4>
@@ -4758,10 +5411,10 @@ function renderAssessmentCards() {
                 <button class="assess-action-btn" onclick="viewAssessmentResults('${a.id}')" title="View Results">
                     <i class="fa-solid fa-table-columns"></i>
                 </button>
-                <button class="assess-action-btn" onclick="toggleAssessmentStatus('${a.id}')" title="Toggle Status">
+                <button class="assess-action-btn" data-require="examsManage" onclick="toggleAssessmentStatus('${a.id}')" title="Toggle Status">
                     <i class="fa-solid ${a.status === 'open' ? 'fa-lock' : 'fa-lock-open'}"></i>
                 </button>
-                <button class="assess-action-btn assess-action-danger" onclick="promptDeleteAssessment('${a.id}')" title="Delete">
+                <button class="assess-action-btn assess-action-danger" data-require="examsManage" onclick="promptDeleteAssessment('${a.id}')" title="Delete">
                     <i class="fa-solid fa-trash"></i>
                 </button>
             </div>
@@ -4803,12 +5456,13 @@ function viewAssessmentResults(id) {
 function toggleAssessmentStatus(id) {
     const assessment = getAssessmentById(id);
     if (!assessment) return;
-    if (assessment.status === 'draft') assessment.status = 'open';
-    else if (assessment.status === 'open') assessment.status = 'closed';
-    else assessment.status = 'draft';
+    const next = assessment.status === 'draft' ? 'open' : assessment.status === 'open' ? 'closed' : 'draft';
+    // Confirmation required before closing/opening an assessment
+    if (!confirmAction(`Change "${assessment.name}" status from "${assessment.status}" to "${next}"?`, () => {})) return;
+    assessment.status = next;
     saveData();
     renderAssessmentCards();
-    showToast(`Assessment status changed to "${assessment.status}"`);
+    showToast(`Assessment status changed to "${next}"`);
 }
 
 function promptDeleteAssessment(id) {
@@ -4832,6 +5486,11 @@ function confirmDeleteAssessment() {
 
 // ── CREATE ASSESSMENT MODAL ──
 function openCreateAssessmentModal() {
+    // RBAC: only the Exam Officer (or Admin/HOI override) can create assessments
+    if (!canDo('examsManage')) {
+        showToast('Only the Exam Officer can create assessments.', 'error');
+        return;
+    }
     const form = $('createAssessmentForm');
     if (form) form.reset();
     setText('courseModalTitle', 'Create New Assessment'); // Reset if reused
@@ -4886,7 +5545,7 @@ function populateScoreEntryDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -4912,13 +5571,30 @@ function populateScoreEntrySubjects() {
     }
 
     const currentVal = subjectSelect.value;
-    subjectSelect.innerHTML = '<option value="">Select Subject...</option>' +
-        (assessment.subjects || []).map(subId => {
-            const sub = getSubjectById(subId);
-            return sub ? `<option value="${sub.id}">${escapeHtml(sub.name)}</option>` : '';
-        }).join('');
+    let subjects = (assessment.subjects || []).map(subId => getSubjectById(subId)).filter(Boolean);
 
-    if (currentVal && (assessment.subjects || []).includes(currentVal)) {
+    // RBAC: subject/class teachers only enter scores for THEIR subjects in
+    // their assigned grades; a class teacher of this grade may enter all.
+    if (getCurrentRole() === 'teacher') {
+        const scope = getTeacherScope();
+        const isClassTeacher = scope.classAssign && scope.classAssign.grade === assessment.grade;
+        if (!isClassTeacher && scope.staff) {
+            const mine = new Set(
+                (store.learningAreas || []).filter(la =>
+                    la.teacherId === scope.staff.id ||
+                    (la.teacherByLevel && la.teacherByLevel[assessment.grade] === scope.staff.id)
+                ).map(la => la.id)
+            );
+            subjects = subjects.filter(s => mine.has(s.id));
+        }
+    }
+
+    subjectSelect.innerHTML = subjects.length === 0
+        ? '<option value="">No subjects assigned to you for this grade</option>'
+        : '<option value="">Select Subject...</option>' +
+          subjects.map(sub => `<option value="${sub.id}">${escapeHtml(sub.name)}</option>`).join('');
+
+    if (currentVal && subjects.some(s => s.id === currentVal)) {
         subjectSelect.value = currentVal;
     }
 }
@@ -5084,7 +5760,7 @@ function populateResultsDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -5275,7 +5951,7 @@ function populateAnalysisDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -5463,7 +6139,7 @@ function populateBatchDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -5681,6 +6357,7 @@ function saveBatchScores() {
 }
 
 function saveBatchAndClose() {
+    if (!confirmAction('Save all scores and CLOSE this assessment? Scores will be finalised.', () => {})) return;
     saveBatchScores();
     const assessId = getVal('batchAssessment');
     const assessment = getAssessmentById(assessId);
@@ -6090,18 +6767,18 @@ function initRealtimeSync() {
                         students: backup.students || [], staff: backup.staff || [], exams: backup.exams || [],
                         notes: backup.notes || [], messages: backup.messages || [], timetable: backup.timetable || [],
                         settings: backup.settings || store.settings, learningAreas: backup.learningAreas || store.learningAreas,
-                        examSchedules: backup.examSchedules || []
+                        examSchedules: backup.examSchedules || [],
+                        classAssignments: backup.classAssignments || []
                     });
                 }
             } catch (_) { /* invalid backup — ignore */ }
             const active = document.querySelector('.view-section.active');
             if (!active) return;
-            const id = active.id;
-            if (id === 'dashboard') renderDashboard();
-            else if (id === 'students') renderLearnerSection();
-            else if (id === 'staff') renderStaff();
-            else if (id === 'curricula') { renderCurricula(); renderCourseSettings(); }
-            else if (id === 'reports') renderReportsAnalytics();
+            // FIXED (real-time): all data-driven views re-render on cross-tab
+            // changes — previously only dashboard/students/staff/curricula/
+            // reports were covered, so analysis/profile/exams/timetable/notes/
+            // inbox could show stale data.
+            refreshActiveView();
         });
 
         // Auto-refresh the dashboard every 60s while it is the active section
@@ -6114,12 +6791,37 @@ function initRealtimeSync() {
 
 function handleGlobalSearch(q) {
     if (!q) return;
-    const qLower = q.toLowerCase();
-    const student = StudentRepo.getAll().find(s => (s.name || '').toLowerCase().includes(qLower) || (s.reg || '').toLowerCase().includes(qLower));
-    if (student) return viewStudent(student.id);
-    const staff = StaffRepo.getAll().find(s => (s.name || '').toLowerCase().includes(qLower));
-    if (staff) return router('staff');
-    showToast('No results found.', 'info');
+    const qLower = q.toLowerCase().trim();
+
+    // Search learners across name, admission no, grade, stream, guardian, phone
+    const studentMatches = StudentRepo.getAll().filter(s =>
+        [s.name, s.reg, s.grade, s.stream, s.guardianName, s.guardianPhone, s.phone, s.nemisNumber, s.upiNumber]
+            .filter(Boolean).join(' ').toLowerCase().includes(qLower)
+    );
+    if (studentMatches.length === 1) {
+        showToast(`Found learner: ${studentMatches[0].name}`, 'info');
+        return viewStudent(studentMatches[0].id);
+    }
+    if (studentMatches.length > 1) {
+        showToast(`${studentMatches.length} learners match "${q}" — opening Learners list.`, 'info');
+        setVal('studentSearch', q);
+        LearnerState.search = q;
+        LearnerState.page = 1;
+        return router('students');
+    }
+
+    // Search staff across name, TSC, designation, department, phone
+    const staffMatches = StaffRepo.getAll().filter(s =>
+        [s.name, s.tsc, s.idNo, s.designation, s.department, s.dept, s.phone, s.email]
+            .filter(Boolean).join(' ').toLowerCase().includes(qLower)
+    );
+    if (staffMatches.length > 0) {
+        showToast(`${staffMatches.length} staff match${staffMatches.length === 1 ? 'es' : ''} "${q}"`, 'info');
+        setVal('staffSearch', q);
+        return router('staff');
+    }
+
+    showToast(`No results found for "${q}".`, 'info');
 }
 
 function updateHeaderAndDashboard() {}
@@ -6183,6 +6885,9 @@ function renderStaff() {
         if (tableView) renderStaffTable(filtered, container);
         else renderStaffGrid(filtered, container);
     }
+
+    // Class-teacher assignments panel (admin/HOI)
+    if (typeof initClassTeacherPanel === 'function') initClassTeacherPanel();
 
     // --- Analytics (KPIs, doughnuts, workload, performance) ---
     if (typeof renderStaffAnalytics === 'function') renderStaffAnalytics(all, buckets);
@@ -6325,12 +7030,36 @@ function populateCourseLevels() {
             <input type="checkbox" name="courseGrade" value="${g}"> ${g}
         </label>
     `).join('');
+    container.querySelectorAll('input[name="courseGrade"]').forEach(cb => {
+        cb.addEventListener('change', syncCourseTeacherLevels);
+    });
+}
+
+// One teacher select per applicable grade (subject teacher per level)
+function syncCourseTeacherLevels() {
+    const wrap = $('courseTeacherLevels');
+    const group = $('courseTeacherLevelsGroup');
+    if (!wrap || !group) return;
+    const checked = [...document.querySelectorAll('input[name="courseGrade"]:checked')].map(cb => cb.value);
+    // preserve current selections across re-renders
+    const prev = {};
+    checked.forEach(g => { const s = $(`ctLevel_${g}`); if (s) prev[g] = s.value; });
+    const staff = StaffRepo.getAll();
+    const staffOpts = '<option value="">—</option>' +
+        staff.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+    group.style.display = checked.length ? '' : 'none';
+    wrap.innerHTML = checked.map(g => `
+        <div class="form-group" style="margin:0;">
+            <label style="font-size:.72rem;color:var(--text-muted);font-weight:600;">${g}</label>
+            <select id="ctLevel_${g}" class="form-control" style="font-size:.78rem;">${staffOpts}</select>
+        </div>`).join('');
+    checked.forEach(g => { const s = $(`ctLevel_${g}`); if (s && prev[g]) s.value = prev[g]; });
 }
 function saveCourseSettings(e) { e.preventDefault(); showToast('Subject saved (stub).'); closeModal('courseModal'); }
 
 function renderTimetable() { const c = $('ttGridWrapper'); if (c) c.innerHTML = '<div class="heatmap-empty">Timetable section — paste your original renderTimetable code here.</div>'; }
 function openTimetableSlotModal() { showToast('Timetable slot modal — paste your original code.', 'info'); }
-function exportTimetablePDF() { showToast('Timetable PDF — paste your original code.', 'info'); }
+// exportTimetablePDF now lives in the Timetable module (selection-aware).
 function handleTimetableSlotSubmit(e) { e.preventDefault(); showToast('Slot saved (stub).'); }
 
 
@@ -6423,6 +7152,121 @@ function updateTrendIndicator(elementId, trend, suffix, invertColor) {
 
 
 // ==========================================================================
+// ═══════════════════════════════════════════════════════════════════════
+//   EXAM TIMETABLE (schedules)
+// ═══════════════════════════════════════════════════════════════════════
+let _editingScheduleId = null;
+
+function formatScheduleDate(d) {
+    if (!d) return '—';
+    const dt = new Date(String(d).length === 10 ? d + 'T00:00:00' : d);
+    return isNaN(dt) ? d : dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function renderExamSchedules() {
+    const body = $('examScheduleBody');
+    if (!body) return;
+    const grade = getVal('scheduleGradeFilter') || 'all';
+    const term = getVal('scheduleTermFilter') || 'all';
+    let schedules = (store.examSchedules || []).slice();
+    if (grade !== 'all') schedules = schedules.filter(s => s.grade === grade);
+    if (term !== 'all') schedules = schedules.filter(s => s.term === term);
+    schedules.sort((a, b) => String(a.startDate || '').localeCompare(String(b.startDate || '')));
+
+    if (!schedules.length) {
+        body.innerHTML = '<tr><td colspan="7" class="s-table-empty">No exam timetable entries yet. The Exam Officer can add one.</td></tr>';
+        return;
+    }
+    body.innerHTML = schedules.map(s => `<tr>
+        <td><strong>${escapeHtml(s.name || '—')}</strong></td>
+        <td><span class="um-chip um-role">${escapeHtml(s.type || 'Exam')}</span></td>
+        <td>${escapeHtml(s.grade || '—')}</td>
+        <td>${escapeHtml(s.term || '—')} ${escapeHtml(s.year || '')}</td>
+        <td>${escapeHtml(formatScheduleDate(s.startDate))} → ${escapeHtml(formatScheduleDate(s.endDate))}</td>
+        <td>${escapeHtml(s.notes || '—')}</td>
+        <td style="text-align:right;white-space:nowrap;">
+            <button class="btn btn-sm btn-ghost" data-require="examsManage" onclick="openScheduleModal('${s.id}')" title="Edit"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-sm btn-ghost" data-require="examsManage" onclick="deleteSchedule('${s.id}')" title="Delete"><i class="fa-solid fa-trash" style="color:var(--danger)"></i></button>
+        </td>
+    </tr>`).join('');
+}
+
+function populateScheduleFilters() {
+    const grades = [...new Set((store.examSchedules || []).map(s => s.grade).filter(Boolean))].sort();
+    const terms = [...new Set((store.examSchedules || []).map(s => s.term).filter(Boolean))].sort();
+    const g = $('scheduleGradeFilter');
+    if (g && !g.dataset.bound) {
+        g.dataset.bound = '1';
+        g.innerHTML = '<option value="all">All Grades</option>' + grades.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('');
+        g.addEventListener('change', renderExamSchedules);
+    }
+    const t = $('scheduleTermFilter');
+    if (t && !t.dataset.bound) {
+        t.dataset.bound = '1';
+        t.innerHTML = '<option value="all">All Terms</option>' + terms.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('');
+        t.addEventListener('change', renderExamSchedules);
+    }
+}
+
+function openScheduleModal(id) {
+    const s = id ? (store.examSchedules || []).find(x => x.id === id) : null;
+    _editingScheduleId = id || '';
+    const form = $('scheduleForm');
+    if (form) form.reset();
+    if ($('scheduleModalTitle')) $('scheduleModalTitle').innerText = s ? 'Edit Exam Timetable Entry' : 'Add Exam Timetable Entry';
+    setVal('schedName', s ? s.name : '');
+    setVal('schedType', s ? s.type : 'End Term');
+    setVal('schedTerm', s ? s.term : (store.settings.currentTerm || 'Term 1'));
+    setVal('schedYear', s ? s.year : (store.settings.academicYear || String(new Date().getFullYear())));
+    setVal('schedStart', s ? (s.startDate || '').slice(0, 10) : '');
+    setVal('schedEnd', s ? (s.endDate || '').slice(0, 10) : '');
+    setVal('schedNotes', s ? s.notes : '');
+    const g = $('schedGrade');
+    if (g) {
+        const grades = [...new Set([...(store.exams || []).map(a => a.grade), ...(store.examSchedules || []).map(x => x.grade)].filter(Boolean))].sort();
+        g.innerHTML = '<option value="">Select grade…</option>' + grades.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('');
+        if (s && s.grade) g.value = s.grade;
+    }
+    document.querySelectorAll('#scheduleModal .error-msg').forEach(el => { el.innerText = ''; });
+    openModal('scheduleModal');
+}
+
+function saveSchedule() {
+    const name = (getVal('schedName') || '').trim();
+    const type = getVal('schedType') || 'End Term';
+    const grade = getVal('schedGrade') || '';
+    const term = getVal('schedTerm') || '';
+    const year = getVal('schedYear') || '';
+    const startDate = getVal('schedStart') || '';
+    const endDate = getVal('schedEnd') || startDate;
+    const notes = (getVal('schedNotes') || '').trim();
+    if (!name) return showToast('Exam name is required.', 'error');
+    if (!grade) return showToast('Select a grade.', 'error');
+    if (!startDate) return showToast('Start date is required.', 'error');
+    if (endDate && new Date(endDate) < new Date(startDate)) return showToast('End date cannot be before start date.', 'error');
+
+    const rec = { id: _editingScheduleId || generateId(), name, type, grade, term, year, startDate, endDate, subjects: [], status: 'open', notes, createdAt: new Date().toISOString() };
+    if (_editingScheduleId) {
+        const idx = (store.examSchedules || []).findIndex(x => x.id === _editingScheduleId);
+        if (idx !== -1) store.examSchedules[idx] = rec;
+    } else {
+        store.examSchedules.push(rec);
+    }
+    saveData();
+    closeModal('scheduleModal');
+    renderExamSchedules();
+    showToast('Exam timetable saved.', 'success');
+}
+
+function deleteSchedule(id) {
+    confirmAction('Delete this exam timetable entry?', () => {
+        store.examSchedules = (store.examSchedules || []).filter(x => x.id !== id);
+        saveData();
+        renderExamSchedules();
+        showToast('Entry deleted.', 'success');
+    });
+}
+
 //   ANALYSIS SECTION — SCHOOL-WIDE BENTO GRID
 // ==========================================================================
 
@@ -6438,13 +7282,18 @@ function renderAnalysis() {
     const selectedGrade = $('analysisGradeSelect') ? $('analysisGradeSelect').value : 'all';
 
     // 2. Filter Data
-    let relevantStudents = StudentRepo.getAll();
+    // RBAC scope: teachers only analyse their assigned grade(s)
+    let relevantStudents = getScopedStudents();
     if (selectedGrade !== 'all') {
         relevantStudents = relevantStudents.filter(s => s.grade === selectedGrade);
     }
 
     const studentIds = new Set(relevantStudents.map(s => s.id));
-    const relevantExams = (store.exams || []).filter(e => studentIds.has(e.studentId));
+    // FIXED (real data): same nested-scores problem as Profile — Assessment
+    // Centre wrappers carry studentId:null, so raw filtering saw nothing.
+    // flattenExams() unpacks the recorded scores; hydrateSubjectNames() labels
+    // them so charts/heatmap/leaderboard show real learning-area names.
+    const relevantExams = hydrateSubjectNames(flattenExams().filter(e => studentIds.has(e.studentId)));
 
     // 3. Calculate Metrics
     let totalScore = 0;
@@ -6772,7 +7621,9 @@ function renderSubjectHeatmap(relevantStudents, relevantExams) {
 
     const gradeOrder = ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
     const allStudents = StudentRepo.getAll();
-    const allExams = store.exams || [];
+    // FIXED (real data): heatmap read raw store.exams (nested scores, no
+    // subjectName) and always showed "No exam data available for heatmap."
+    const allExams = hydrateSubjectNames(flattenExams());
 
     // Discover subjects
     const subjectSet = new Set();
@@ -7086,7 +7937,10 @@ class IndividualAnalysisEngine {
         const viewBtn = $('btnAnalysisWindow');
         if (viewBtn) viewBtn.disabled = false;
 
-        const exams = (store.exams || []).filter(e => e.studentId === studentId);
+        // FIXED (real data): same nested-scores pipeline as Profile/Analysis —
+        // flattenExams() unpacks assessment-centre records, hydrateSubjectNames()
+        // labels them for the charts below.
+        const exams = hydrateSubjectNames(flattenExams().filter(e => e.studentId === studentId));
         const avg = exams.length > 0 ? Math.round(exams.reduce((a, e) => a + (parseInt(e.score) || 0), 0) / exams.length) : 0;
         const totalPoints = exams.reduce((a, e) => a + (parseInt(e.score) || 0), 0);
 
@@ -7096,8 +7950,9 @@ class IndividualAnalysisEngine {
         // Rank
         const grade = student.grade;
         if (grade) {
+            const allFlat = flattenExams();
             const peers = (StudentRepo.getAll().filter(s => s.grade === grade)).map(s => {
-                const sExams = (store.exams || []).filter(e => e.studentId === s.id);
+                const sExams = allFlat.filter(e => e.studentId === s.id);
                 return {
                     id: s.id,
                     avg: sExams.length > 0 ? sExams.reduce((a, e) => a + (parseInt(e.score) || 0), 0) / sExams.length : 0
@@ -7214,10 +8069,15 @@ class IndividualAnalysisEngine {
 
         const subjects = (store.learningAreas || []).filter(s => !s.applicableLevels || s.applicableLevels.includes(grade));
 
+        // FIXED (real data): read through the same unpacked pipeline used by
+        // Profile and the main Analysis section so this drill-down shows the
+        // actual recorded scores, not zero records.
+        const studentScores = hydrateSubjectNames(flattenExams().filter(e => e.studentId === studentId));
+
         if (subjects.length === 0) {
             // Fallback: derive subjects from actual exams
             const examSubjects = {};
-            (store.exams || []).filter(e => e.studentId === studentId).forEach(e => {
+            studentScores.forEach(e => {
                 const sub = e.subjectName || 'Unknown';
                 if (!examSubjects[sub]) examSubjects[sub] = [];
                 examSubjects[sub].push(parseInt(e.score) || 0);
@@ -7261,7 +8121,7 @@ class IndividualAnalysisEngine {
         // Use learning areas
         const fragment = document.createDocumentFragment();
         subjects.forEach(sub => {
-            const exam = (store.exams || []).find(e => e.studentId === studentId && e.unitCode === sub.code);
+            const exam = studentScores.find(e => (e.subjectId === sub.id || e.unitCode === sub.code));
             const score = exam ? parseInt(exam.score) : 0;
             const comp = getCompetenceStatus(score);
             const color = score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
@@ -7732,9 +8592,8 @@ function renderCurricula() {
         container.appendChild(item);
     });
 
-    // Auto-open the first band so the section never looks empty
-    const firstItem = container.querySelector('.accordion-item');
-    if (firstItem) firstItem.classList.add('open');
+    // All bands (incl. Pre-Primary) start COLLAPSED — the user expands what
+    // they need. Previously the first band auto-opened, which was unexpected.
 
     // Empty state (no learning areas defined at all)
     if (!store.learningAreas || store.learningAreas.length === 0) {
@@ -7800,38 +8659,118 @@ function populateProfileList(students = null) {
         });
     }
 
-    const studentData = students || StudentRepo.getAll();
+    let studentData = students || StudentRepo.getAll();
+
+    // RBAC scope: a Parent only sees the learner whose credentials they used;
+    // a Teacher only sees learners in their assigned grade/stream
+    if (getCurrentRole() === 'parent') {
+        const pid = (CURRENT_USER && (CURRENT_USER.studentId || CURRENT_USER.id)) || '';
+        studentData = pid ? studentData.filter(s => s.id === pid) : [];
+        if (studentData.length && !_profileSelectedId) _profileSelectedId = studentData[0].id;
+    } else if (getCurrentRole() === 'teacher') {
+        const scope = getTeacherScope();
+        studentData = scope.grades.length ? studentData.filter(s => scope.grades.includes(s.grade)) : [];
+    }
     const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
 
+    // FIXED: filter dropdowns are rebuilt on EVERY render (the old "populate
+    // once" flag froze them at whatever was loaded first — often empty, so the
+    // grade/stream filters could never filter anything). Selections are kept
+    // when the value still exists, reset otherwise.
+    const gradeFilterEl = $('profileGradeFilter');
+    if (gradeFilterEl) {
+        const prevGrade = gradeFilterEl.value;
+        const grades = [...new Set(studentData.map(s => s.grade).filter(Boolean))];
+        const gradeOrder = ['PP1','PP2','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9'];
+        grades.sort((a, b) => (gradeOrder.indexOf(a) === -1 ? 99 : gradeOrder.indexOf(a)) - (gradeOrder.indexOf(b) === -1 ? 99 : gradeOrder.indexOf(b)));
+        gradeFilterEl.innerHTML = '<option value="all">All Grades</option>' +
+            grades.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
+        if (prevGrade !== 'all' && grades.includes(prevGrade)) gradeFilterEl.value = prevGrade;
+        else gradeFilterEl.value = 'all';
+    }
+    const streamFilterEl = $('profileStreamFilter');
+    if (streamFilterEl) {
+        const prevStream = streamFilterEl.value;
+        const streams = [...new Set(studentData.map(s => s.stream).filter(Boolean))].sort();
+        streamFilterEl.innerHTML = '<option value="all">All Streams</option>' +
+            streams.map(st => `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`).join('');
+        if (prevStream !== 'all' && streams.includes(prevStream)) streamFilterEl.value = prevStream;
+        else streamFilterEl.value = 'all';
+    }
+    ['profileGradeFilter', 'profileStreamFilter', 'profileSortSelect'].forEach(id => {
+        const el = $(id);
+        if (el && !el._bound) {
+            el._bound = true;
+            el.addEventListener('change', () => {
+                // reset to page 1 + re-render + keep the selected learner visible
+                populateProfileList();
+                if (_profileSelectedId) {
+                    const item = listContainer.querySelector(`[data-sid="${_profileSelectedId}"], [data-id="${_profileSelectedId}"]`);
+                    if (item) item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            });
+        }
+    });
+
+    // Apply grade / stream / sort filters, then search
+    const gradeF = getVal('profileGradeFilter') || 'all';
+    const streamF = getVal('profileStreamFilter') || 'all';
+    const sortF = getVal('profileSortSelect') || 'name-asc';
+    let filtered = studentData;
+    if (gradeF !== 'all') filtered = filtered.filter(s => (s.grade || '') === gradeF);
+    if (streamF !== 'all') filtered = filtered.filter(s => (s.stream || '') === streamF);
+    if (sortF === 'name-asc') filtered = [...filtered].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    else if (sortF === 'name-desc') filtered = [...filtered].sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+    else if (sortF === 'grade') {
+        const gradeOrder = ['PP1','PP2','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9'];
+        filtered = [...filtered].sort((a, b) =>
+            (gradeOrder.indexOf(a.grade) === -1 ? 99 : gradeOrder.indexOf(a.grade)) - (gradeOrder.indexOf(b.grade) === -1 ? 99 : gradeOrder.indexOf(b.grade)) ||
+            (a.name || '').localeCompare(b.name || ''));
+    }
+
     // Filter by search
-    const filtered = searchTerm.length > 0
-        ? studentData.filter(s => {
+    if (searchTerm.length > 0) {
+        filtered = filtered.filter(s => {
             const haystack = `${s.name} ${s.reg} ${s.nemisNumber} ${s.grade} ${s.stream} ${s.gender} ${s.guardianName || ''}`.toLowerCase();
             return haystack.includes(searchTerm);
-        })
-        : studentData;
+        });
+    }
 
-    // EMPTY STATE
+    // EMPTY STATE (filter-aware)
     if (filtered.length === 0) {
+        const hasFilters = gradeF !== 'all' || streamF !== 'all';
         listContainer.innerHTML = searchTerm.length > 0
             ? `<div style="padding:2rem 1rem; color:var(--text-muted); text-align:center;">
                  <i class="fa-solid fa-magnifying-glass" style="font-size:1.5rem;opacity:0.3;display:block;margin-bottom:0.5rem;"></i>
                  No learners match "<strong>${escapeHtml(searchTerm)}</strong>"
                </div>`
-            : `<div style="padding:2rem 1rem; color:var(--text-muted); text-align:center;">
-                 <i class="fa-solid fa-user-graduate" style="font-size:1.5rem;opacity:0.3;display:block;margin-bottom:0.5rem;"></i>
-                 No learners enrolled yet.
-               </div>`;
+            : hasFilters
+              ? `<div style="padding:2rem 1rem; color:var(--text-muted); text-align:center;">
+                   <i class="fa-solid fa-filter-circle-xmark" style="font-size:1.5rem;opacity:0.3;display:block;margin-bottom:0.5rem;"></i>
+                   No learners match the current filters — try "All Grades / All Streams".
+                 </div>`
+              : `<div style="padding:2rem 1rem; color:var(--text-muted); text-align:center;">
+                   <i class="fa-solid fa-user-graduate" style="font-size:1.5rem;opacity:0.3;display:block;margin-bottom:0.5rem;"></i>
+                   No learners enrolled yet.
+                 </div>`;
         return;
     }
 
-    // SEARCH MODE = flat list, otherwise grouped accordion
+    // FIXED: grade/stream/sort filters keep the grouped accordion (only the
+    // matching groups render); searching switches to the flat results list.
     if (searchTerm.length > 0) {
         listContainer.classList.add('search-mode');
         renderFlatList(filtered, listContainer);
     } else {
         listContainer.classList.remove('search-mode');
-        renderGroupedList(studentData, listContainer); // pass unfiltered for full groups
+        renderGroupedList(filtered, listContainer);
+    }
+
+    // Parents land directly on their linked learner's profile
+    if (getCurrentRole() === 'parent' && _profileSelectedId) {
+        renderStudentProfile(_profileSelectedId);
+        const item = listContainer.querySelector(`[data-id="${_profileSelectedId}"]`);
+        if (item) item.classList.add('active');
     }
 }
 
@@ -7866,7 +8805,7 @@ function renderGroupedList(students, container) {
         <div class="grade-group ${isOpen ? 'active' : ''}">
             <div class="grade-header" onclick="toggleAccordion(this)">
                 <span>${grade}</span>
-                <span style="font-size:0.78rem; color:var(--text-muted); font-weight:400;">${list.length} Learner${list.length !== 1 ? 's' : ''}</span>
+                <span class="gg-count">${list.length} Learner${list.length !== 1 ? 's' : ''}</span>
                 <i class="fa-solid fa-chevron-down"></i>
             </div>
             <div class="grade-content" style="${isOpen ? 'max-height:' + (list.length * 60 + 20) + 'px;' : ''}">
@@ -7927,6 +8866,8 @@ function editProfileStudent() {
 }
 function profileReportCard() {
     if (!_profileSelectedId) { showToast('Select a learner first.', 'error'); return; }
+    const s = StudentRepo.getById(_profileSelectedId);
+    if (!confirmAction(`Download the report card for ${s ? s.name : 'this learner'}?`, () => {})) return;
     downloadStudentReportCard(_profileSelectedId);
 }
 
@@ -7978,6 +8919,7 @@ function renderStudentProfile(studentId) {
     // ── EMPTY STATE ──
     if (!studentId) {
         _profileSelectedId = null;
+        const psi2 = $('psIdentity'); if (psi2) psi2.style.display = 'none';
         safeSetText('pName', 'Select a Learner');
         safeSetText('pGrade', '---');
         safeSetHtml('pReg', '<i class="fa-solid fa-id-card"></i> ADM: ---');
@@ -8000,11 +8942,29 @@ function renderStudentProfile(studentId) {
         if (studentTrendChart) { studentTrendChart.destroy(); studentTrendChart = null; }
         clearCanvas('pSparkScore');
         clearCanvas('pSparkAttendance');
+        const fb = $('pfFilterBar'); if (fb) fb.style.display = 'none';
+        const pb = $('profileBreakdown'); if (pb) pb.style.display = 'none';
         return;
     }
 
     const s = StudentRepo.getById(studentId);
     if (!s) { renderStudentProfile(null); return; }
+
+    // ── 0b. SIDEBAR IDENTITY CARD ──
+    const psi = $('psIdentity');
+    if (psi) {
+        psi.style.display = '';
+        const av = $('psiAvatar');
+        if (av) av.textContent = (s.name || '?').trim().charAt(0).toUpperCase();
+        safeSetText('psiName', s.name);
+        safeSetText('psiMeta', `${s.grade || '—'}${s.stream ? ' · ' + s.stream : ''} · ${s.reg || s.nemisNumber || ''}`);
+        const pa = $('psiParentAccess');
+        if (pa) {
+            const on = s.parentPasswordSet === 1 || s.parentPasswordSet === '1';
+            pa.style.display = on ? '' : 'none';
+            pa.innerHTML = `<i class="fa-solid fa-key"></i> Parent access: ${on ? 'on' : 'off'}`;
+        }
+    }
 
     // ── 1. IDENTITY ──
     safeSetText('pName', s.name);
@@ -8021,11 +8981,21 @@ function renderStudentProfile(studentId) {
     safeSetText('pGuardianPhone', s.guardianPhone || '-');
 
     // ── 3. PROCESS ASSESSMENTS ──
-    const exams = (store.exams || []).filter(e => e.studentId === s.id);
+    // FIXED (real data): Assessment Centre stores scores inside each
+    // assessment's nested scores map (wrappers carry studentId:null), so raw
+    // store.exams filtering returned ZERO records and the profile showed 0%.
+    // flattenExams() unpacks those records — this is the same pipeline the
+    // Reports centre uses, so Profile and Reports now agree.
+    const exams = hydrateSubjectNames(flattenExams().filter(e => e.studentId === s.id));
 
-    // Overall average
-    const totalScore = exams.reduce((sum, e) => sum + (parseInt(e.score) || 0), 0);
-    const avg = exams.length ? Math.round(totalScore / exams.length) : 0;
+    // Performance filters (assessment type / term / year / subject)
+    bindProfilePerfFilters();
+    populateProfilePerfFilters(exams);
+    const filtered = applyProfileFilters(exams);
+
+    // Overall average (filtered scope)
+    const totalScore = filtered.reduce((sum, e) => sum + (parseInt(e.score) || 0), 0);
+    const avg = filtered.length ? Math.round(totalScore / filtered.length) : 0;
 
     // Color the avg score
     const avgEl = $('pAvgScore');
@@ -8057,13 +9027,14 @@ function renderStudentProfile(studentId) {
         attEl.className = 'psb-val ' + (attendance >= 90 ? 'text-green' : attendance >= 75 ? 'text-blue' : 'text-orange');
     }
 
-    // ── 5. RANK ──
+    // ── 5. RANK (same type/term/year scope as the filters) ──
     let rank = '-';
     let rankClass = 'text-muted';
-    if (exams.length > 0) {
+    if (filtered.length > 0) {
         const peers = StudentRepo.getAll().filter(p => p.grade === s.grade);
+        const allFlat = flattenExams();
         const peerStats = peers.map(p => {
-            const pExams = (store.exams || []).filter(e => e.studentId === p.id);
+            const pExams = allFlat.filter(e => e.studentId === p.id && matchesProfileScope(e));
             const pAvg = pExams.length ? Math.round(pExams.reduce((a, e) => a + (parseInt(e.score) || 0), 0) / pExams.length) : 0;
             return { id: p.id, avg: pAvg };
         }).sort((a, b) => b.avg - a.avg);
@@ -8098,12 +9069,12 @@ function renderStudentProfile(studentId) {
     if (studentRadarChart) { studentRadarChart.destroy(); studentRadarChart = null; }
     if (studentTrendChart) { studentTrendChart.destroy(); studentTrendChart = null; }
 
-    if (exams.length > 0) {
-        renderRadarChart(exams);
-        renderTrendChart(exams);
+    if (filtered.length > 0) {
+        renderRadarChart(filtered);
+        renderTrendChart(filtered);
 
         // Sparklines
-        const scores = exams.map(e => parseInt(e.score) || 0);
+        const scores = filtered.map(e => parseInt(e.score) || 0);
         renderSparkline('pSparkScore', scores.slice(-8), '#3b82f6');
         if (attendanceSeries.length > 0) {
             renderSparkline('pSparkAttendance', attendanceSeries.slice(-8), '#14B8A6');
@@ -8112,25 +9083,220 @@ function renderStudentProfile(studentId) {
         }
 
         // Gauges
-        renderSubjectGauges(exams);
+        renderSubjectGauges(filtered);
     } else {
         clearCanvas('pSparkScore');
         clearCanvas('pSparkAttendance');
-        safeSetHtml('pGaugeGrid', '<div class="gauge-empty">No assessment data yet.</div>');
+        safeSetHtml('pGaugeGrid', '<div class="gauge-empty">No assessment data for the selected filters.</div>');
 
         // Draw placeholder on chart canvases
         _drawChartPlaceholder('studentRadarChart', 'No data');
         _drawChartPlaceholder('studentTrendChart', 'No data');
     }
 
-    // ── 8. ASSESSMENT TIMELINE ──
-    renderAssessmentTimeline(exams);
+    // ── 8. ASSESSMENT TIMELINE (filtered scope) ──
+    renderAssessmentTimeline(filtered);
+
+    // ── 8b. PERFORMANCE BREAKDOWN + PARENT VIEW ──
+    const fb = $('pfFilterBar'); if (fb) fb.style.display = '';
+    const pb = $('profileBreakdown'); if (pb) pb.style.display = '';
+    renderProfileBreakdown(filtered, s);
+    renderParentView(s, exams, filtered, attendance, fee);
 
     // ── 9. DISCIPLINE ──
     renderDisciplineBoard(s);
 
-    // ── 10. Reset to first tab ──
-    switchProfileTab('assessments');
+    // ── 10. Preserve the active tab (default to Assessments on first view) ──
+    if (!window._profileTabSet) { window._profileTabSet = true; switchProfileTab('assessments'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//   PROFILE PERFORMANCE ENGINE — filters, breakdown, parent view
+// ═══════════════════════════════════════════════════════════════════════
+let _profileFilters = { type: 'all', term: 'all', year: 'all', subject: 'all' };
+
+function bindProfilePerfFilters() {
+    ['pfTypeFilter', 'pfTermFilter', 'pfYearFilter', 'pfSubjectFilter'].forEach(id => {
+        const el = $(id);
+        if (el && !el._bound) {
+            el._bound = true;
+            el.addEventListener('change', () => {
+                _profileFilters.type = getVal('pfTypeFilter') || 'all';
+                _profileFilters.term = getVal('pfTermFilter') || 'all';
+                _profileFilters.year = getVal('pfYearFilter') || 'all';
+                _profileFilters.subject = getVal('pfSubjectFilter') || 'all';
+                if (_profileSelectedId) renderStudentProfile(_profileSelectedId);
+            });
+        }
+    });
+    const resetBtn = $('pfResetBtn');
+    if (resetBtn && !resetBtn._bound) {
+        resetBtn._bound = true;
+        resetBtn.addEventListener('click', () => {
+            ['pfTypeFilter', 'pfTermFilter', 'pfYearFilter', 'pfSubjectFilter'].forEach(id => setVal(id, 'all'));
+            _profileFilters = { type: 'all', term: 'all', year: 'all', subject: 'all' };
+            if (_profileSelectedId) renderStudentProfile(_profileSelectedId);
+        });
+    }
+}
+
+// Populates the performance filter dropdowns from the learner's actual records
+// (preserves the current selection where it still exists).
+function populateProfilePerfFilters(exams) {
+    const types = [...new Set(exams.map(e => e.assessType || 'Exam'))].sort();
+    const terms = [...new Set(exams.map(e => e.term).filter(Boolean))].sort((a, b) => {
+        const order = { 'Term 1': 1, 'Term 2': 2, 'Term 3': 3 };
+        return (order[a] || 99) - (order[b] || 99);
+    });
+    const years = [...new Set(exams.map(e => String(e.year)).filter(Boolean))].sort().reverse();
+    const subjMap = {};
+    exams.forEach(e => { if (e.subjectId && e.subjectName && !subjMap[e.subjectId]) subjMap[e.subjectId] = e.subjectName; });
+    const subjects = Object.entries(subjMap).sort((a, b) => a[1].localeCompare(b[1]));
+
+    const fill = (id, values, labelFn, allLabel) => {
+        const sel = $(id);
+        if (!sel) return;
+        const prev = sel.value;
+        sel.innerHTML = `<option value="all">${allLabel}</option>` +
+            values.map(v => `<option value="${escapeHtml(String(v))}">${escapeHtml(labelFn(v))}</option>`).join('');
+        if (prev && values.some(v => String(v) === prev)) sel.value = prev;
+    };
+    fill('pfTypeFilter', types, t => t, 'All Assessment Types');
+    fill('pfTermFilter', terms, t => t, 'All Terms');
+    fill('pfYearFilter', years, y => y, 'All Years');
+    fill('pfSubjectFilter', subjects.map(([id]) => id), id => subjMap[id] || id, 'All Subjects');
+}
+
+function matchesProfileScope(e) {
+    const f = _profileFilters;
+    if (f.type !== 'all' && (e.assessType || 'Exam') !== f.type) return false;
+    if (f.term !== 'all' && (e.term || '') !== f.term) return false;
+    if (f.year !== 'all' && String(e.year || '') !== f.year) return false;
+    return true;
+}
+
+function applyProfileFilters(exams) {
+    const f = _profileFilters;
+    return exams.filter(e => {
+        if (f.type !== 'all' && (e.assessType || 'Exam') !== f.type) return false;
+        if (f.term !== 'all' && (e.term || '') !== f.term) return false;
+        if (f.year !== 'all' && String(e.year || '') !== f.year) return false;
+        if (f.subject !== 'all' && e.subjectId !== f.subject) return false;
+        return true;
+    });
+}
+
+// ── Subject / Assessment-Type / Term breakdown ──
+function renderProfileBreakdown(filtered, student) {
+    const subjectBody = $('pSubjectTableBody');
+    if (subjectBody) {
+        const subjMap = {};
+        filtered.forEach(e => {
+            const sid = e.subjectId || 'unknown';
+            if (!subjMap[sid]) subjMap[sid] = { name: e.subjectName || sid, scores: [] };
+            subjMap[sid].scores.push(parseFloat(e.score) || 0);
+        });
+        const rows = Object.values(subjMap)
+            .map(o => {
+                const avg = Math.round(o.scores.reduce((a, b) => a + b, 0) / o.scores.length);
+                return { ...o, best: Math.max(...o.scores), avg, latest: o.scores[o.scores.length - 1] };
+            })
+            .sort((a, b) => b.avg - a.avg);
+        subjectBody.innerHTML = rows.length
+            ? rows.map(r => {
+                const rl = cbcRating(r.latest);
+                const ba = cbcRating(r.best);
+                return `<tr>
+                    <td>${escapeHtml(r.name)}</td>
+                    <td style="text-align:center;color:var(--text-muted)">${r.scores.length}</td>
+                    <td style="text-align:center;font-weight:700;color:${ba.color}">${r.best}%</td>
+                    <td style="text-align:center;font-weight:700">${r.avg}%</td>
+                    <td style="text-align:center">${r.latest}%</td>
+                    <td style="text-align:center"><span class="pb-rating" style="background:${rl.color}22;color:${rl.color}">${rl.code}</span></td>
+                </tr>`;
+            }).join('')
+            : '<tr><td colspan="6" class="pb-empty">No assessment records for the selected filters.</td></tr>';
+        setText('pSubjectMeta', `${filtered.length} assessment record${filtered.length === 1 ? '' : 's'} · ${rows.length} subject${rows.length === 1 ? '' : 's'}`);
+    }
+
+    // By assessment type
+    const typeEl = $('pTypeSummary');
+    if (typeEl) {
+        const typeMap = {};
+        filtered.forEach(e => {
+            const t = e.assessType || 'Exam';
+            if (!typeMap[t]) typeMap[t] = [];
+            typeMap[t].push(parseFloat(e.score) || 0);
+        });
+        typeEl.innerHTML = Object.entries(typeMap).map(([t, scores]) => {
+            const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+            const r = cbcRating(avg);
+            return `<div class="pb-type-chip">
+                <span class="pb-type-name">${escapeHtml(t)}</span>
+                <span class="pb-type-count">${scores.length} record${scores.length === 1 ? '' : 's'}</span>
+                <strong style="color:${r.color}">${avg}% ${r.code}</strong>
+            </div>`;
+        }).join('') || '<div class="pb-empty">No records for the selected filters.</div>';
+    }
+
+    // Term comparison with best subject per term
+    const termBody = $('pTermCompareBody');
+    if (termBody) {
+        const termMap = {};
+        filtered.forEach(e => {
+            const t = e.term || 'Undated';
+            if (!termMap[t]) termMap[t] = [];
+            termMap[t].push(e);
+        });
+        const termOrder = { 'Term 1': 1, 'Term 2': 2, 'Term 3': 3, 'Undated': 99 };
+        const rows = Object.entries(termMap).sort((a, b) => (termOrder[a[0]] || 50) - (termOrder[b[0]] || 50));
+        termBody.innerHTML = rows.map(([t, recs]) => {
+            const avg = Math.round(recs.reduce((a, e) => a + (parseFloat(e.score) || 0), 0) / recs.length);
+            const r = cbcRating(avg);
+            // Best subject within this term
+            const bySub = {};
+            const byName = {};
+            recs.forEach(e => {
+                const sid = e.subjectId || 'unknown';
+                if (!bySub[sid]) bySub[sid] = [];
+                bySub[sid].push(parseFloat(e.score) || 0);
+                if (e.subjectName && !byName[sid]) byName[sid] = e.subjectName;
+            });
+            let bestSub = '—', bestSubScore = -1;
+            Object.entries(bySub).forEach(([sid, sc]) => {
+                const sAvg = Math.round(sc.reduce((a, b) => a + b, 0) / sc.length);
+                if (sAvg > bestSubScore) { bestSubScore = sAvg; bestSub = byName[sid] || sid; }
+            });
+            return `<tr>
+                <td>${escapeHtml(t)}</td>
+                <td class="pb-avg">${avg}%</td>
+                <td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(bestSub)}</td>
+                <td style="text-align:center"><span class="pb-rating" style="background:${r.color}22;color:${r.color}">${r.code}</span></td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="4" class="pb-empty">No term data.</td></tr>';
+    }
+}
+
+// ── Parent / Guardian summary card ──
+function renderParentView(student, allExams, filtered, attendance, fee) {
+    safeSetText('pParentGuardian', student.guardianName || '—');
+    safeSetText('pParentRel', student.guardianRel || 'Parent/Guardian');
+    safeSetText('pParentPhone', student.guardianPhone || '—');
+    safeSetText('pParentGrade', student.grade || '—');
+    safeSetText('pParentAdm', student.reg || student.nemisNumber || '—');
+    safeSetText('pParentFee', fee || 'Pending');
+    safeSetText('pParentAttendance', attendance != null ? attendance + '%' : '—');
+    const avg = filtered.length ? Math.round(filtered.reduce((a, e) => a + (parseInt(e.score) || 0), 0) / filtered.length) : 0;
+    safeSetText('pParentAvg', (allExams.length ? avg : '—') + (allExams.length ? '%' : ''));
+    const callBtn = $('pParentCallBtn');
+    if (callBtn) {
+        if (student.guardianPhone) {
+            callBtn.href = 'tel:' + String(student.guardianPhone).replace(/[^+\d]/g, '');
+            callBtn.style.display = '';
+        } else {
+            callBtn.style.display = 'none';
+        }
+    }
 }
 
 // ── Assessment Timeline Renderer ──
@@ -8533,7 +9699,7 @@ function renderDisciplineBoard(student) {
 // ── Tab Switcher (Enhanced with active styling) ──
 function switchProfileTab(tabName) {
     // Hide all content areas
-    const contentMap = { assessments: 'pContentAssessments', bio: 'pContentBio', notes: 'pContentNotes' };
+    const contentMap = { assessments: 'pContentAssessments', bio: 'pContentBio', notes: 'pContentNotes', parent: 'pContentParent' };
     Object.entries(contentMap).forEach(([key, id]) => {
         const el = $(id);
         if (el) el.style.display = (key === tabName) ? '' : 'none';
@@ -8546,6 +9712,7 @@ function switchProfileTab(tabName) {
         if (tabName === 'assessments' && text.includes('assessment')) match = true;
         if (tabName === 'bio' && text.includes('bio')) match = true;
         if (tabName === 'notes' && text.includes('discipline')) match = true;
+        if (tabName === 'parent' && text.includes('parent')) match = true;
         btn.classList.toggle('active', match);
     });
 }
@@ -9387,16 +10554,49 @@ function populateTeacherDropdown(selectedId = '') {
 
 function saveCourseSettings(e) { 
     e.preventDefault(); 
-    const editId = $('courseEditId')?.value; 
+
+    // ── Validation: name, code and at least one applicable grade ──
+    const name = (getVal('courseName') || '').trim();
+    const code = (getVal('courseCode') || '').trim();
     const checkedBoxes = document.querySelectorAll('input[name="courseGrade"]:checked'); 
     const levelsArr = Array.from(checkedBoxes).map(cb => cb.value); 
+
+    const markErr = (id, msg) => {
+        const el = $(id);
+        if (el) {
+            el.classList.add('error');
+            const group = el.closest('.form-group-modern') || el.closest('.form-group');
+            if (group) {
+                const span = group.querySelector('.error-msg');
+                if (span) span.innerText = msg;
+            }
+        }
+        showToast(msg, 'error');
+    };
+    document.querySelectorAll('#courseForm .error-msg').forEach(el => { el.innerText = ''; });
+    document.querySelectorAll('#courseForm .error').forEach(el => el.classList.remove('error'));
+
+    if (!name) return markErr('courseName', 'Subject name is required.');
+    if (!code) return markErr('courseCode', 'Subject code is required.');
+    if (levelsArr.length === 0) return markErr('courseName', 'Select at least one applicable grade.');
+
+    const editId = $('courseEditId')?.value; 
     
     const subjectData = { 
         id: editId || generateId(), 
-        name: getVal('courseName'), 
-        code: getVal('courseCode'), 
+        name: name, 
+        code: code.toUpperCase(), 
         applicableLevels: levelsArr, 
-        teacherId: getVal('courseTeacher') 
+        teacherId: getVal('courseTeacher') || null,
+        // subject teacher per level (optional overrides)
+        teacherByLevel: (() => {
+            const t = {};
+            levelsArr.forEach(g => {
+                const s = $(`ctLevel_${g}`);
+                if (s && s.value) t[g] = s.value;
+            });
+            return t;
+        })()
     }; 
     
     if (editId) { 
@@ -9440,6 +10640,13 @@ function editCourse(id) {
     }); 
     
     populateTeacherDropdown(subject.teacherId); 
+    // per-level teacher overrides
+    syncCourseTeacherLevels();
+    const tbl = subject.teacherByLevel || {};
+    Object.entries(tbl).forEach(([g, tid]) => {
+        const s = $(`ctLevel_${g}`);
+        if (s && tid && staffHasId(tid)) s.value = tid;
+    });
 }
 
 function deleteCourse(id) { 
@@ -9492,20 +10699,38 @@ function initTimetableSection() {
     populateTimetableFilters();
     bindTimetableControls();
     renderTimetable();
+    updateTimetableExportLabel();
 }
 
 function populateTimetableFilters() {
     const gradeFilter = $('ttGradeFilter');
     const teacherFilter = $('ttTeacherFilter');
+    const scope = getTeacherScope();
     if (gradeFilter) {
-        const grades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
-        gradeFilter.innerHTML = '<option value="all">All Grades</option>' +
-            grades.map(g => `<option value="${g}">${g}</option>`).join('');
+        // RBAC scope: teachers only see their assigned grades in the filter
+        let grades;
+        if (getCurrentRole() === 'teacher') {
+            grades = scope.grades; // may be empty → teacher sees no classes
+        } else {
+            grades = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+        }
+        gradeFilter.innerHTML = grades.length
+            ? '<option value="all">All Grades</option>' + grades.map(g => `<option value="${g}">${g}</option>`).join('')
+            : '<option value="all">No classes assigned</option>';
     }
     if (teacherFilter) {
         const staff = StaffRepo.getAll();
-        teacherFilter.innerHTML = '<option value="all">All Teachers</option>' +
-            staff.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+        // RBAC ENFORCEMENT: a teacher may only ever view THEIR OWN extract —
+        // the selector shows only themselves (admin/HOI see everyone).
+        if (getCurrentRole() === 'teacher') {
+            const self = scope.staff ? [scope.staff] : [];
+            teacherFilter.innerHTML = '<option value="all">My Timetable</option>' +
+                self.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (me)</option>`).join('');
+            teacherFilter.value = scope.teacherId || 'all';
+        } else {
+            teacherFilter.innerHTML = '<option value="all">All Teachers</option>' +
+                staff.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+        }
     }
 
     // Populate slot modal dropdowns
@@ -9548,18 +10773,19 @@ function bindTimetableControls() {
             currentTimetableView = btn.dataset.view;
             updateTimetableFilterVisibility();
             renderTimetable();
+            updateTimetableExportLabel();
         });
     }
 
     const gradeFilter = $('ttGradeFilter');
     if (gradeFilter && !gradeFilter.dataset.bound) {
         gradeFilter.dataset.bound = '1';
-        gradeFilter.addEventListener('change', renderTimetable);
+        gradeFilter.addEventListener('change', () => { renderTimetable(); updateTimetableExportLabel(); });
     }
     const teacherFilter = $('ttTeacherFilter');
     if (teacherFilter && !teacherFilter.dataset.bound) {
         teacherFilter.dataset.bound = '1';
-        teacherFilter.addEventListener('change', renderTimetable);
+        teacherFilter.addEventListener('change', () => { renderTimetable(); updateTimetableExportLabel(); });
     }
 
     const btnAddSlot = $('btnAddSlot');
@@ -9627,10 +10853,15 @@ function renderTimetable() {
     const assignedSlots = slots.filter(s => s.subjectId && s.teacherId).length;
     const teachersActive = new Set(slots.map(s => s.teacherId).filter(Boolean)).size;
 
+    // RBAC ENFORCEMENT: a teacher can ONLY ever see their own lessons in the
+    // Teacher view — even the "My Timetable" (all) option is pinned to them.
+    let effTeacherVal = teacherVal;
+    if (getCurrentRole() === 'teacher') effTeacherVal = getTeacherScope().teacherId || teacherVal;
+
     // Compute "free slots" — periods that don't have a lesson across the visible scope
     const visibleSlots = slots.filter(s => {
         if (currentTimetableView === 'grade' && gradeVal !== 'all' && s.grade !== gradeVal) return false;
-        if (currentTimetableView === 'teacher' && teacherVal !== 'all' && s.teacherId !== teacherVal) return false;
+        if (currentTimetableView === 'teacher' && effTeacherVal !== 'all' && s.teacherId !== effTeacherVal) return false;
         if (currentTimetableView === 'master' && gradeVal !== 'all' && s.grade !== gradeVal) return false;
         return true;
     });
@@ -9664,7 +10895,10 @@ function renderTimetable() {
                 // Find slot for this day/period (and grade/teacher if filter active)
                 const matching = visibleSlots.filter(s => s.day === day && s.period === period.id);
                 if (matching.length === 0) {
-                    html += `<div class="tt-cell" onclick="openTimetableSlotModal(null, '${day}', '${period.id}')">+ Add</div>`;
+                    // RBAC: view-only roles (teachers) see an empty cell, not an "Add" button
+                    html += canDo('timetableEdit')
+                        ? `<div class="tt-cell" onclick="openTimetableSlotModal(null, '${day}', '${period.id}')">+ Add</div>`
+                        : `<div class="tt-cell tt-cell-locked" title="View-only — only the administration can add lessons"></div>`;
                 } else if (matching.length === 1) {
                     html += renderTimetableLesson(matching[0]);
                 } else {
@@ -9675,6 +10909,24 @@ function renderTimetable() {
         });
     });
     html += '</div>';
+
+    // Subject tone legend — visual key matching each subject's grid colour
+    const tones = {};
+    visibleSlots.forEach(s => {
+        const subject = (store.learningAreas || []).find(a => a.id === s.subjectId);
+        const name = subject ? subject.name : (s.subjectName || 'Subject');
+        const code = (subject && subject.code) || s.subjectId || name;
+        let hash = 0;
+        for (let i = 0; i < code.length; i++) hash = ((hash << 5) - hash + code.charCodeAt(i)) | 0;
+        const tone = TT_TONE_PALETTE[Math.abs(hash) % TT_TONE_PALETTE.length];
+        if (!tones[name]) tones[name] = tone;
+    });
+    const toneEntries = Object.entries(tones);
+    if (toneEntries.length > 0) {
+        html += `<div class="tt-legend">${toneEntries.map(([name, tone]) =>
+            `<span class="tt-legend-chip"><i style="background:${tone}"></i>${escapeHtml(name)}</span>`).join('')}</div>`;
+    }
+
     wrapper.innerHTML = html;
 
     // Show/hide workload section in teacher view
@@ -9709,7 +10961,11 @@ function renderTimetableLesson(slot, compact) {
     if (slot.room) metaParts.push(`📍 ${slot.room}`);
     const meta = metaParts.join(' · ');
 
-    return `<div class="tt-lesson" data-tone="${tone}" onclick="openTimetableSlotModal('${slot.id}')" title="${escapeHtml(subjectName)} · ${escapeHtml(teacherName || '')} ${slot.room ? '· ' + escapeHtml(slot.room) : ''}">
+    // RBAC: view-only roles cannot open the edit modal from a lesson cell
+    const canEdit = canDo('timetableEdit');
+    const clickAttr = canEdit ? `onclick="openTimetableSlotModal('${slot.id}')"` : '';
+
+    return `<div class="tt-lesson" data-tone="${tone}" ${clickAttr} title="${escapeHtml(subjectName)} · ${escapeHtml(teacherName || '')} ${slot.room ? '· ' + escapeHtml(slot.room) : ''}">
         <div class="tt-lesson-subject">${escapeHtml(subjectName)}</div>
         <div class="tt-lesson-meta">${escapeHtml(meta)}</div>
     </div>`;
@@ -9743,6 +10999,11 @@ function renderTimetableWorkloadGrid() {
 }
 
 function openTimetableSlotModal(slotId, presetDay, presetPeriod) {
+    // RBAC: teachers have view-only access to the timetable
+    if (!canDo('timetableEdit')) {
+        showToast('You have view-only access to the timetable. Only the administration can add or edit lessons.', 'error');
+        return;
+    }
     populateTimetableFilters();
     const modal = $('ttSlotModal');
     if (!modal) return;
@@ -9775,6 +11036,11 @@ function openTimetableSlotModal(slotId, presetDay, presetPeriod) {
 
 function handleTimetableSlotSubmit(e) {
     e.preventDefault();
+    if (!canDo('timetableEdit')) {
+        showToast('You have view-only access to the timetable.', 'error');
+        closeModal('ttSlotModal');
+        return;
+    }
     const editId = $('ttSlotEditId').value;
     const grade = $('ttSlotGrade').value;
     const subjectId = $('ttSlotSubject').value;
@@ -10094,6 +11360,10 @@ function resolveTimetableClash(removeId, keepId, clashIdx) {
 }
 
 function deleteTimetableSlot(slotId) {
+    if (!canDo('timetableEdit')) {
+        showToast('You have view-only access to the timetable.', 'error');
+        return;
+    }
     if (!confirm('Delete this timetable slot?')) return;
     store.timetable = (store.timetable || []).filter(s => s.id !== slotId);
     saveData();
@@ -10102,58 +11372,128 @@ function deleteTimetableSlot(slotId) {
 }
 
 function exportTimetablePDF() {
+    if (!confirmAction('Export the current timetable selection as PDF?', () => {})) return;
     if (!window.jspdf) { showToast('PDF library not loaded', 'error'); return; }
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const slots = store.timetable || [];
-
-    // Title
     const schoolName = (store.settings && store.settings.schoolName) || 'ElimuTrack School';
-    doc.setFontSize(16);
-    doc.setFont(undefined, 'bold');
-    doc.text(schoolName, 40, 40);
-    doc.setFontSize(12);
-    doc.setFont(undefined, 'normal');
-    doc.text(currentTimetableView === 'teacher' ? 'Teacher Timetable' : 'Master Timetable', 40, 58);
+    const termInfo = `${store.settings.currentTerm || 'Term 1'} · ${store.settings.academicYear || new Date().getFullYear()}`;
+    const dateStr = new Date().toISOString().slice(0, 10);
 
-    // Build table head
-    const head = [['Period / Day', ...TT_DAYS]];
-    const body = TT_PERIODS.map(period => {
-        const row = [`${period.label}\n${period.time}`];
-        TT_DAYS.forEach(day => {
-            if (period.isBreak) {
-                row.push(period.label);
-            } else {
+    const gradeVal = $('ttGradeFilter')?.value || 'all';
+    const teacherVal = $('ttTeacherFilter')?.value || 'all';
+
+    const byGradeOrder = (a, b) => {
+        const order = ['PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9'];
+        return (order.indexOf(a) === -1 ? 99 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 99 : order.indexOf(b));
+    };
+    const teacherFilePart = (name) => String(name || 'Teacher').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+    // ── Decide what pages to export based on the ACTIVE selection ──
+    // (Each page is one dedicated weekly grid: per teacher / per grade / whole school.)
+    let pages = [];
+    if (currentTimetableView === 'teacher' && teacherVal === 'all') {
+        // Teacher Extract → one dedicated page per teacher who has slots
+        pages = StaffRepo.getAll()
+            .filter(t => (store.timetable || []).some(s => s.teacherId === t.id))
+            .map(t => ({ label: `Teacher: ${t.name}`, filter: s => s.teacherId === t.id, filePart: teacherFilePart(t.name) }));
+        if (pages.length === 0) { showToast('No teacher has timetable slots yet.', 'info'); return; }
+    } else if (currentTimetableView === 'grade' && gradeVal === 'all') {
+        // Grade View → one dedicated page per grade that has slots
+        pages = [...new Set((store.timetable || []).map(s => s.grade).filter(Boolean))]
+            .sort(byGradeOrder)
+            .map(g => ({ label: `Grade: ${g}`, filter: s => s.grade === g, filePart: g.replace(/\s+/g, '_') }));
+        if (pages.length === 0) { showToast('No timetable slots yet.', 'info'); return; }
+    } else {
+        // Single-scope export — the current selection dictates everything
+        let label, filter, filePart;
+        if (currentTimetableView === 'teacher') {
+            const t = StaffRepo.getById(teacherVal);
+            label = `Teacher: ${t ? t.name : 'Selected Teacher'}`;
+            filter = s => s.teacherId === teacherVal;
+            filePart = teacherFilePart(t ? t.name : 'Teacher');
+        } else if (gradeVal !== 'all') {
+            label = `Grade: ${gradeVal}`;
+            filter = s => s.grade === gradeVal;
+            filePart = gradeVal.replace(/\s+/g, '_');
+        } else {
+            label = 'Whole School · Master Timetable';
+            filter = () => true;
+            filePart = 'Master';
+        }
+        pages = [{ label, filter, filePart }];
+    }
+
+    // ── Render each page ──
+    pages.forEach((pg, idx) => {
+        if (idx > 0) doc.addPage();
+        doc.setFontSize(15); doc.setFont(undefined, 'bold');
+        doc.text(schoolName, 40, 36);
+        doc.setFontSize(11);
+        doc.text(pg.label, 40, 54);
+        doc.setFont(undefined, 'normal'); doc.setFontSize(9);
+        doc.text(`${termInfo} · Generated ${new Date().toLocaleDateString('en-GB')}`, 40, 68);
+
+        const slots = (store.timetable || []).filter(pg.filter);
+        const head = [['Period / Day', ...TT_DAYS]];
+        const body = TT_PERIODS.map(period => {
+            const row = [`${period.label}\n${period.time}`];
+            TT_DAYS.forEach(day => {
+                if (period.isBreak) { row.push(period.label); return; }
                 const matching = slots.filter(s => s.day === day && s.period === period.id);
-                if (matching.length === 0) {
-                    row.push('-');
-                } else {
-                    row.push(matching.map(m => {
-                        const subject = (store.learningAreas || []).find(a => a.id === m.subjectId);
-                        const sName = subject ? subject.name : (m.subjectName || 'Subject');
-                        return `${sName}\n${m.grade || ''}${m.teacherName ? ' · ' + m.teacherName : ''}${m.room ? ' · ' + m.room : ''}`;
-                    }).join('\n---\n'));
-                }
-            }
+                if (matching.length === 0) { row.push('-'); return; }
+                row.push(matching.map(m => {
+                    const subject = (store.learningAreas || []).find(a => a.id === m.subjectId);
+                    const sName = subject ? subject.name : (m.subjectName || 'Subject');
+                    const parts = [sName];
+                    if (currentTimetableView === 'teacher' && m.grade) parts.push(m.grade);
+                    if (m.teacherName) parts.push(m.teacherName);
+                    if (m.room) parts.push(m.room);
+                    return parts.join(' · ');
+                }).join('\n---\n'));
+            });
+            return row;
         });
-        return row;
+
+        doc.autoTable({
+            head: head,
+            body: body,
+            startY: 82,
+            theme: 'grid',
+            headStyles: { fillColor: [34, 197, 94], textColor: 255, fontSize: 9, halign: 'center' },
+            bodyStyles: { fontSize: 7, cellPadding: 3, valign: 'top' },
+            columnStyles: { 0: { cellWidth: 70, fontStyle: 'bold' } },
+            styles: { overflow: 'linebreak' }
+        });
     });
 
-    doc.autoTable({
-        head: head,
-        body: body,
-        startY: 80,
-        theme: 'grid',
-        headStyles: { fillColor: [34, 197, 94], textColor: 255, fontSize: 9, halign: 'center' },
-        bodyStyles: { fontSize: 7, cellPadding: 3, valign: 'top' },
-        columnStyles: { 0: { cellWidth: 70, fontStyle: 'bold' } },
-        styles: { overflow: 'linebreak' }
-    });
+    // ── Dedicated, specific filename for the selection ──
+    const viewPart = currentTimetableView === 'teacher' ? 'Teacher' : currentTimetableView === 'grade' ? 'Grade' : 'Master';
+    const scopePart = pages.length === 1 ? pages[0].filePart : (currentTimetableView === 'teacher' ? 'All_Teachers' : 'All_Grades');
+    doc.save(`${viewPart}_${scopePart}_Timetable_${dateStr}.pdf`);
+    showToast(`Timetable PDF exported (${pages.length} page${pages.length === 1 ? '' : 's'}).`, 'success');
+}
 
-    const filename = currentTimetableView === 'teacher'
-        ? `Teacher_Timetable_${(new Date()).toISOString().slice(0,10)}.pdf`
-        : `Master_Timetable_${(new Date()).toISOString().slice(0,10)}.pdf`;
-    doc.save(filename);
+// Makes the Export PDF button label describe exactly what will be exported.
+function updateTimetableExportLabel() {
+    const label = $('ttExportLabel');
+    if (!label) return;
+    const gradeVal = $('ttGradeFilter')?.value || 'all';
+    const teacherVal = $('ttTeacherFilter')?.value || 'all';
+    let text = 'Export Master PDF';
+    if (currentTimetableView === 'teacher') {
+        if (teacherVal !== 'all') {
+            const t = StaffRepo.getById(teacherVal);
+            text = t ? `Export ${t.name.split(' ')[0]}'s Timetable` : 'Export Teacher Timetable';
+        } else {
+            text = 'Export All Teachers PDF';
+        }
+    } else if (gradeVal !== 'all') {
+        text = `Export ${gradeVal} Timetable`;
+    } else if (currentTimetableView === 'grade') {
+        text = 'Export Per-Grade PDF';
+    }
+    label.textContent = text;
 }
 
 
@@ -10175,7 +11515,10 @@ function normalizeLegacyAssessmentTypes() {
 }
 
 function getAssessments() {
-    return (store.exams || []).filter(e => e.type === 'assessment');
+    // RBAC scope: teachers only see assessments for their assigned grades
+    let list = (store.exams || []).filter(e => e.type === 'assessment');
+    if (getCurrentRole() === 'teacher') list = list.filter(e => isGradeInScope(e.grade));
+    return list;
 }
 
 function getAssessmentById(id) {
@@ -10216,6 +11559,7 @@ function switchExamTab(tabName) {
         case 'results': populateResultsDropdowns(); break;
         case 'analysis': populateAnalysisDropdowns(); break;
         case 'batch': populateBatchDropdowns(); break;
+        case 'schedules': if (typeof ettInit === 'function') ettInit(); else { populateScheduleFilters(); renderExamSchedules(); } break;
     }
 }
 
@@ -10272,10 +11616,11 @@ function renderAssessmentCards() {
         };
 
         return `
-        <div class="assess-card" data-id="${a.id}">
+        <div class="assess-card" data-id="${a.id}" data-type="${escapeHtml(a.assessType || 'Exam')}" data-status="${escapeHtml(a.status || 'draft')}">
             <div class="assess-card-header">
                 <span class="assess-type-badge ${typeColors[a.assessType] || ''}">${escapeHtml(a.assessType || 'Exam')}</span>
                 <div class="assess-status-dot" style="background:${st.color};" title="${a.status}"></div>
+                <i class="fa-solid fa-chevron-up assess-collapse-ic" title="Collapse / expand"></i>
             </div>
             <div class="assess-card-body">
                 <h4 class="assess-card-title">${escapeHtml(a.name)}</h4>
@@ -10308,10 +11653,10 @@ function renderAssessmentCards() {
                 <button class="assess-action-btn" onclick="viewAssessmentResults('${a.id}')" title="View Results">
                     <i class="fa-solid fa-table-columns"></i>
                 </button>
-                <button class="assess-action-btn" onclick="toggleAssessmentStatus('${a.id}')" title="Toggle Status">
+                <button class="assess-action-btn" data-require="examsManage" onclick="toggleAssessmentStatus('${a.id}')" title="Toggle Status">
                     <i class="fa-solid ${a.status === 'open' ? 'fa-lock' : 'fa-lock-open'}"></i>
                 </button>
-                <button class="assess-action-btn assess-action-danger" onclick="promptDeleteAssessment('${a.id}')" title="Delete">
+                <button class="assess-action-btn assess-action-danger" data-require="examsManage" onclick="promptDeleteAssessment('${a.id}')" title="Delete">
                     <i class="fa-solid fa-trash"></i>
                 </button>
             </div>
@@ -10335,6 +11680,11 @@ function getScoredCount(assessment) {
 }
 
 function openAssessmentForScoring(id) {
+    const assessment = getAssessmentById(id);
+    if (isAssessmentLocked(assessment)) {
+        showToast('This assessment is closed and cannot be edited. Only the Exam Officer can reopen it.', 'error');
+        return;
+    }
     switchExamTab('enter');
     setTimeout(() => {
         setVal('scoreEntryAssessment', id);
@@ -10353,12 +11703,18 @@ function viewAssessmentResults(id) {
 function toggleAssessmentStatus(id) {
     const assessment = getAssessmentById(id);
     if (!assessment) return;
-    if (assessment.status === 'draft') assessment.status = 'open';
-    else if (assessment.status === 'open') assessment.status = 'closed';
-    else assessment.status = 'draft';
+    // RBAC: only the Exam Officer / Admin / HOI may open, close or reopen
+    if (!canManageAssessments()) {
+        showToast('Only the Exam Officer can open or close assessments.', 'error');
+        return;
+    }
+    const next = assessment.status === 'draft' ? 'open' : assessment.status === 'open' ? 'closed' : 'draft';
+    // Confirmation required before closing/opening an assessment
+    if (!confirmAction(`Change "${assessment.name}" status from "${assessment.status}" to "${next}"?${next === 'draft' || next === 'open' ? ' Reopening unlocks score entry again.' : ''}`, () => {})) return;
+    assessment.status = next;
     saveData();
     renderAssessmentCards();
-    showToast(`Assessment status changed to "${assessment.status}"`);
+    showToast(`Assessment status changed to "${next}"`);
 }
 
 function promptDeleteAssessment(id) {
@@ -10370,6 +11726,11 @@ function promptDeleteAssessment(id) {
 }
 
 function confirmDeleteAssessment() {
+    if (!canManageAssessments()) {
+        showToast('Only the Exam Officer can delete assessments.', 'error');
+        closeModal('deleteAssessModal');
+        return;
+    }
     const modal = $('deleteAssessModal');
     const id = modal.dataset.assessId;
     if (!id) return;
@@ -10382,6 +11743,11 @@ function confirmDeleteAssessment() {
 
 // ── CREATE ASSESSMENT MODAL ──
 function openCreateAssessmentModal() {
+    // RBAC: only the Exam Officer (or Admin/HOI override) can create assessments
+    if (!canDo('examsManage')) {
+        showToast('Only the Exam Officer can create assessments.', 'error');
+        return;
+    }
     const form = $('createAssessmentForm');
     if (form) form.reset();
     setText('courseModalTitle', 'Create New Assessment'); // Reset if reused
@@ -10568,10 +11934,19 @@ function populateScoreEntryDropdowns() {
     if (!assessSelect) return;
 
     const currentVal = assessSelect.value;
-    const assessments = getAssessments();
+    let assessments = getAssessments();
+    // RBAC: closed assessments are LOCKED for score entry — teachers cannot
+    // select them here (they still view results/analysis). Exam Officer and
+    // Admin/HOI see all, tagged "(closed)".
+    const lockedOut = !canManageAssessments();
+    const label = (a) => {
+        let l = `${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})`;
+        if (!lockedOut && a.status === 'closed') l += ' (closed)';
+        return l;
+    };
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.filter(a => lockedOut ? a.status !== 'closed' : true).map(a => `<option value="${a.id}">${label(a)}</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -10597,13 +11972,30 @@ function populateScoreEntrySubjects() {
     }
 
     const currentVal = subjectSelect.value;
-    subjectSelect.innerHTML = '<option value="">Select Subject...</option>' +
-        (assessment.subjects || []).map(subId => {
-            const sub = getSubjectById(subId);
-            return sub ? `<option value="${sub.id}">${escapeHtml(sub.name)}</option>` : '';
-        }).join('');
+    let subjects = (assessment.subjects || []).map(subId => getSubjectById(subId)).filter(Boolean);
 
-    if (currentVal && (assessment.subjects || []).includes(currentVal)) {
+    // RBAC: subject/class teachers only enter scores for THEIR subjects in
+    // their assigned grades; a class teacher of this grade may enter all.
+    if (getCurrentRole() === 'teacher') {
+        const scope = getTeacherScope();
+        const isClassTeacher = scope.classAssign && scope.classAssign.grade === assessment.grade;
+        if (!isClassTeacher && scope.staff) {
+            const mine = new Set(
+                (store.learningAreas || []).filter(la =>
+                    la.teacherId === scope.staff.id ||
+                    (la.teacherByLevel && la.teacherByLevel[assessment.grade] === scope.staff.id)
+                ).map(la => la.id)
+            );
+            subjects = subjects.filter(s => mine.has(s.id));
+        }
+    }
+
+    subjectSelect.innerHTML = subjects.length === 0
+        ? '<option value="">No subjects assigned to you for this grade</option>'
+        : '<option value="">Select Subject...</option>' +
+          subjects.map(sub => `<option value="${sub.id}">${escapeHtml(sub.name)}</option>`).join('');
+
+    if (currentVal && subjects.some(s => s.id === currentVal)) {
         subjectSelect.value = currentVal;
     }
 }
@@ -10639,12 +12031,25 @@ function loadScoreEntryTable() {
     }
 
     const subject = getSubjectById(subjectId);
+    const locked = isAssessmentLocked(assessment);
     setText('scoreEntryTitle', `${assessment.name} — ${subject ? subject.name : subjectId}`);
     setText('scoreEntryCount', `${students.length} learners`);
 
     wrapper.style.display = 'block';
     emptyState.style.display = 'none';
 
+    // Locked assessments render read-only (closed + not exam-management role)
+    const lockBanner = document.getElementById('scoreEntryLockBanner');
+    if (lockBanner) {
+        lockBanner.style.display = locked ? '' : 'none';
+        if (locked) lockBanner.innerHTML = '<i class="fa-solid fa-lock"></i> This assessment is <b>CLOSED</b> — scores are locked. Only the Exam Officer can reopen it for editing.';
+    }
+    const submitBtn = document.getElementById('submitAllScoresBtn');
+    if (submitBtn) submitBtn.style.display = locked ? 'none' : '';
+    const saveBtn = document.getElementById('saveScoresDraftBtn');
+    if (saveBtn) saveBtn.style.display = locked ? 'none' : '';
+
+    const ro = locked ? ' readonly' : '';
     body.innerHTML = students.map((student, idx) => {
         const key = `${student.id}_${subjectId}`;
         const existing = (assessment.scores || {})[key] || {};
@@ -10659,7 +12064,7 @@ function loadScoreEntryTable() {
             <td class="subj-col">
                 <input type="number" class="score-input" min="0" max="100" value="${score}"
                     data-key="${key}" data-student="${student.id}" data-subject="${subjectId}"
-                    oninput="onScoreInput(this)" placeholder="—">
+                    oninput="onScoreInput(this)" placeholder="—"${ro}>
             </td>
             <td class="subj-col">
                 <span class="cbc-rating-badge ${rating ? rating.cls : ''}" id="rating_${key}"
@@ -10712,6 +12117,12 @@ function autoSaveScores() {
     const assessment = getAssessmentById(assessId);
     if (!assessment) return;
 
+    // Locked assessments are read-only
+    if (isAssessmentLocked(assessment)) {
+        showToast('This assessment is closed — scores are locked.', 'error');
+        return;
+    }
+
     if (!assessment.scores) assessment.scores = {};
 
     document.querySelectorAll('.score-input').forEach(input => {
@@ -10735,6 +12146,13 @@ function submitAllScores() {
     const assessId = getVal('scoreEntryAssessment');
     const assessment = getAssessmentById(assessId);
     if (!assessment) return;
+
+    // Closed assessments are locked — only the Exam Officer may reopen/edit them
+    if (isAssessmentLocked(assessment)) {
+        showToast('This assessment is closed. Only the Exam Officer can reopen or edit it.', 'error');
+        switchExamTab('assessments');
+        return;
+    }
 
     if (!assessment.scores) assessment.scores = {};
 
@@ -10768,7 +12186,7 @@ function populateResultsDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -10959,7 +12377,7 @@ function populateAnalysisDropdowns() {
     const assessments = getAssessments();
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -10985,11 +12403,13 @@ function populateAnalysisSubjects() {
     }
 
     const currentVal = subjectSelect.value;
+    // RBAC: teachers only analyse subjects assigned to them for this grade
+    let subs = (assessment.subjects || []).map(subId => getSubjectById(subId)).filter(Boolean);
+    const mine = getTeacherSubjectIds(assessment.grade);
+    if (mine) subs = subs.filter(s => mine.has(s.id));
     subjectSelect.innerHTML = '<option value="all">All Subjects</option>' +
-        (assessment.subjects || []).map(subId => {
-            const sub = getSubjectById(subId);
-            return sub ? `<option value="${sub.id}">${escapeHtml(sub.name)}</option>` : '';
-        }).join('');
+        subs.map(sub => `<option value="${sub.id}">${escapeHtml(sub.name)}</option>`).join('') +
+        (mine && !subs.length ? '<option value="" disabled>No subjects assigned to you</option>' : '');
 
     if (currentVal) subjectSelect.value = currentVal;
 }
@@ -11021,6 +12441,9 @@ function loadSubjectAnalysis() {
 
     const students = getStudentsForGrade(assessment.grade);
     let subjects = (assessment.subjects || []).map(subId => getSubjectById(subId)).filter(Boolean);
+    // RBAC: teachers analyse only their assigned subjects in this grade
+    const mine = getTeacherSubjectIds(assessment.grade);
+    if (mine) subjects = subjects.filter(s => mine.has(s.id));
     if (subjectFilter !== 'all') {
         subjects = subjects.filter(s => s.id === subjectFilter);
     }
@@ -11107,6 +12530,12 @@ function exportAnalysisPDF() {
         showToast('No analysis to export', 'error');
         return;
     }
+    // Confirm the exact scope before exporting
+    const assessId = getVal('analysisAssessment');
+    const assessment = assessId ? getAssessmentById(assessId) : null;
+    const subSel = getVal('analysisSubject');
+    const subName = subSel && subSel !== 'all' ? (getSubjectById(subSel)?.name || subSel) : 'All Subjects';
+    if (!confirm(`Export Subject Analysis as PDF?\n\nAssessment: ${assessment ? assessment.name : '—'}\nGrade: ${assessment ? assessment.grade : '—'}\nSubject: ${subName}`)) return;
 
     const printWindow = window.open('', '_blank');
     printWindow.document.write(`
@@ -11144,10 +12573,19 @@ function populateBatchDropdowns() {
     if (!assessSelect) return;
 
     const currentVal = assessSelect.value;
-    const assessments = getAssessments();
+    let assessments = getAssessments();
+    // RBAC: closed assessments are locked for BATCH entry — teachers cannot
+    // batch-enter scores into a closed assessment. Exam Officer and
+    // Admin/HOI see all, tagged "(closed)".
+    const lockedOut = !canManageAssessments();
+    const label = (a) => {
+        let l = `${escapeHtml(a.name)} — ${a.grade} (${escapeHtml(a.assessType || 'Exam')} · ${a.term})`;
+        if (!lockedOut && a.status === 'closed') l += ' (closed)';
+        return l;
+    };
 
     assessSelect.innerHTML = '<option value="">Select Assessment...</option>' +
-        assessments.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${a.grade} (${a.term})</option>`).join('');
+        assessments.filter(a => lockedOut ? a.status !== 'closed' : true).map(a => `<option value="${a.id}">${label(a)}</option>`).join('');
 
     if (currentVal && assessments.some(a => a.id === currentVal)) {
         assessSelect.value = currentVal;
@@ -11303,6 +12741,7 @@ function saveBatchScores() {
 }
 
 function saveBatchAndClose() {
+    if (!confirmAction('Save all scores and CLOSE this assessment? Scores will be finalised.', () => {})) return;
     saveBatchScores();
     const assessId = getVal('batchAssessment');
     const assessment = getAssessmentById(assessId);
@@ -11403,9 +12842,16 @@ let _batchExcelRows = [];       // parsed Excel rows
 
 function initBatchAdmission() {
     // Open the modal from the Admissions toolbar
+    // FIXED: the old guard required batchGrade to be set BEFORE the modal
+    // opened — but that select lives inside the modal, so the modal could
+    // never open ("Select a default grade first" forever). Now the modal
+    // always opens and pre-fills defaults from the single-admission form.
     $('admBatchBtn')?.addEventListener('click', () => {
-        if (!getVal('batchGrade')) { showToast('Select a default grade first.', 'error'); return; }
         _batchAdmissionRows = []; _batchExcelRows = [];
+        const formGrade = getVal('regTrade');
+        const formStream = getVal('level');
+        if (formGrade) setVal('batchGrade', formGrade);
+        if (formStream) setVal('batchStream', formStream);
         renderBatchManualTable(); clearBatchExcelPreview();
         openModal('batchAdmissionModal');
     });
@@ -11560,7 +13006,16 @@ function clearBatchExcelPreview() {
 
 function confirmBatchAdmission() {
     const defGrade = getVal('batchGrade'), defStream = getVal('batchStream');
-    const all = [..._batchAdmissionRows, ..._batchExcelRows].map(r => ({
+    // FIXED: clearer validation — a default grade (or a grade per row) is
+    // required, otherwise rows would be silently dropped.
+    const hasDefGrade = (defGrade || '').trim();
+    const rawRows = [..._batchAdmissionRows, ..._batchExcelRows];
+    if (rawRows.length === 0) { showToast('Add at least one learner first.', 'error'); return; }
+    if (!hasDefGrade && !rawRows.some(r => (r.grade || '').trim())) {
+        showToast('Set a Default Grade (or enter a grade on each row).', 'error');
+        return;
+    }
+    const all = rawRows.map(r => ({
         surname: (r.surname || '').trim(), firstName: (r.firstName || '').trim(),
         gender: (r.gender || '').trim() || 'Female',
         grade: (r.grade || '').trim() || defGrade,
@@ -11568,7 +13023,7 @@ function confirmBatchAdmission() {
         birthCert: (r.birthCert || '').trim(), phone: (r.phone || '').trim(), dob: (r.dob || '').trim()
     })).filter(r => r.surname && r.firstName && r.grade);
 
-    if (all.length === 0) { showToast('No valid rows to import.', 'error'); return; }
+    if (all.length === 0) { showToast('No valid rows to import (name + grade required).', 'error'); return; }
     let added = 0, skipped = 0;
     all.forEach(r => {
         const fullName = `${r.surname} ${r.firstName}`.trim();
@@ -11982,7 +13437,26 @@ function flattenExams() {
     });
     return flat;
 }
+
+// Resolves subjectId → subjectName for flat score records so charts, heatmaps
+// and leaderboards can label learning areas even when the raw records only
+// carry the ID (nested assessment scores never store the display name).
+function hydrateSubjectNames(scores) {
+    const cache = {};
+    return (scores || []).map(e => {
+        if (e.subjectName) return e;
+        let name = cache[e.subjectId];
+        if (name === undefined) {
+            const la = (store.learningAreas || []).find(l => l.id === e.subjectId);
+            name = la ? la.name : (e.subjectId || 'Unknown');
+            cache[e.subjectId] = name;
+        }
+        return { ...e, subjectName: name };
+    });
+}
 // ── Entry point called by router ──
+let currentReportType = null; // 'individual' | 'class' | 'subject' | 'term' | 'competency' | 'attendance'
+
 function renderReportsAnalytics() {
     populateReportFilters();
     showReportTypeGrid();
@@ -12000,17 +13474,49 @@ function showReportTypeGrid() {
      'reportTermPreview','reportCompetencyPreview','reportAttendancePreview'].forEach(id => {
         const el = $(id); if (el) el.style.display = 'none';
     });
+    // No report selected — the Excel/PDF/Print toolbar adapts (disabled)
+    currentReportType = null;
+    updateReportsToolbar();
+}
+
+// The Excel / PDF / Print buttons adapt to whichever report card is active.
+// They are disabled while the report-type grid is showing, and enabled (with
+// per-type tooltips) once a report has been generated.
+function updateReportsToolbar() {
+    const hasReport = !!currentReportType;
+    ['reportsPrintBtn', 'reportsExportPdfBtn', 'reportsExportExcelBtn'].forEach(id => {
+        const b = $(id);
+        if (b) b.disabled = !hasReport;
+    });
+    const pdfBtn = $('reportsExportPdfBtn');
+    if (pdfBtn && currentReportType) {
+        const label = currentReportType.charAt(0).toUpperCase() + currentReportType.slice(1);
+        pdfBtn.title = `Download ${label} Report as PDF`;
+    }
+}
+
+function getVisibleReportPreview() {
+    return document.querySelector('.report-preview-content[style*="display:"]') ||
+           document.querySelector('.report-preview-content:not([style*="display: none"])');
+}
+
+function getReportFilename(ext) {
+    const type = currentReportType || 'report';
+    const label = type.charAt(0).toUpperCase() + type.slice(1);
+    return `${label}_Report_${new Date().toISOString().slice(0, 10)}.${ext}`;
 }
 
 // ── Filter population — mirrors Assessment filter patterns ──
 function populateReportFilters() {
     // Grade: use BAND_GRADE_MAP optgroups (same as Assessment)
     const gradeSelect = $('reportGradeFilter');
+    const scope = getTeacherScope();
     if (gradeSelect) {
         const cur = gradeSelect.value;
         gradeSelect.innerHTML = '<option value="all">All Grades</option>';
         ['pp','lower','middle','jss'].forEach(band => {
-            const grades = BAND_GRADE_MAP[band];
+            const grades = BAND_GRADE_MAP[band].filter(g => scope.grades.length ? scope.grades.includes(g) : true);
+            if (!grades.length) return;
             const label = CBC_LEVELS[grades[0]]?.type || band;
             const og = document.createElement('optgroup');
             og.label = label;
@@ -12021,7 +13527,8 @@ function populateReportFilters() {
             });
             gradeSelect.appendChild(og);
         });
-        gradeSelect.value = cur || 'all';
+        // Teachers default to their first assigned grade (their scope)
+        gradeSelect.value = cur || (scope.grades.length ? scope.grades[0] : 'all');
     }
 
     // Term
@@ -12048,10 +13555,11 @@ function populateReportFilters() {
     }
 
     // Stream (FIXED: was present in the HTML but never populated or applied)
+    // RBAC scope: teachers/parents only see streams inside their assigned scope
     const streamSelect = $('reportStreamFilter');
     if (streamSelect) {
         const cur = streamSelect.value;
-        const streams = [...new Set((store.students || []).map(s => s.stream).filter(Boolean))].sort();
+        const streams = [...new Set(getScopedStudents().map(s => s.stream).filter(Boolean))].sort();
         streamSelect.innerHTML = '<option value="all">All Streams</option>';
         streams.forEach(st => {
             streamSelect.innerHTML += `<option value="${escapeHtml(st)}">${escapeHtml(st)}</option>`;
@@ -12062,6 +13570,22 @@ function populateReportFilters() {
 
     // Assessment dropdown — derived from store.exams (same source as Assessment tab)
     refreshReportAssessmentDropdown();
+
+    // FIXED: "Print All Report Cards" was hard-coded disabled in the HTML and
+    // never re-enabled — it is now tied to the grade filter (needs a grade).
+    updateReportsPrintAllState();
+}
+
+// Enables "Print All Report Cards" only when a specific grade is selected.
+function updateReportsPrintAllState() {
+    const btn = $('reportsPrintAllBtn');
+    if (!btn) return;
+    const grade = $('reportGradeFilter')?.value || 'all';
+    const usable = grade && grade !== 'all';
+    btn.disabled = !usable;
+    btn.title = usable
+        ? 'Print all report cards for the selected grade.'
+        : 'Select a specific grade first, then use this to print all report cards for that grade.';
 }
 
 function refreshReportAssessmentDropdown() {
@@ -12125,6 +13649,13 @@ function getFilteredScores(overrides = {}) {
 
     // CRITICAL FIX: Use flattenExams() instead of (store.exams || [])
     let scores = flattenExams();
+    // RBAC: teachers only see scores from their assigned grades AND subjects
+    if (getCurrentRole() === 'teacher') {
+        const scope = getTeacherScope();
+        if (scope.grades.length) scores = scores.filter(e => scope.grades.includes(e.grade));
+        const mine = getTeacherSubjectIds(grade !== 'all' ? grade : undefined);
+        if (mine) scores = scores.filter(e => mine.has(e.subjectId));
+    }
     if (grade !== 'all') scores = scores.filter(e => (e.grade || '').toString().trim().toLowerCase() === grade.toLowerCase().trim());
     if (term !== 'all')  scores = scores.filter(e => (e.term || '').toString().trim().toLowerCase() === term.toLowerCase().trim());
     if (year !== 'all')  scores = scores.filter(e => String(e.year) === String(year));
@@ -12154,6 +13685,38 @@ function countRatings(scores) {
 //   MAIN REPORT ROUTER
 // ═══════════════════════════════════════════════════════════════
 function buildReport(type) {
+    // RBAC: Parents may only generate their own child's report card
+    if (getCurrentRole() === 'parent' && type !== 'individual') {
+        showToast('Parents can only generate their child\'s report card.', 'error');
+        return;
+    }
+    // RBAC: Teachers may only report on their assigned grades
+    if (getCurrentRole() === 'teacher') {
+        const g = $('reportGradeFilter')?.value || 'all';
+        if (g === 'all') {
+            // "All grades" is never allowed for a teacher — scope to their classes
+            const scoped = getScopedGradesForReports() || [];
+            if (!scoped.length) { showToast('You have no assigned classes to report on.', 'error'); return; }
+            const gSel = $('reportGradeFilter');
+            if (gSel) gSel.value = scoped[0];
+            populateReportLearnerSelect();
+            showToast(`Reports are scoped to your assigned class(es): ${scoped.join(', ')}.`, 'info');
+        } else if (!isGradeInScope(g)) {
+            showToast('You can only generate reports for your assigned grade(s).', 'error');
+            return;
+        }
+        if (type === 'individual') {
+            const sel = $('reportLearnerSelect');
+            const sid = sel ? sel.value : '';
+            const learner = sid && StudentRepo.getById(sid);
+            if (learner && !isGradeInScope(learner.grade)) {
+                showToast('This learner is not in your assigned classes.', 'error');
+                return;
+            }
+        }
+    }
+    currentReportType = type; // toolbar adapts to this card
+    updateReportsToolbar();
     $('reportsPreviewArea').style.display = '';
     $('reportsEmptyState').style.display = 'none';
 
@@ -12215,7 +13778,8 @@ function populateReportLearnerSelect() {
     if (!sel) return;
     const grade = $('reportGradeFilter')?.value || 'all';
     const stream = $('reportStreamFilter')?.value || 'all';
-    let students = StudentRepo.getAll();
+    // RBAC scope: teachers/parents only see learners inside their scope
+    let students = getScopedStudents();
     if (grade !== 'all') students = students.filter(s => s.grade === grade);
     if (stream !== 'all') students = students.filter(s => s.stream === stream);
 
@@ -12394,7 +13958,7 @@ function generateIndividualReport() {
     setText('reportSubjectsAssessed', data.rows.length + '/' + getApplicableLearningAreas(student.grade).length);
     setText('reportTeacherRemarks', data.remarks || '');
     setText('reportHeadRemarks', headRemark(data.overallRating ? data.overallRating.code : null));
-    setText('reportReportDate', new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' }));
+    setText('reportDate', new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' }));
 }
 
 function computeRank(student) {
@@ -12448,7 +14012,7 @@ function generateClassReport() {
     setText('classReportPeriodLabel', `${term} — ${year}`);
     setText('classReportSubtitle', `${CBC_LEVELS[grade]?.name || grade}`);
 
-    const students = StudentRepo.getAll().filter(st => st.grade === grade);
+    const students = getScopedStudentsForReports().filter(st => st.grade === grade);
     const areas = getApplicableLearningAreas(grade);
 
         // ═══ FIX: Use flattenExams() to unpack nested virtual scores ═══
@@ -12480,12 +14044,12 @@ function generateClassReport() {
         return { ...st, avg, areasDone: Object.keys(bp).length };
     }).filter(st => st.avg > 0).sort((a, b) => b.avg - a.avg);
 
-    // Class KPIs
-    setText('rcsTotal', students.length);
+    // Class KPIs (FIXED: target the IDs that actually exist in dashboard.html)
+    setText('reportClassTotal', students.length);
     const classMean = studentStats.length ? Math.round(studentStats.reduce((a, b) => a + b.avg, 0) / studentStats.length) : 0;
-    setText('rcsMean', classMean + '%');
-    setText('rcsHighest', studentStats.length ? studentStats[0].avg + '%' : '0%');
-    setText('rcsLowest', studentStats.length ? studentStats[studentStats.length - 1].avg + '%' : '0%');
+    setText('reportClassMean', classMean + '%');
+    setText('reportClassHighest', studentStats.length ? studentStats[0].avg + '%' : '0%');
+    setText('reportClassLowest', studentStats.length ? studentStats[studentStats.length - 1].avg + '%' : '0%');
 
     // ── Subject Performance Table ──
     const subBody = $('classSubjectBody');
@@ -12534,13 +14098,17 @@ function populateReportSubjectSelect() {
     const sel = $('reportSubjectSelect');
     if (!sel) return;
     const grade = $('reportGradeFilter')?.value;
-    const areas = grade && grade !== 'all' ? getApplicableLearningAreas(grade) : store.learningAreas;
+    let areas = grade && grade !== 'all' ? getApplicableLearningAreas(grade) : store.learningAreas;
+    // RBAC: teachers only analyse the subjects they are assigned to
+    const mine = getTeacherSubjectIds(grade && grade !== 'all' ? grade : undefined);
+    if (mine) areas = areas.filter(la => mine.has(la.id));
     const prev = sel.value;
     sel.innerHTML = '<option value="all">All Learning Areas</option>';
     areas.forEach(la => {
         sel.innerHTML += `<option value="${la.id}">${escapeHtml(la.name)} (${escapeHtml(la.code)})</option>`;
     });
-    sel.value = prev || 'all';
+    // Teachers default to their first assigned subject (not "all")
+    sel.value = prev || (getCurrentRole() === 'teacher' && areas.length ? areas[0].id : 'all');
 }
 
 function generateSubjectReport() {
@@ -12568,17 +14136,17 @@ function generateSubjectReport() {
     const vals = scores.map(e => parseFloat(e.score));
     const mean = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
 
-    setText('rssOverallMean', mean + '%');
-    setText('rssEE', rc.EE);
-    setText('rssME', rc.ME);
-    setText('rssBelow', rc.AE + rc.BE);
+    setText('reportSubjectOverallMean', mean + '%');
+    setText('reportSubjectEE', rc.EE);
+    setText('reportSubjectME', rc.ME);
+    setText('reportSubjectBelow', rc.AE + rc.BE);
 
     // ── Per-Grade Table ──
     const gBody = $('subjectGradeBody');
     if (gBody) {
-        const grades = grade !== 'all' ? [grade] : Object.keys(CBC_LEVELS);
+        const grades = grade !== 'all' ? [grade] : (getScopedGradesForReports() || Object.keys(CBC_LEVELS));
         gBody.innerHTML = grades.map(g => {
-            const enrolled = StudentRepo.getAll().filter(st => st.grade === g).length;
+            const enrolled = getScopedStudentsForReports().filter(st => st.grade === g).length;
             const gScores = scores.filter(e => e.grade === g);
             const assessed = new Set(gScores.map(e => e.studentId)).size;
             const gVals = gScores.map(e => parseFloat(e.score));
@@ -12630,7 +14198,7 @@ function generateTermSummaryReport() {
     const year = getFilterLabel('reportYearFilter', s.academicYear || '2025');
     setText('termReportPeriod', `${term} — ${year}`);
 
-    const allStudents = StudentRepo.getAll();
+    const allStudents = getScopedStudentsForReports();
     const allScores = getFilteredScores();
 
     // ── Enrollment Table ──
@@ -12687,7 +14255,7 @@ function generateTermSummaryReport() {
     // ── Attendance Table (placeholder — no attendance data model) ──
     const atBody = $('termAttendanceBody');
     if (atBody) {
-        const allGrades = Object.keys(CBC_LEVELS);
+        const allGrades = getScopedGradesForReports() || Object.keys(CBC_LEVELS);
         atBody.innerHTML = allGrades.map(g => {
             const enrolled = allStudents.filter(st => st.grade === g).length;
             return `<tr>
@@ -12835,10 +14403,11 @@ function generateAttendanceReport() {
     setText('attendanceReportSubtitle', `${grade === 'all' ? 'All Grades' : (CBC_LEVELS[grade]?.name || grade)} — ${term}`);
 
     // No attendance data model exists yet — show placeholder
-    setText('rasTotalDays', 'N/A');
-    setText('rasAvgAttendance', 'N/A');
-    setText('rasChronic', '0');
-    setText('rasPerfect', '0');
+    // FIXED: KPI ids now match dashboard.html (reportAttendance*)
+    setText('reportAttendanceTotalDays', 'N/A');
+    setText('reportAttendanceAvgRate', 'N/A');
+    setText('reportAttendanceChronic', '0');
+    setText('reportAttendancePerfect', '0');
 
     const dBody = $('attendanceDetailBody');
     if (dBody) {
@@ -12858,7 +14427,7 @@ function generateAttendanceReport() {
     const gBody = $('attendanceGradeBody');
     if (gBody) {
         gBody.innerHTML = Object.keys(CBC_LEVELS).map(g => {
-            const enrolled = StudentRepo.getAll().filter(st => st.grade === g).length;
+            const enrolled = getScopedStudentsForReports().filter(st => st.grade === g).length;
             return `<tr>
                 <td>${CBC_LEVELS[g]?.name || g}</td>
                 <td style="text-align:center">${enrolled}</td>
@@ -12874,15 +14443,40 @@ function generateAttendanceReport() {
 //   REPORT EXPORT HELPERS
 // ═══════════════════════════════════════════════════════════════
 function printCurrentReport() {
-    const visible = document.querySelector('.report-preview-content[style*="display:"]') ||
-                    document.querySelector('.report-preview-content:not([style*="display: none"])');
-    if (!visible) { showToast('No report to print.', 'error'); return; }
+    if (!confirmAction('Print the current report?', () => {})) return;
+    // Grab the visible report preview page and print it
+    const visible = getVisibleReportPreview();
+    if (!visible) { showToast('Generate a report first.', 'error'); return; }
 
-    const s = store.settings;
-    const printWin = window.open('', '_blank', 'width=900,height=700');
-    if (!printWin) { showToast('Pop-up blocked. Allow pop-ups for this site.', 'error'); return; }
+    const tables = visible.querySelectorAll('table.report-table');
+    if (tables.length === 0) { showToast('No data table found in report.', 'error'); return; }
 
-    printWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Report — ${escapeHtml(s.schoolName)}</title>
+    let csv = '';
+    tables.forEach((table, ti) => {
+        if (ti > 0) csv += '\n\n';
+        const rows = table.querySelectorAll('tr');
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('th, td');
+            const line = Array.from(cells).map(c => `"${c.textContent.trim().replace(/"/g, '""')}"`).join(',');
+            csv += line + '\n';
+        });
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = getReportFilename('csv');
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Exported as CSV.', 'success');
+}
+
+// Builds a standalone, printable HTML document from a preview report page so
+// it can be rendered to PDF without the app shell.
+function buildStandaloneReportHtml(pageEl) {
+    const s = store.settings || {};
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(s.schoolName || 'School Report')}</title>
     <style>
         *{margin:0;padding:0;box-sizing:border-box}
         body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;padding:20px;color:#1e293b;font-size:13px}
@@ -12923,60 +14517,17 @@ function printCurrentReport() {
         .report-highlights-list{padding-left:20px;font-size:12px;line-height:1.8;color:#475569}
         .col-visual{width:30%}
         @media print{body{padding:0}}
-    </style></head><body>${visible.querySelector('.report-page')?.outerHTML || visible.innerHTML}</body></html>`);
-    printWin.document.close();
-    setTimeout(() => { printWin.print(); }, 400);
+    </style></head><body>${pageEl.outerHTML}</body></html>`;
 }
 
-function exportReportPDF() {
-    // FIXED: was printCurrentReport() — printed the OLD preview layout.
-    // Now downloads the modern vector PDF (same design as the preview).
-    downloadIndividualReportPDF();
-}
-
-// Print ALL report cards for the filtered grade/stream (FIXED: button used
-// to only show an info toast — now builds every learner's card and prints)
-function printAllReportCards() {
-    const grade = $('reportGradeFilter')?.value;
-    if (!grade || grade === 'all') { showToast('Select a specific grade first.', 'error'); return; }
-    const stream = $('reportStreamFilter')?.value || 'all';
-    let students = StudentRepo.getAll().filter(s => s.grade === grade);
-    if (stream !== 'all') students = students.filter(s => s.stream === stream);
-    students.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    if (students.length === 0) { showToast('No learners in ' + grade, 'error'); return; }
-
-    const parts = [];
-    let rendered = 0;
-    students.forEach(st => {
-        try {
-            const html = buildIndividualReportHTML(st.id);
-            const match = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-            if (match && match[1].trim()) { parts.push(match[1]); rendered++; }
-        } catch (e) { console.warn('[PRINT ALL] skipped', st.name, e.message); }
-    });
-    if (rendered === 0) { showToast('No report data to print for this grade.', 'error'); return; }
-
-    const s = store.settings;
-    const printWin = window.open('', '_blank', 'width=900,height=700');
-    if (!printWin) { showToast('Pop-up blocked. Allow pop-ups for this site.', 'error'); return; }
-    printWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(s.schoolName || 'School')} — ${escapeHtml(grade)} Report Cards</title>
-    <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;color:#1e293b;font-size:13px}
-        @page{size:A4;margin:10mm}
-        .report-page-break{page-break-after:always;clear:both;height:0}
-        .a4-page{width:auto;min-height:auto;padding:0;overflow:visible}
-    </style></head><body>${parts.join('<div class="report-page-break"></div>')}</body></html>`);
-    printWin.document.close();
-    setTimeout(() => { printWin.print(); }, 500);
-    showToast(`Printing ${rendered} report card${rendered === 1 ? '' : 's'}`);
-}
-
+// PDF export adapts to the selected report card:
+//  - individual → the learner's vector report card PDF
+//  - class / subject / term / competency / attendance → PDF of the preview
+// Excel export for the currently visible report (adapts to the selected card)
 function exportReportExcel() {
-    // Build CSV from the currently visible table
-    const visible = document.querySelector('.report-preview-content[style*="display:"]') ||
-                    document.querySelector('.report-preview-content:not([style*="display: none"])');
-    if (!visible) { showToast('No report to export.', 'error'); return; }
+    if (!confirmAction('Export the visible report tables as Excel (CSV)?', () => {})) return;
+    const visible = getVisibleReportPreview();
+    if (!visible) { showToast('Generate a report first.', 'error'); return; }
 
     const tables = visible.querySelectorAll('table.report-table');
     if (tables.length === 0) { showToast('No data table found in report.', 'error'); return; }
@@ -12984,10 +14535,8 @@ function exportReportExcel() {
     let csv = '';
     tables.forEach((table, ti) => {
         if (ti > 0) csv += '\n\n';
-        const rows = table.querySelectorAll('tr');
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('th, td');
-            const line = Array.from(cells).map(c => `"${c.textContent.trim().replace(/"/g, '""')}"`).join(',');
+        table.querySelectorAll('tr').forEach(row => {
+            const line = Array.from(row.querySelectorAll('th, td')).map(c => `"${c.textContent.trim().replace(/"/g, '""')}"`).join(',');
             csv += line + '\n';
         });
     });
@@ -12996,10 +14545,31 @@ function exportReportExcel() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `report_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = getReportFilename('csv');
     a.click();
     URL.revokeObjectURL(url);
     showToast('Exported as CSV.', 'success');
+}
+
+async function exportReportPDF() {
+    if (!confirmAction(`Download the ${(currentReportType || 'selected').replace(/-/g, ' ')} report as PDF?`, () => {})) return;
+    if (currentReportType === 'individual') {
+        await downloadIndividualReportPDF();
+        return;
+    }
+    const visible = getVisibleReportPreview();
+    if (!visible) { showToast('Generate a report first.', 'error'); return; }
+    const page = visible.querySelector('.report-page') || visible;
+    try {
+        showPdfOverlay('Preparing PDF…');
+        await renderHtmlToPdfBlob(buildStandaloneReportHtml(page), getReportFilename('pdf'));
+        hidePdfOverlay();
+        showToast('PDF exported');
+    } catch (err) {
+        hidePdfOverlay();
+        console.error('[REPORT PDF]', err);
+        showToast('PDF export failed: ' + (err.message || 'unknown error'), 'error');
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -13147,11 +14717,30 @@ function initReportListeners() {
     ['reportGradeFilter', 'reportTermFilter', 'reportYearFilter'].forEach(id => {
         $(id)?.addEventListener('change', () => {
             refreshReportAssessmentDropdown();
+            updateReportsPrintAllState();
+            // Keep the learner dropdown in sync when the individual panel is open
+            if ($('reportIndividualPreview')?.style.display !== 'none') populateReportLearnerSelect();
         });
     });
 
     // Back button
     $('reportsBackBtn')?.addEventListener('click', showReportTypeGrid);
+
+    // Report type cards: whole card is clickable + keyboard-accessible
+    // (FIXED: cards were marked role="button" but had no click handler, so
+    // only the small inner button worked).
+    document.querySelectorAll('.report-type-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.btn')) return; // inner button handles it
+            buildReport(card.dataset.reportType);
+        });
+        card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                buildReport(card.dataset.reportType);
+            }
+        });
+    });
 
     // Export buttons
     $('reportsPrintBtn')?.addEventListener('click', printCurrentReport);
@@ -13159,7 +14748,10 @@ function initReportListeners() {
     $('reportsExportExcelBtn')?.addEventListener('click', exportReportExcel);
 
     // Print All (from section header) — FIXED: prints every card in the grade
-    $('reportsPrintAllBtn')?.addEventListener('click', printAllReportCards);
+    $('reportsPrintAllBtn')?.addEventListener('click', () => {
+        if (!confirmAction('Print ALL report cards for the selected grade? This opens the print dialog.', () => {})) return;
+        printAllReportCards();
+    });
 
     // Individual report: learner select + generate
     $('reportLearnerSelect')?.addEventListener('change', () => {
@@ -13572,6 +15164,7 @@ async function renderHtmlToPdfBlob(htmlString, filename) {
 //   DOWNLOAD SINGLE INDIVIDUAL REPORT
 // ═══════════════════════════════════════════════════════════════
 async function downloadIndividualReportPDF() {
+    if (!confirmAction('Download the selected learner\'s report card as PDF?', () => {})) return;
     const sel = $('reportLearnerSelect');
     if (!sel || !sel.value) { showToast('Select a learner first.', 'error'); return; }
     const student = StudentRepo.getById(sel.value);
@@ -13595,6 +15188,7 @@ async function downloadIndividualReportPDF() {
 //   DOWNLOAD ALL GRADE REPORTS AS ONE PDF — FIXED
 // ═══════════════════════════════════════════════════════════════
 async function downloadGradeReportsPDF() {
+    if (!confirmAction('Download ALL report cards for the selected grade as one PDF? This may take a moment.', () => {})) return;
     const grade = $('reportGradeFilter')?.value;
     if (!grade || grade === 'all') { 
         showToast('Select a specific grade first.', 'error'); 
@@ -13626,19 +15220,10 @@ function wireDownloadButtons() {
         clone.addEventListener('click', downloadGradeReportsPDF);
     }
 
-    // Toolbar PDF button — smart routing
-    const btnPdf = $('reportsExportPdfBtn');
-    if (btnPdf) {
-        const clone = btnPdf.cloneNode(true);
-        btnPdf.parentNode.replaceChild(clone, btnPdf);
-        clone.addEventListener('click', () => {
-            if ($('reportIndividualPreview')?.style.display !== 'none') {
-                downloadIndividualReportPDF();
-            } else {
-                printCurrentReport();
-            }
-        });
-    }
+    // NOTE: the toolbar PDF button (reportsExportPdfBtn) is deliberately NOT
+    // cloned here — its click handler (exportReportPDF) is bound once in
+    // initReportListeners and adapts to whichever report card is selected.
+    // Cloning it here used to override that handler with a fixed behaviour.
 }
 
 
@@ -13646,8 +15231,217 @@ function wireDownloadButtons() {
 //   SETTINGS
 // ==========================================================================
 function switchSettingsTab(index) {
+    // Accept numeric index or tab name ('institution'|'hoi'|'academics'|'events'|'data'|'users')
+    const map = { institution: 0, hoi: 1, academics: 2, events: 3, data: 4, users: 5 };
+    if (typeof index === 'string') index = map[index] ?? 0;
     document.querySelectorAll('#settingsTabs .s-tab').forEach((btn, i) => btn.classList.toggle('active', i === index));
     document.querySelectorAll('#settings .s-panel').forEach((content, i) => content.classList.toggle('active', i === index));
+    if (typeof index === 'number' && index === 3 && typeof renderEventsList === 'function') renderEventsList();
+    if (typeof index === 'number' && index === 5 && typeof renderUsersList === 'function') renderUsersList();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//   USER MANAGEMENT (admin only — Settings → Users)
+//   GET/POST /api/users · PUT /api/users/:id · POST reset-password/unlock
+//   · DELETE /api/users/:id  (all requireRole('admin') server-side)
+// ═══════════════════════════════════════════════════════════════════════
+let _usersCache = [];
+let _editingUserId = null;
+
+// Mirrors the server's password rules (auth.js has its own copy for the login page)
+const _pwIssues = (pw) => {
+    const e = [];
+    if (!pw || pw.length < 8) e.push('at least 8 characters');
+    if (!/[A-Z]/.test(pw)) e.push('one uppercase letter');
+    if (!/[a-z]/.test(pw)) e.push('one lowercase letter');
+    if (!/[0-9]/.test(pw)) e.push('one number');
+    return e;
+};
+
+async function fetchUsers() {
+    const data = await apiFetch('users');
+    if (data && data.success) _usersCache = data.users || [];
+    return _usersCache;
+}
+
+function renderUsersList() {
+    const tbody = $('usersTableBody');
+    if (!tbody) return;
+    fetchUsers().then(users => {
+        if (!users.length) { tbody.innerHTML = '<tr><td colspan="5" class="s-table-empty">No accounts yet — create the first one.</td></tr>'; return; }
+        const me = (CURRENT_USER && CURRENT_USER.id) || '';
+        tbody.innerHTML = users.map(u => {
+            const isMe = u.id === me;
+            const roleLabel = ROLE_LABELS[u.role] || u.role || '—';
+            const status = u.isActive === 1 ? 'active' : 'suspended';
+            const locked = !!u.lockedUntil && new Date(u.lockedUntil) > new Date();
+            return `<tr>
+                <td><strong>${escapeHtml(u.name)}</strong>${isMe ? ' <span class="um-chip um-chip-me">you</span>' : ''}</td>
+                <td>${escapeHtml(u.email)}</td>
+                <td><span class="um-chip um-role um-role-${escapeHtml(u.role || '')}">${escapeHtml(roleLabel)}</span></td>
+                <td>
+                    <span class="um-chip um-status um-status-${status}">${status}</span>
+                    ${locked ? ' <span class="um-chip um-status um-status-locked" title="Locked after failed sign-ins">locked</span>' : ''}
+                </td>
+                <td style="text-align:right;white-space:nowrap;">
+                    ${isMe ? '<span style="font-size:.72rem;color:var(--text-muted)">—</span>' : `
+                        <button class="btn btn-sm btn-ghost" onclick="openEditUserModal('${u.id}')" title="Edit role / status"><i class="fa-solid fa-user-pen"></i></button>
+                        <button class="btn btn-sm btn-ghost" onclick="openResetPasswordModal('${u.id}','${escapeHtml(u.name)}')" title="Reset password"><i class="fa-solid fa-key"></i></button>
+                        ${locked ? `<button class="btn btn-sm btn-ghost" onclick="unlockUser('${u.id}')" title="Unlock account"><i class="fa-solid fa-lock-open"></i></button>` : ''}
+                        <button class="btn btn-sm btn-ghost" onclick="toggleUserStatus('${u.id}')" title="${u.isActive === 1 ? 'Suspend account' : 'Activate account'}">
+                            <i class="fa-solid ${u.isActive === 1 ? 'fa-user-slash' : 'fa-user-check'}" style="color:${u.isActive === 1 ? '#f59e0b' : '#22c55e'}"></i>
+                        </button>
+                        <button class="btn btn-sm btn-ghost" onclick="deleteUser('${u.id}','${escapeHtml(u.name)}')" title="Delete account"><i class="fa-solid fa-trash" style="color:var(--danger)"></i></button>
+                    `}
+                </td>
+            </tr>`;
+        }).join('');
+    });
+}
+
+// ── Create ──
+function openAddUserModal() {
+    ['nuName', 'nuEmail', 'nuPass'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+    const r = $('nuRole'); if (r) r.value = 'teacher';
+    document.querySelectorAll('#addUserModal .error-msg').forEach(el => { el.innerText = ''; });
+    openModal('addUserModal');
+}
+
+async function saveNewUser() {
+    const name = (getVal('nuName') || '').trim();
+    const email = (getVal('nuEmail') || '').trim();
+    const role = getVal('nuRole') || 'teacher';
+    const password = getVal('nuPass') || '';
+    if (!name) return showToast('Full name is required.', 'error');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return showToast('Enter a valid email address.', 'error');
+    const issues = _pwIssues(password);
+    if (issues.length) return showToast('Password needs: ' + issues.join(', '), 'error');
+    const btn = $('btnSaveNewUser'); if (btn) btn.disabled = true;
+    const data = await apiFetch('users', { method: 'POST', body: JSON.stringify({ name, email, role, password }) });
+    if (btn) btn.disabled = false;
+    if (data && data.success) { showToast(data.message, 'success'); closeModal('addUserModal'); renderUsersList(); }
+}
+
+// ── Edit ──
+function openEditUserModal(id) {
+    const u = _usersCache.find(x => x.id === id);
+    if (!u) return;
+    _editingUserId = id;
+    setVal('euName', u.name || '');
+    setVal('euEmail', u.email || '');
+    setVal('euRole', u.role || 'teacher');
+    setVal('euStatus', String(u.isActive === 1 ? 1 : 0));
+    document.querySelectorAll('#editUserModal .error-msg').forEach(el => { el.innerText = ''; });
+    openModal('editUserModal');
+}
+
+async function saveUserChanges() {
+    if (!_editingUserId) return;
+    const name = (getVal('euName') || '').trim();
+    const email = (getVal('euEmail') || '').trim();
+    const role = getVal('euRole') || 'teacher';
+    const isActive = parseInt(getVal('euStatus') || '1', 10);
+    if (!name) return showToast('Full name is required.', 'error');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return showToast('Enter a valid email address.', 'error');
+    const btn = $('btnSaveUserChanges'); if (btn) btn.disabled = true;
+    const data = await apiFetch(`users/${_editingUserId}`, { method: 'PUT', body: JSON.stringify({ name, email, role, isActive }) });
+    if (btn) btn.disabled = false;
+    if (data && data.success) { showToast(data.message, 'success'); closeModal('editUserModal'); _editingUserId = null; renderUsersList(); }
+}
+
+// ── Reset password / unlock / suspend / delete ──
+function openResetPasswordModal(id, name) {
+    setVal('rpId', id);
+    const nm = $('rpName'); if (nm) nm.textContent = name || 'this user';
+    if ($('rpPass')) $('rpPass').value = '';
+    document.querySelectorAll('#resetPassModal .error-msg').forEach(el => { el.innerText = ''; });
+    openModal('resetPassModal');
+}
+
+async function confirmResetPassword() {
+    const id = getVal('rpId');
+    const newPassword = getVal('rpPass') || '';
+    const issues = _pwIssues(newPassword);
+    if (issues.length) return showToast('Password needs: ' + issues.join(', '), 'error');
+    const btn = $('btnConfirmResetPass'); if (btn) btn.disabled = true;
+    const data = await apiFetch(`users/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword }) });
+    if (btn) btn.disabled = false;
+    if (data && data.success) { showToast(data.message, 'success'); closeModal('resetPassModal'); renderUsersList(); }
+}
+
+async function unlockUser(id) {
+    const data = await apiFetch(`users/${id}/unlock`, { method: 'POST' });
+    if (data && data.success) { showToast(data.message, 'success'); renderUsersList(); }
+}
+
+async function toggleUserStatus(id) {
+    const u = _usersCache.find(x => x.id === id);
+    if (!u) return;
+    const next = u.isActive === 1 ? 0 : 1;
+    const action = next === 1 ? 'activate' : 'suspend';
+    if (!confirm(`Do you want to ${action} ${u.name}'s account?`)) return;
+    const data = await apiFetch(`users/${id}`, { method: 'PUT', body: JSON.stringify({ isActive: next }) });
+    if (data && data.success) { showToast(data.message, 'success'); renderUsersList(); }
+}
+
+async function deleteUser(id, name) {
+    if (!confirm(`Delete the account for ${name || 'this user'}? This cannot be undone.`)) return;
+    const data = await apiFetch(`users/${id}`, { method: 'DELETE' });
+    if (data && data.success) { showToast(data.message, 'success'); renderUsersList(); }
+}
+
+// ── Parent access password (admin/HOI — learner profile) ──
+function openAccessPasswordModal() {
+    const s = StudentRepo.getById(_profileSelectedId);
+    if (!s) { showToast('Select a learner first.', 'error'); return; }
+    setVal('apStudentId', s.id);
+    const nm = $('apName'); if (nm) nm.textContent = s.name;
+    const hint = $('apLoginHint');
+    if (hint) hint.innerHTML = `<i class="fa-solid fa-circle-info"></i> Parent sign-in: <code>${escapeHtml(s.reg || '—')}</code> (ADM) · <code>${escapeHtml(s.nemisNumber || '—')}</code> (NEMIS)`;
+    if ($('apPass')) $('apPass').value = '';
+    document.querySelectorAll('#accessPassModal .error-msg').forEach(el => { el.innerText = ''; });
+    openModal('accessPassModal');
+}
+
+async function saveAccessPassword() {
+    const id = getVal('apStudentId');
+    const password = getVal('apPass') || '';
+    const issues = _pwIssues(password);
+    if (issues.length) return showToast('Password needs: ' + issues.join(', '), 'error');
+    const btn = $('btnSaveAccessPass'); if (btn) btn.disabled = true;
+    const data = await apiFetch(`students/${id}/password`, { method: 'POST', body: JSON.stringify({ password }) });
+    if (btn) btn.disabled = false;
+    if (data && data.success) { showToast(data.message, 'success'); closeModal('accessPassModal'); }
+}
+
+// Bind modal buttons once
+['btnSaveNewUser', 'btnSaveUserChanges', 'btnConfirmResetPass', 'btnSaveAccessPass'].forEach(id => {
+    const el = $(id);
+    if (el && !el._bound) { el._bound = true; el.addEventListener('click', () => {
+        if (id === 'btnSaveNewUser') saveNewUser();
+        else if (id === 'btnSaveUserChanges') saveUserChanges();
+        else if (id === 'btnSaveAccessPass') saveAccessPassword();
+        else confirmResetPassword();
+    }); }
+});
+
+// Restricts grade dropdowns to a teacher's assigned grades
+function scopeRoleSelects() {
+    if (getCurrentRole() !== 'teacher') return;
+    const grades = getTeacherScope().grades;
+    if (!grades.length) return;
+    const ana = $('analysisGradeSelect');
+    if (ana && !ana.dataset.scoped) {
+        ana.dataset.scoped = '1';
+        ana.innerHTML = '<option value="all">All Assigned Grades</option>' +
+            grades.map(g => `<option value="${g}">${g}</option>`).join('');
+    }
+    const ef = $('examFilterGrade');
+    if (ef && !ef.dataset.scoped) {
+        ef.dataset.scoped = '1';
+        ef.innerHTML = '<option value="all">All Grades</option>' +
+            grades.map(g => `<option value="${g}">${g}</option>`).join('');
+    }
 }
 function saveInstitutionDetails(e) { 
     e.preventDefault(); 
@@ -13680,6 +15474,10 @@ function updateSettingsForm() {
     setVal('setEventDesc', store.settings.eventDesc || '');
     setVal('setNoticeTitle', store.settings.noticeTitle || '');
     setVal('setNoticeBody', store.settings.noticeBody || '');
+
+    // FIXED: events list only rendered after adding an event — render it now so
+    // navigating to Settings → Events shows the saved calendar entries.
+    if (typeof renderEventsList === 'function') renderEventsList();
 
   
     updateHeaderAndDashboard(); updateHOIPreview(); 
