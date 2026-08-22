@@ -209,6 +209,11 @@ const initDatabase = async () => {
             "subjectId" TEXT, "subjectName" TEXT, "subjectCode" TEXT,
             "teacherId" TEXT, "teacherName" TEXT, room TEXT, notes TEXT, "createdAt" TEXT
         )`],
+        [`attendance`, `CREATE TABLE IF NOT EXISTS attendance (
+            id TEXT PRIMARY KEY, date TEXT, grade TEXT, stream TEXT,
+            "subjectId" TEXT, "subjectName" TEXT, "studentId" TEXT,
+            status TEXT, note TEXT, "takenBy" TEXT, "takenAt" TEXT
+        )`],
         [`messages`, `CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY, "to" TEXT, "from" TEXT, subject TEXT, body TEXT,
             date TEXT, read INTEGER DEFAULT 0, folder TEXT
@@ -852,6 +857,40 @@ app.get('/timetable', authenticateToken, async (req, res) => {
     } catch (err) { console.error('[TIMETABLE GET ERROR]', err); res.status(500).json({ error: 'Failed to load timetable' }); }
 });
 
+app.get('/attendance', authenticateToken, async (req, res) => {
+    try {
+        res.json((await pool.query('SELECT * FROM attendance')).rows);
+    } catch (err) { console.error('[ATTENDANCE GET ERROR]', err); res.status(500).json({ error: 'Failed to load attendance' }); }
+});
+
+app.post('/attendance', authenticateToken, requireRole('teacher', 'hoi', 'admin', 'exam_officer'), expectArray, async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM attendance');
+        const cols = ['id','date','grade','stream','subjectId','subjectName','studentId','status','note','takenBy','takenAt'];
+        for (const item of req.body) {
+            const values = cols.map(c => {
+                const val = item[c];
+                if (val === null || val === undefined) return null;
+                if (typeof val === 'object') return JSON.stringify(val);
+                return val;
+            });
+            const placeholders = values.map((_, idx) => `$${idx + 1}`).join(', ');
+            await client.query(`INSERT INTO attendance ("${cols.join('","')}") VALUES (${placeholders})`, values);
+        }
+        await client.query('COMMIT');
+        await logAction(req.user.id, req.user.name, 'UPDATE_ATTENDANCE', `${req.body.length} attendance records`);
+        res.json(req.body);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[ATTENDANCE SAVE ERROR]', err);
+        res.status(500).json({ error: 'Failed to save attendance', details: err.message });
+    } finally {
+        client.release();
+    }
+});
+
 app.post('/timetable', authenticateToken, requireRole('admin', 'hoi'), expectArray, async (req, res) => {
     const cols = ['id','day','period','grade','subjectId','subjectName','subjectCode','teacherId','teacherName','room','notes','createdAt'];
     const client = await pool.connect();
@@ -1061,11 +1100,11 @@ app.post('/api/exams/sync', authenticateToken, requireRole('exam_officer', 'hoi'
 // ==========================================================================
 app.get('/api/db', authenticateToken, requireRole('admin', 'hoi', 'teacher', 'exam_officer', 'parent'), async (req, res) => {
     try {
-        const [students, staff, exams, settings, learningAreas, notes, timetable, examSchedules, messages, classAssignments] = await Promise.all([
+        const [students, staff, exams, settings, learningAreas, notes, timetable, examSchedules, messages, classAssignments, attendance] = await Promise.all([
             pool.query('SELECT * FROM students'), pool.query('SELECT * FROM staff'), pool.query('SELECT * FROM exams'),
             pool.query('SELECT * FROM settings WHERE id=1'), pool.query('SELECT * FROM "learningAreas"'),
             pool.query('SELECT * FROM notes'), pool.query('SELECT * FROM timetable'), pool.query('SELECT * FROM "examSchedules"'),
-            pool.query('SELECT * FROM messages'), pool.query('SELECT * FROM "classAssignments"')
+            pool.query('SELECT * FROM messages'), pool.query('SELECT * FROM "classAssignments"'), pool.query('SELECT * FROM attendance')
         ]);
         const parsedExams = exams.rows.map(e => { try { e.subjects = e.subjects ? JSON.parse(e.subjects) : []; } catch (_) { e.subjects = []; } try { e.scores = e.scores ? JSON.parse(e.scores) : {}; } catch (_) { e.scores = {}; } return e; });
         // FIXED: settings.events is stored as a JSON string — parse it back to
@@ -1086,6 +1125,7 @@ app.get('/api/db', authenticateToken, requireRole('admin', 'hoi', 'teacher', 'ex
             res.json({
                 students: linked,
                 staff: [], notes: [], timetable: [], examSchedules: [], classAssignments: [],
+                attendance: attendance.rows.filter(a => a.studentId === pid),
                 exams: gradeExams, settings: settingsRow,
                 learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels), teacherByLevel: (() => { try { return a.teacherByLevel ? JSON.parse(a.teacherByLevel) : {}; } catch (_) { return {}; } })() })),
                 messages: messages.rows.map(m => ({ ...m, read: !!m.read }))
@@ -1093,7 +1133,7 @@ app.get('/api/db', authenticateToken, requireRole('admin', 'hoi', 'teacher', 'ex
             return;
         }
 
-        res.json({ students: students.rows, staff: staff.rows, exams: parsedExams, settings: settingsRow, learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels), teacherByLevel: (() => { try { return a.teacherByLevel ? JSON.parse(a.teacherByLevel) : {}; } catch (_) { return {}; } })() })), notes: notes.rows, timetable: timetable.rows, examSchedules: examSchedules.rows.map(s => ({ ...s, sessions: (() => { try { return s.sessions ? JSON.parse(s.sessions) : []; } catch (_) { return []; } })() })), messages: messages.rows.map(m => ({ ...m, read: !!m.read })), classAssignments: classAssignments.rows });
+        res.json({ students: students.rows, staff: staff.rows, exams: parsedExams, settings: settingsRow, learningAreas: learningAreas.rows.map(a => ({ ...a, applicableLevels: JSON.parse(a.applicableLevels), teacherByLevel: (() => { try { return a.teacherByLevel ? JSON.parse(a.teacherByLevel) : {}; } catch (_) { return {}; } })() })), notes: notes.rows, timetable: timetable.rows, examSchedules: examSchedules.rows.map(s => ({ ...s, sessions: (() => { try { return s.sessions ? JSON.parse(s.sessions) : []; } catch (_) { return []; } })() })), messages: messages.rows.map(m => ({ ...m, read: !!m.read })), classAssignments: classAssignments.rows, attendance: attendance.rows });
         await logAction(req.user.id, req.user.name, 'BACKUP_DB', 'Full backup downloaded');
     } catch (err) { console.error('[BACKUP ERROR]', err); res.status(500).json({ error: 'Backup failed' }); }
 });
@@ -1151,7 +1191,7 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi'), async (
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        let { students, staff, exams, settings, learningAreas, notes, timetable, examSchedules, messages, classAssignments } = req.body;
+        let { students, staff, exams, settings, learningAreas, notes, timetable, examSchedules, messages, classAssignments, attendance } = req.body;
 
         // CLEAN THE DATA (Remove duplicates)
         students = dedupe(students);
@@ -1162,6 +1202,7 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi'), async (
         timetable = dedupe(timetable);
         examSchedules = dedupe(examSchedules);
         messages = dedupe(messages);
+        attendance = dedupe(attendance);
 
         // BULK INSERT LEARNING AREAS (incl. per-level teacher map — FIXED:
         // teacherByLevel was dropped on restore, silently losing assignments)
@@ -1213,6 +1254,7 @@ app.post('/api/restore', authenticateToken, requireRole('admin', 'hoi'), async (
         await safeReplace(client, 'exams', exams, ['id','studentId','subjectId','score','term','year','comments','grade','type','name','subjects','scores','assessType','status','virtualId','startDate','endDate','notes','createdAt','assessId','remarks']);
         await safeReplace(client, 'notes', notes, ['id','title','content','createdAt','createdBy','studentId','type','description','date','severity']);
         await safeReplace(client, 'timetable', timetable, ['id','day','period','grade','subjectId','subjectName','subjectCode','teacherId','teacherName','room','notes','createdAt']);
+        await safeReplace(client, 'attendance', attendance, ['id','date','grade','stream','subjectId','subjectName','studentId','status','note','takenBy','takenAt']);
         await safeReplace(client, 'examSchedules', examSchedules, ['id','name','type','grade','term','year','startDate','endDate','subjects','status','notes','createdAt','sessions']);
         await safeReplace(client, 'messages', messages, ['id','to','from','subject','body','date','read','folder']);
 
