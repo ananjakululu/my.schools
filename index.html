@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ElimuTrack — School Management System</title>
+    <meta name="description" content="ElimuTrack — CBC school management: learners, assessments, attendance, reports and the parent portal.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎓</text></svg>">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css?v=14">
+    <style>
+        /* ═══════════════════════════════════════════════════════════
+           ELIMUTRACK AUTH PAGE (login / signup / reset)
+           ═══════════════════════════════════════════════════════════ */
+        :root {
+            /* Unified ElimuTrack palette (matches the app design tokens) */
+            --auth-bg: #f4f6fb; --auth-card: #ffffff; --auth-text: #0f172a; --auth-muted: #64748b;
+            --auth-border: #e2e8f0; --auth-primary: #4f46e5; --auth-primary-dark: #4338ca;
+            --auth-soft: #eef2ff; --auth-danger: #dc2626;
+        }
+        html[data-theme="dark"] {
+            --auth-bg: #0f172a; --auth-card: #1e293b; --auth-text: #e2e8f0; --auth-muted: #94a3b8;
+            --auth-border: #334155; --auth-primary: #818cf8; --auth-primary-dark: #6366f1;
+            --auth-soft: #1e1b4b; --auth-danger: #f87171;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; min-height: 100vh; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background:
+                radial-gradient(1200px 600px at 85% -10%, rgba(37, 99, 235, 0.16), transparent 60%),
+                radial-gradient(900px 500px at -10% 110%, rgba(34, 197, 94, 0.12), transparent 55%),
+                var(--auth-bg);
+            color: var(--auth-text); display: flex; align-items: center; justify-content: center; padding: 24px 14px;
+        }
+        .auth-toggle-theme {
+            position: fixed; top: 16px; right: 16px; width: 40px; height: 40px; border-radius: 50%;
+            border: 1px solid var(--auth-border); background: var(--auth-card); color: var(--auth-text);
+            font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 4px 14px rgba(2, 6, 23, 0.12);
+        }
+        .auth-wrap { width: 100%; max-width: 440px; }
+        .auth-brand { text-align: center; margin-bottom: 18px; }
+        .auth-brand .auth-logo {
+            width: 54px; height: 54px; margin: 0 auto 10px; border-radius: 15px;
+            background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff; font-size: 1.5rem;
+            display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 22px rgba(37, 99, 235, 0.35);
+        }
+        .auth-brand h1 { margin: 0; font-size: 1.5rem; font-weight: 800; letter-spacing: 0.2px; }
+        .auth-brand p { margin: 4px 0 0; font-size: 0.8rem; color: var(--auth-muted); }
+        .auth-card {
+            background: var(--auth-card); border: 1px solid var(--auth-border); border-radius: 18px;
+            padding: 22px 22px 18px; box-shadow: 0 18px 50px rgba(2, 6, 23, 0.14);
+        }
+        /* ── toggle tabs ── */
+        .auth-tabs-head { position: relative; display: grid; grid-template-columns: 1fr 1fr; background: var(--auth-soft); border-radius: 12px; padding: 4px; margin-bottom: 18px; }
+        .toggle-btn {
+            border: none; background: transparent; padding: 9px 0; border-radius: 9px; font-size: 0.85rem;
+            font-weight: 700; color: var(--auth-muted); cursor: pointer; font-family: inherit; z-index: 1; transition: color 0.2s;
+        }
+        .toggle-btn.active { color: #fff; }
+        .auth-slider {
+            position: absolute; top: 4px; left: 4px; width: calc(50% - 4px); height: calc(100% - 8px);
+            background: linear-gradient(135deg, var(--auth-primary), var(--auth-primary-dark)); border-radius: 9px;
+            transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .auth-panel { display: flex; flex-direction: column; gap: 12px; }
+        .hidden { display: none !important; }
+        /* ── login modes ── */
+        .login-mode-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 2px; }
+        .login-mode-btn {
+            border: 1px solid var(--auth-border); background: var(--auth-card); color: var(--auth-muted);
+            font-size: 0.72rem; font-weight: 700; padding: 7px 4px; border-radius: 9px; cursor: pointer; font-family: inherit;
+        }
+        .login-mode-btn.active { border-color: var(--auth-primary); color: var(--auth-primary); background: var(--auth-soft); }
+        /* ── form ── */
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+        .form-group label { font-size: 0.75rem; font-weight: 700; color: var(--auth-muted); }
+        .form-input {
+            width: 100%; padding: 11px 12px; border: 1px solid var(--auth-border); border-radius: 11px;
+            font-size: 0.9rem; background: var(--auth-card); color: var(--auth-text); outline: none; transition: border 0.15s, box-shadow 0.15s;
+        }
+        .form-input:focus { border-color: var(--auth-primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }
+        .form-input.invalid { border-color: var(--auth-danger); box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12); }
+        .form-input.valid { border-color: #22c55e; }
+        .field-error { min-height: 13px; font-size: 0.7rem; color: var(--auth-danger); }
+        .pw-wrap { position: relative; display: flex; }
+        .pw-wrap .form-input { padding-right: 42px; }
+        .pw-toggle {
+            position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px;
+            border: none; background: transparent; color: var(--auth-muted); cursor: pointer; font-size: 0.9rem;
+        }
+        .auth-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; }
+        .auth-check { display: flex; align-items: center; gap: 6px; color: var(--auth-muted); cursor: pointer; }
+        .auth-row a { color: var(--auth-primary); text-decoration: none; font-weight: 600; }
+        .auth-row a:hover { text-decoration: underline; }
+        .auth-btn {
+            border: none; border-radius: 11px; padding: 12px; font-size: 0.92rem; font-weight: 800; color: #fff;
+            background: linear-gradient(135deg, var(--auth-primary), var(--auth-primary-dark)); cursor: pointer;
+            font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px;
+            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.28); transition: transform 0.12s, box-shadow 0.12s;
+        }
+        .auth-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(37, 99, 235, 0.36); }
+        .auth-btn:disabled { opacity: 0.7; cursor: not-allowed; transform: none; }
+        /* ── strength meter ── */
+        .strength-track { height: 6px; background: var(--auth-border); border-radius: 4px; overflow: hidden; }
+        .strength-bar { display: block; height: 100%; width: 0; border-radius: 4px; transition: width 0.25s, background 0.25s; }
+        .strength-bar.weak { background: #ef4444; } .strength-bar.fair { background: #f59e0b; }
+        .strength-bar.good { background: #3b82f6; } .strength-bar.strong { background: #22c55e; }
+        .strength-label { font-size: 0.72rem; font-weight: 700; color: var(--auth-muted); }
+        .strength-label.weak { color: #ef4444; } .strength-label.fair { color: #f59e0b; }
+        .strength-label.good { color: #3b82f6; } .strength-label.strong { color: #22c55e; }
+        .form-hint { font-size: 0.7rem; color: var(--auth-muted); }
+        .link-box {
+            border: 1px dashed var(--auth-border); border-radius: 11px; padding: 10px 12px;
+            background: var(--auth-soft);
+        }
+        .auth-divider { display: flex; align-items: center; gap: 10px; color: var(--auth-muted); font-size: 0.72rem; font-weight: 700; }
+        .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--auth-border); }
+        .forgot-status { min-height: 18px; font-size: 0.78rem; color: var(--auth-muted); line-height: 1.5; }
+        .forgot-status.success { color: #16a34a; } .forgot-status.error { color: var(--auth-danger); }
+        .forgot-status code { background: var(--auth-soft); padding: 2px 6px; border-radius: 6px; font-size: 0.72rem; }
+        .auth-foot { text-align: center; margin-top: 16px; font-size: 0.75rem; color: var(--auth-muted); }
+        .auth-foot a { color: var(--auth-primary); text-decoration: none; font-weight: 600; }
+        /* ── toasts ── */
+        #toastContainer { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; max-width: min(340px, 90vw); }
+        #toastContainer .toast {
+            display: flex; align-items: center; gap: 9px; background: var(--auth-card); color: var(--auth-text);
+            border: 1px solid var(--auth-border); border-left-width: 4px; border-radius: 11px; padding: 11px 14px;
+            font-size: 0.82rem; box-shadow: 0 8px 24px rgba(2, 6, 23, 0.18); opacity: 1; transition: opacity 0.3s;
+        }
+        #toastContainer .toast.success { border-left-color: #22c55e; } #toastContainer .toast.success i { color: #16a34a; }
+        #toastContainer .toast.error { border-left-color: #ef4444; } #toastContainer .toast.error i { color: #ef4444; }
+        #toastContainer .toast.info { border-left-color: #3b82f6; } #toastContainer .toast.info i { color: #3b82f6; }
+        @media (max-width: 460px) {
+            .auth-card { padding: 18px 14px 14px; }
+            .login-mode-btn { font-size: 0.66rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <button class="auth-toggle-theme" id="themeToggle" title="Toggle theme"><i class="fa-solid fa-moon"></i></button>
+
+    <main class="auth-wrap">
+        <div class="auth-brand">
+            <div class="auth-logo"><i class="fa-solid fa-graduation-cap"></i></div>
+            <h1>ElimuTrack</h1>
+            <p>CBC School Management — Learners · Assessments · Reports</p>
+        </div>
+
+        <div class="auth-card">
+            <div class="auth-tabs-head">
+                <span class="auth-slider" id="slider"></span>
+                <button type="button" class="toggle-btn active" onclick="switchMode('login')">Sign In</button>
+                <button type="button" class="toggle-btn" onclick="switchMode('signup')">Create Account</button>
+            </div>
+
+            <!-- ════ LOGIN ════ -->
+            <form id="loginForm" class="auth-panel" novalidate autocomplete="on">
+                <div class="login-mode-switch">
+                    <button type="button" class="login-mode-btn active" data-lmode="email" onclick="setLoginMode('email')"><i class="fa-solid fa-envelope"></i> Email / ADM</button>
+                    <button type="button" class="login-mode-btn" data-lmode="staff" onclick="setLoginMode('staff')"><i class="fa-solid fa-id-badge"></i> Staff</button>
+                    <button type="button" class="login-mode-btn" data-lmode="parent" onclick="setLoginMode('parent')"><i class="fa-solid fa-children"></i> Parent</button>
+                </div>
+
+                <div class="form-group" id="loginGroup-email">
+                    <label for="loginUser">Email, or learner ADM / NEMIS / UPI</label>
+                    <input class="form-input" id="loginUser" placeholder="you@school.com  or  ADM-0237" autocomplete="username">
+                    <span class="field-error"></span>
+                </div>
+
+                <div class="form-group" id="loginGroup-staff" style="display:none;">
+                    <label for="staffSurname">Surname</label>
+                    <input class="form-input" id="staffSurname" placeholder="e.g. Otieno" autocomplete="family-name">
+                    <span class="field-error"></span>
+                    <label for="staffNumber">Staff Number (TSC / National ID)</label>
+                    <input class="form-input" id="staffNumber" placeholder="e.g. 81234567">
+                    <span class="field-error"></span>
+                    <label for="staffPass">Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="staffPass" placeholder="••••••••" autocomplete="current-password">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('staffPass', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <span class="field-error"></span>
+                </div>
+
+                <div class="form-group" id="loginGroup-parent" style="display:none;">
+                    <label for="studentName">Student Name</label>
+                    <input class="form-input" id="studentName" placeholder="e.g. David Otieno" autocomplete="off">
+                    <span class="field-error"></span>
+                    <label for="studentAdm">Admission Number</label>
+                    <input class="form-input" id="studentAdm" placeholder="e.g. ADM-0237" autocomplete="off">
+                    <span class="field-error"></span>
+                    <label for="parentPass">Access Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="parentPass" placeholder="••••••••" autocomplete="off">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('parentPass', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <span class="field-error"></span>
+                    <p class="form-hint"><i class="fa-solid fa-circle-info"></i> Ask the school to set your child's Parent Access password first.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPass">Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('loginPass', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <span class="field-error"></span>
+                </div>
+
+                <div class="auth-row">
+                    <label class="auth-check"><input type="checkbox" id="rememberMe" checked> Remember me</label>
+                    <a href="#" id="forgotLink">Forgot password?</a>
+                </div>
+                <button type="submit" class="auth-btn" id="loginBtn"><i class="fa-solid fa-right-to-bracket"></i> Sign In</button>
+            </form>
+
+            <!-- ════ SIGNUP ════ -->
+            <form id="signupForm" class="auth-panel hidden" novalidate>
+                <div class="form-group">
+                    <label for="signupName">Full Name</label>
+                    <input class="form-input" id="signupName" placeholder="e.g. Jane Wanjiku" autocomplete="name">
+                    <span class="field-error"></span>
+                </div>
+                <div class="form-group">
+                    <label for="signupEmail">Email</label>
+                    <input class="form-input" id="signupEmail" placeholder="you@school.com" autocomplete="email">
+                    <span class="field-error"></span>
+                </div>
+                <div class="form-group">
+                    <label for="signupPass">Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="signupPass" placeholder="Min. 8 chars, upper, lower, number" autocomplete="new-password">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('signupPass', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <div class="strength-track"><span class="strength-bar" id="strengthBar"></span></div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span class="strength-label" id="strengthLabel"></span>
+                        <span class="form-hint" id="signupPassHint"></span>
+                    </div>
+                    <span class="field-error"></span>
+                </div>
+                <div class="form-group">
+                    <label for="signupConfirm">Confirm Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="signupConfirm" placeholder="Repeat password" autocomplete="new-password">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('signupConfirm', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <span class="field-error"></span>
+                </div>
+                <div class="form-group">
+                    <label for="signupRole">I am a…</label>
+                    <select class="form-input" id="signupRole">
+                        <option value="teacher">Teacher</option>
+                        <option value="parent">Parent / Guardian</option>
+                    </select>
+                    <span class="field-error"></span>
+                </div>
+                <div class="link-box" id="signupLinkBox" style="display:none;">
+                    <label class="auth-check" style="margin-bottom:6px;">
+                        <input type="checkbox" id="signupLinkNow" onchange="toggleSignupLink()"> Link my child now (optional)
+                    </label>
+                    <div id="signupLinkFields" style="display:none;">
+                        <div class="form-group">
+                            <label for="signupAdm">Learner ADM / NEMIS / UPI</label>
+                            <input class="form-input" id="signupAdm" placeholder="e.g. ADM-0237" autocomplete="off">
+                            <span class="field-error"></span>
+                        </div>
+                        <div class="form-group">
+                            <label for="signupGuardianPhone">Guardian phone on file</label>
+                            <input class="form-input" id="signupGuardianPhone" placeholder="e.g. 0712 345 678" autocomplete="off">
+                            <span class="field-error"></span>
+                        </div>
+                    </div>
+                </div>
+                <button type="submit" class="auth-btn"><i class="fa-solid fa-user-plus"></i> Create Account</button>
+            </form>
+
+            <!-- ════ FORGOT / RESET ════ -->
+            <div id="forgotPanel" class="auth-panel hidden">
+                <p class="form-hint" style="margin:0;">Enter your account email and we'll prepare a reset token.</p>
+                <div class="form-group">
+                    <label for="forgotEmail">Email</label>
+                    <input class="form-input" id="forgotEmail" placeholder="you@school.com" autocomplete="email">
+                    <span class="field-error"></span>
+                </div>
+                <button type="button" class="auth-btn" id="forgotRequestBtn"><i class="fa-solid fa-paper-plane"></i> Send Reset Link</button>
+                <div class="auth-divider">OR enter token manually</div>
+                <div class="form-group">
+                    <label for="forgotToken">Reset Token</label>
+                    <input class="form-input" id="forgotToken" placeholder="Paste the token from the status above" autocomplete="off">
+                    <span class="field-error"></span>
+                </div>
+                <div class="form-group">
+                    <label for="forgotNewPass">New Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="forgotNewPass" placeholder="Min. 8 chars, upper, lower, number" autocomplete="new-password">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('forgotNewPass', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <span class="field-error"></span>
+                </div>
+                <div class="form-group">
+                    <label for="forgotConfirm">Confirm New Password</label>
+                    <div class="pw-wrap">
+                        <input class="form-input" type="password" id="forgotConfirm" placeholder="Repeat new password" autocomplete="new-password">
+                        <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('forgotConfirm', this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                    <span class="field-error"></span>
+                </div>
+                <button type="button" class="auth-btn" id="forgotResetBtn"><i class="fa-solid fa-key"></i> Reset Password</button>
+                <div class="forgot-status" id="forgotStatus"></div>
+                <a href="#" id="forgotBack" style="text-align:center;color:var(--auth-primary);font-size:0.8rem;font-weight:600;text-decoration:none;">← Back to sign in</a>
+            </div>
+        </div>
+
+        <p class="auth-foot">© <span id="authYear"></span> ElimuTrack · CBC School Management System</p>
+    </main>
+
+    <div id="toastContainer"></div>
+
+    <script>
+        document.getElementById('authYear').textContent = new Date().getFullYear();
+    </script>
+    <script src="auth.js?v=1"></script>
+</body>
+</html>
